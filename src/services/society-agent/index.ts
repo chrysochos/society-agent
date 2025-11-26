@@ -11,4 +11,7 @@ export * from './logger'
 // kilocode_change start
 export * from './task-logger'
 export * from './api-logger'
+export * from './permissions'
+export * from './approval'
+export * from './supervisor-channel'
 // kilocode_change end

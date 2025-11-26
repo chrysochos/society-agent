@@ -320,6 +320,14 @@ export interface WebviewMessage {
 		| "dismissUpsell"
 		| "getDismissedUpsells"
 		| "requestManagedIndexerState" // kilocode_change
+		| "getAgentRegistry" // kilocode_change: Request active agent list
+		| "agentRegistry" // kilocode_change: Response with agent list
+		| "getAgentMessages" // kilocode_change: Request agent messages
+		| "agentMessages" // kilocode_change: Response with message list
+		| "agentMessageUpdate" // kilocode_change: New message notification
+		| "sendAgentMessage" // kilocode_change: Send message to agent
+		| "viewAgentLogs" // kilocode_change: View specific agent logs
+		| "clearAgentMessages" // kilocode_change: Clear message history
 	text?: string
 	editedMessageContent?: string
 	tab?: "settings" | "history" | "mcp" | "modes" | "chat" | "marketplace" | "cloud"
@@ -483,6 +491,66 @@ export interface TaskHistoryResponsePayload {
 	pageIndex: number
 	pageCount: number
 }
+
+// kilocode_change start: Society Agent payload types
+export interface AgentIdentity {
+	id: string
+	name?: string
+	role: "worker" | "supervisor" | "coordinator"
+	capabilities: string[]
+	domain?: string
+}
+
+export interface AgentStatus {
+	agent: AgentIdentity
+	available: boolean
+	taskCount: number
+	lastSeen: number
+	activeTasks: string[]
+}
+
+export interface AgentRegistryPayload {
+	agents: AgentStatus[]
+}
+
+export interface AgentMessage {
+	id: string
+	type: "request" | "response" | "broadcast" | "notification"
+	fromAgentId: string
+	toAgentId?: string
+	content: {
+		action?: string
+		payload?: any
+		error?: string
+	}
+	metadata: {
+		timestamp: number
+		correlationId?: string
+		priority?: "low" | "normal" | "high" | "urgent"
+	}
+}
+
+export interface AgentMessagesPayload {
+	messages: AgentMessage[]
+	agentId?: string
+}
+
+export interface AgentMessageUpdatePayload {
+	message: AgentMessage
+}
+
+export interface SendAgentMessagePayload {
+	agentId: string
+	content?: string
+}
+
+export interface ViewAgentLogsPayload {
+	agentId: string
+}
+
+export interface ClearAgentMessagesPayload {
+	agentId?: string
+}
 // kilocode_change end
 
 export const checkoutDiffPayloadSchema = z.object({
@@ -538,6 +606,12 @@ export type WebViewMessagePayload =
 	| TasksByIdRequestPayload
 	| TaskHistoryRequestPayload
 	| RequestCheckpointRestoreApprovalPayload
+	| AgentRegistryPayload
+	| AgentMessagesPayload
+	| AgentMessageUpdatePayload
+	| SendAgentMessagePayload
+	| ViewAgentLogsPayload
+	| ClearAgentMessagesPayload
 	// kilocode_change end
 	| CheckpointDiffPayload
 	| CheckpointRestorePayload

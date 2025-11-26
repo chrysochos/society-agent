@@ -1,0 +1,318 @@
+// kilocode_change - new file
+/**
+ * Agent Message Viewer
+ * 
+ * Displays agent-to-agent messages with filtering and search.
+ */
+
+import React, { useState, useEffect, useRef } from "react"
+import { VSCodeButton, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
+import { vscode } from "@/utils/vscode"
+
+interface AgentMessage {
+	id: string
+	type: "request" | "response" | "broadcast" | "notification"
+	fromAgentId: string
+	toAgentId?: string
+	content: {
+		action?: string
+		payload?: any
+		error?: string
+	}
+	metadata: {
+		timestamp: number
+		correlationId?: string
+		priority?: "low" | "normal" | "high" | "urgent"
+	}
+}
+
+interface AgentMessageViewerProps {
+	// Optional filter by agent ID
+	agentId?: string
+}
+
+export const AgentMessageViewer: React.FC<AgentMessageViewerProps> = ({ agentId }) => {
+	const [messages, setMessages] = useState<AgentMessage[]>([])
+	const [loading, setLoading] = useState(true)
+	const [filter, setFilter] = useState<"all" | "request" | "response" | "broadcast" | "notification">("all")
+	const [searchTerm, setSearchTerm] = useState("")
+	const [autoScroll, setAutoScroll] = useState(true)
+	const messagesEndRef = useRef<HTMLDivElement>(null)
+
+	useEffect(() => {
+		// Request messages from extension
+		vscode.postMessage({
+			type: "getAgentMessages",
+			agentId,
+		})
+
+		// Set up message listener
+		const handleMessage = (event: MessageEvent) => {
+			const message = event.data
+			if (message.type === "agentMessages") {
+				setMessages(message.messages || [])
+				setLoading(false)
+			} else if (message.type === "agentMessageUpdate") {
+				// New message received
+				setMessages((prev) => [...prev, message.message])
+			}
+		}
+
+		window.addEventListener("message", handleMessage)
+		return () => window.removeEventListener("message", handleMessage)
+	}, [agentId])
+
+	useEffect(() => {
+		if (autoScroll && messagesEndRef.current) {
+			messagesEndRef.current.scrollIntoView({ behavior: "smooth" })
+		}
+	}, [messages, autoScroll])
+
+	const handleRefresh = () => {
+		setLoading(true)
+		vscode.postMessage({
+			type: "getAgentMessages",
+			agentId,
+		})
+	}
+
+	const handleClearMessages = () => {
+		if (confirm("Clear all messages? This cannot be undone.")) {
+			vscode.postMessage({
+				type: "clearAgentMessages",
+				agentId,
+			})
+			setMessages([])
+		}
+	}
+
+	const filteredMessages = messages
+		.filter((msg) => filter === "all" || msg.type === filter)
+		.filter((msg) => {
+			if (!searchTerm) return true
+			const search = searchTerm.toLowerCase()
+			return (
+				msg.fromAgentId.toLowerCase().includes(search) ||
+				msg.toAgentId?.toLowerCase().includes(search) ||
+				msg.content.action?.toLowerCase().includes(search) ||
+				JSON.stringify(msg.content.payload).toLowerCase().includes(search)
+			)
+		})
+
+	const formatTimestamp = (timestamp: number): string => {
+		const date = new Date(timestamp)
+		return date.toLocaleTimeString()
+	}
+
+	const getMessageTypeColor = (type: string): string => {
+		switch (type) {
+			case "request":
+				return "text-blue-400"
+			case "response":
+				return "text-green-400"
+			case "broadcast":
+				return "text-purple-400"
+			case "notification":
+				return "text-yellow-400"
+			default:
+				return "text-muted-foreground"
+		}
+	}
+
+	const getPriorityColor = (priority?: string): string => {
+		switch (priority) {
+			case "urgent":
+				return "text-red-400"
+			case "high":
+				return "text-orange-400"
+			case "normal":
+				return "text-blue-400"
+			case "low":
+			default:
+				return "text-muted-foreground"
+		}
+	}
+
+	if (loading) {
+		return (
+			<div className="flex items-center justify-center p-8">
+				<div className="text-muted-foreground">Loading messages...</div>
+			</div>
+		)
+	}
+
+	return (
+		<div className="flex flex-col h-full">
+			{/* Header */}
+			<div className="flex items-center justify-between p-4 border-b border-border">
+				<h2 className="text-lg font-semibold">Agent Messages</h2>
+				<div className="flex items-center gap-2">
+					<div className="text-xs text-muted-foreground">{messages.length} messages</div>
+					<VSCodeButton appearance="icon" onClick={handleRefresh}>
+						↻
+					</VSCodeButton>
+					<VSCodeButton appearance="icon" onClick={handleClearMessages}>
+						🗑
+					</VSCodeButton>
+				</div>
+			</div>
+
+			{/* Filters & Search */}
+			<div className="p-4 border-b border-border space-y-3">
+				{/* Type Filter */}
+				<div className="flex gap-2 overflow-x-auto">
+					<button
+						className={`px-3 py-1 text-xs rounded whitespace-nowrap ${filter === "all" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
+						onClick={() => setFilter("all")}>
+						All ({messages.length})
+					</button>
+					<button
+						className={`px-3 py-1 text-xs rounded whitespace-nowrap ${filter === "request" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
+						onClick={() => setFilter("request")}>
+						Requests ({messages.filter((m) => m.type === "request").length})
+					</button>
+					<button
+						className={`px-3 py-1 text-xs rounded whitespace-nowrap ${filter === "response" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
+						onClick={() => setFilter("response")}>
+						Responses ({messages.filter((m) => m.type === "response").length})
+					</button>
+					<button
+						className={`px-3 py-1 text-xs rounded whitespace-nowrap ${filter === "broadcast" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
+						onClick={() => setFilter("broadcast")}>
+						Broadcasts ({messages.filter((m) => m.type === "broadcast").length})
+					</button>
+					<button
+						className={`px-3 py-1 text-xs rounded whitespace-nowrap ${filter === "notification" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
+						onClick={() => setFilter("notification")}>
+						Notifications ({messages.filter((m) => m.type === "notification").length})
+					</button>
+				</div>
+
+				{/* Search */}
+				<VSCodeTextField
+					placeholder="Search messages..."
+					value={searchTerm}
+					onInput={(e: any) => setSearchTerm(e.target.value)}
+					className="w-full"
+				/>
+
+				{/* Auto-scroll toggle */}
+				<div className="flex items-center gap-2">
+					<input
+						type="checkbox"
+						id="autoScroll"
+						checked={autoScroll}
+						onChange={(e) => setAutoScroll(e.target.checked)}
+						className="cursor-pointer"
+					/>
+					<label htmlFor="autoScroll" className="text-xs text-muted-foreground cursor-pointer">
+						Auto-scroll to new messages
+					</label>
+				</div>
+			</div>
+
+			{/* Message List */}
+			<div className="flex-1 overflow-y-auto p-4 space-y-3">
+				{filteredMessages.length === 0 ? (
+					<div className="flex flex-col items-center justify-center p-8 text-center">
+						<div className="text-muted-foreground mb-2">No messages found</div>
+						{searchTerm && (
+							<div className="text-xs text-muted-foreground">
+								Try adjusting your search or filters
+							</div>
+						)}
+					</div>
+				) : (
+					filteredMessages.map((msg) => (
+						<div
+							key={msg.id}
+							className="p-3 border border-border rounded bg-secondary/30 hover:bg-secondary/50">
+							{/* Message Header */}
+							<div className="flex items-center justify-between mb-2">
+								<div className="flex items-center gap-2">
+									{/* Message Type Badge */}
+									<span
+										className={`px-2 py-0.5 text-xs rounded ${getMessageTypeColor(msg.type)} bg-accent`}>
+										{msg.type}
+									</span>
+
+									{/* Priority */}
+									{msg.metadata.priority && msg.metadata.priority !== "normal" && (
+										<span
+											className={`px-2 py-0.5 text-xs rounded ${getPriorityColor(msg.metadata.priority)} bg-accent`}>
+											{msg.metadata.priority}
+										</span>
+									)}
+								</div>
+
+								{/* Timestamp */}
+								<span className="text-xs text-muted-foreground">
+									{formatTimestamp(msg.metadata.timestamp)}
+								</span>
+							</div>
+
+							{/* From/To */}
+							<div className="text-xs text-muted-foreground mb-2">
+								<span className="font-medium text-foreground">{msg.fromAgentId}</span>
+								{msg.toAgentId && (
+									<>
+										{" → "}
+										<span className="font-medium text-foreground">
+											{msg.toAgentId}
+										</span>
+									</>
+								)}
+								{msg.type === "broadcast" && (
+									<span className="ml-2 italic">(broadcast)</span>
+								)}
+							</div>
+
+							{/* Action */}
+							{msg.content.action && (
+								<div className="text-sm font-medium mb-2">
+									Action: {msg.content.action}
+								</div>
+							)}
+
+							{/* Payload */}
+							{msg.content.payload && (
+								<div className="text-xs bg-background p-2 rounded overflow-x-auto">
+									<pre className="whitespace-pre-wrap">
+										{JSON.stringify(msg.content.payload, null, 2)}
+									</pre>
+								</div>
+							)}
+
+							{/* Error */}
+							{msg.content.error && (
+								<div className="text-xs text-red-400 bg-red-900/20 p-2 rounded mt-2">
+									Error: {msg.content.error}
+								</div>
+							)}
+
+							{/* Correlation ID */}
+							{msg.metadata.correlationId && (
+								<div className="text-xs text-muted-foreground mt-2">
+									Correlation: {msg.metadata.correlationId}
+								</div>
+							)}
+						</div>
+					))
+				)}
+				<div ref={messagesEndRef} />
+			</div>
+
+			{/* Footer Stats */}
+			<div className="p-4 border-t border-border bg-secondary/30">
+				<div className="flex justify-between text-xs text-muted-foreground">
+					<span>
+						Showing: {filteredMessages.length} / {messages.length}
+					</span>
+					{messages.length > 0 && (
+						<span>Latest: {formatTimestamp(messages[messages.length - 1].metadata.timestamp)}</span>
+					)}
+				</div>
+			</div>
+		</div>
+	)
+}

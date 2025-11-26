@@ -96,6 +96,10 @@ import { truncateConversationIfNeeded } from "../sliding-window"
 import { ClineProvider } from "../webview/ClineProvider"
 import { MultiSearchReplaceDiffStrategy } from "../diff/strategies/multi-search-replace"
 import { MultiFileSearchReplaceDiffStrategy } from "../diff/strategies/multi-file-search-replace"
+// kilocode_change start - Society Agent logging
+import type { AgentMetadata } from "../../services/society-agent/types"
+import { createAgentLogger, type SocietyAgentLogger } from "../../services/society-agent/logger"
+// kilocode_change end
 import {
 	type ApiMessage,
 	readApiMessages,
@@ -298,6 +302,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	enableBridge: boolean
 
 	// Message Queue Service
+	// kilocode_change start - Society Agent logging
+	agentLogger?: SocietyAgentLogger
+	// kilocode_change end
 	public readonly messageQueueService: MessageQueueService
 	private messageQueueStateChangedHandler: (() => void) | undefined
 
@@ -447,6 +454,24 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		}
 
 		this.messageQueueService.on("stateChanged", this.messageQueueStateChangedHandler)
+
+		// kilocode_change start - Society Agent logging
+		// Initialize agent logger if metadata is available
+		const agentMetadata = (context as any).agentMetadata as AgentMetadata | undefined
+		if (agentMetadata) {
+			try {
+				this.agentLogger = createAgentLogger(agentMetadata)
+				this.agentLogger.logAction("task_created", {
+					taskId: this.taskId,
+					instanceId: this.instanceId,
+					workspace: this.workspacePath,
+				})
+			} catch (error) {
+				// Non-blocking: log error but continue
+				console.error("Failed to initialize agent logger:", error)
+			}
+		}
+		// kilocode_change end
 
 		// Only set up diff strategy if diff is enabled.
 		if (this.diffEnabled) {
@@ -1877,6 +1902,21 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		userContent: Anthropic.Messages.ContentBlockParam[],
 		includeFileDetails: boolean = false,
 	): Promise<boolean> {
+		// kilocode_change start - Society Agent logging
+		if (this.agentLogger) {
+			try {
+				this.agentLogger.logAction("agentic_loop_started", {
+					taskId: this.taskId,
+					instanceId: this.instanceId,
+					includeFileDetails,
+				})
+			} catch (error) {
+				// Non-blocking
+				console.error("Agent logger error:", error)
+			}
+		}
+		// kilocode_change end
+
 		interface StackItem {
 			userContent: Anthropic.Messages.ContentBlockParam[]
 			includeFileDetails: boolean
@@ -2629,6 +2669,24 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 					TelemetryService.instance.captureConversationMessage(this.taskId, "assistant")
 
+					// kilocode_change start - Society Agent logging
+					if (this.agentLogger) {
+						try {
+							const toolsUsed = assistantToolUses.map((tool) => tool.name)
+							this.agentLogger.logAction("api_response_received", {
+								taskId: this.taskId,
+								instanceId: this.instanceId,
+								hasMessage: !!finalAssistantMessage,
+								hasReasoning: reasoningDetails.length > 0,
+								toolsUsed,
+								toolCount: toolsUsed.length,
+							})
+						} catch (error) {
+							console.error("Agent logger error:", error)
+						}
+					}
+					// kilocode_change end
+
 					// NOTE: This comment is here for future reference - this was a
 					// workaround for `userMessageContent` not getting set to true.
 					// It was due to it not recursively calling for partial blocks
@@ -2954,6 +3012,21 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	}
 
 	public async *attemptApiRequest(retryAttempt: number = 0): ApiStream {
+		// kilocode_change start - Society Agent logging
+		if (this.agentLogger && retryAttempt === 0) {
+			try {
+				this.agentLogger.logAction("api_request_started", {
+					taskId: this.taskId,
+					instanceId: this.instanceId,
+					apiProvider: this.apiConfiguration.apiProvider,
+					model: this.apiConfiguration.apiModelId,
+				})
+			} catch (error) {
+				console.error("Agent logger error:", error)
+			}
+		}
+		// kilocode_change end
+
 		const state = await this.providerRef.deref()?.getState()
 
 		const {

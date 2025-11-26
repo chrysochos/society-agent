@@ -4039,6 +4039,111 @@ export const webviewMessageHandler = async (
 		case "requestManagedIndexerEnabled" as any: {
 			ManagedIndexer.getInstance()?.sendEnabledStateToWebview()
 		}
+
+		// kilocode_change start: Society Agent message handlers
+		case "getAgentRegistry": {
+			// Get agent registry from society agent registry service
+			const { AgentRegistry } = await import("../../services/society-agent/registry")
+			const registry = AgentRegistry.getInstance()
+			const agents = registry.getAllAgentStatuses()
+
+			await provider.postMessageToWebview({
+				type: "agentRegistry",
+				payload: { agents },
+			})
+			break
+		}
+
+		case "getAgentMessages": {
+			// Get agent messages from society agent messaging service
+			const { AgentMessaging } = await import("../../services/society-agent/agent-messaging")
+			const messaging = AgentMessaging.getInstance()
+			const agentId = message.agentId
+
+			const messages = agentId 
+				? messaging.getMessagesByAgent(agentId)
+				: messaging.getAllMessages()
+
+			await provider.postMessageToWebview({
+				type: "agentMessages",
+				payload: { messages, agentId },
+			})
+			break
+		}
+
+		case "sendAgentMessage": {
+			// Send a message to a specific agent
+			const { AgentMessaging } = await import("../../services/society-agent/agent-messaging")
+			const { getSocietyAgentContext } = await import("../../services/society-agent/config")
+			
+			const messaging = AgentMessaging.getInstance()
+			const context = getSocietyAgentContext()
+			
+			if (!context) {
+				vscode.window.showErrorMessage("No Society Agent context available")
+				break
+			}
+
+			const toAgentId = message.agentId
+			const content = message.text || "Hello from webview"
+
+			if (toAgentId) {
+				await messaging.sendRequest(
+					context.identity.id,
+					toAgentId,
+					"webview-message",
+					{ content }
+				)
+				vscode.window.showInformationMessage(`Message sent to ${toAgentId}`)
+			}
+			break
+		}
+
+		case "viewAgentLogs": {
+			// Open agent logs in VS Code editor
+			const agentId = message.agentId
+			if (agentId) {
+				const { getSocietyAgentContext } = await import("../../services/society-agent/config")
+				const context = getSocietyAgentContext()
+				
+				if (context) {
+					const logPath = context.logPath
+					if (await fileExistsAtPath(logPath)) {
+						await openFile(logPath, provider.context)
+					} else {
+						vscode.window.showWarningMessage(`No logs found for agent ${agentId}`)
+					}
+				}
+			}
+			break
+		}
+
+		case "clearAgentMessages": {
+			// Clear agent message history
+			const { AgentMessaging } = await import("../../services/society-agent/agent-messaging")
+			const messaging = AgentMessaging.getInstance()
+			const agentId = message.agentId
+
+			if (agentId) {
+				messaging.clearMessagesByAgent(agentId)
+			} else {
+				messaging.clearAllMessages()
+			}
+
+			vscode.window.showInformationMessage("Agent messages cleared")
+			
+			// Refresh the webview
+			const messages = agentId 
+				? messaging.getMessagesByAgent(agentId)
+				: messaging.getAllMessages()
+
+			await provider.postMessageToWebview({
+				type: "agentMessages",
+				payload: { messages, agentId },
+			})
+			break
+		}
+		// kilocode_change end: Society Agent message handlers
 		// kilocode_change end
 	}
 }

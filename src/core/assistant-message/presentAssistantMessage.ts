@@ -423,6 +423,20 @@ export async function presentAssistantMessage(cline: Task) {
 			if (!block.partial) {
 				cline.recordToolUsage(block.name)
 				TelemetryService.instance.captureToolUsage(cline.taskId, block.name)
+				// kilocode_change start - Society Agent logging
+				if (cline.agentLogger) {
+					try {
+						cline.agentLogger.logAction("tool_execution", {
+							tool: block.name,
+							params: block.params,
+							taskId: cline.taskId,
+							instanceId: cline.instanceId,
+						})
+					} catch (error) {
+						console.error("Agent logger error:", error)
+					}
+				}
+				// kilocode_change end
 			}
 
 			// Validate tool use before execution.
@@ -441,6 +455,118 @@ export async function presentAssistantMessage(cline: Task) {
 				pushToolResult(formatResponse.toolError(error.message))
 				break
 			}
+
+			// kilocode_change start - Society Agent permission checking
+			// Check if agent has permission to use this tool
+			if (cline.agentLogger) {
+				// Only check permissions if agent metadata is available
+				const context = cline.getContext()
+				const agentMetadata = (context as any).agentMetadata
+				
+				if (agentMetadata?.identity) {
+					const { getPermissionChecker } = await import("../../services/society-agent/permissions")
+					const permissionChecker = getPermissionChecker()
+					
+					// Check if agent has required capabilities
+					if (!permissionChecker.canAgentUseTool(agentMetadata.identity, block.name)) {
+						const denialMessage = permissionChecker.formatPermissionDeniedMessage(
+							agentMetadata.identity,
+							block.name
+						)
+						
+						// Log the permission denial
+						if (cline.agentLogger) {
+							cline.agentLogger.logAction("permission_denied", {
+								tool: block.name,
+								agentId: agentMetadata.identity.id,
+								missingCapabilities: permissionChecker.getMissingCapabilities(
+									agentMetadata.identity,
+									block.name
+								),
+							}, "error")
+						}
+						
+						cline.consecutiveMistakeCount++
+						pushToolResult(formatResponse.toolError(denialMessage))
+						break
+					}
+					
+					// Check if tool requires approval
+					const { getApprovalManager } = await import("../../services/society-agent/approval")
+					const approvalManager = getApprovalManager()
+					
+					if (approvalManager.toolRequiresApproval(block.name) && !block.partial) {
+						// Request approval for high-risk operation
+						const approvalRequest = {
+							id: `${cline.taskId}-${block.toolUseId || Date.now()}`,
+							agentId: agentMetadata.identity.id,
+							tool: block.name,
+							parameters: block.params,
+							context: {
+								taskId: cline.taskId,
+								instanceId: cline.instanceId,
+								...(block.params.path && { filePath: block.params.path }),
+								...(block.params.command && { command: block.params.command }),
+							},
+							timestamp: Date.now(),
+						}
+						
+						// Set up approval UI callback (uses Task.ask())
+						approvalManager.setApprovalUICallback(async (request) => {
+							const { response } = await cline.ask(
+								"tool",
+								`⚠️ High-risk operation requires approval:\n\n${approvalManager.formatApprovalRequest(request)}\n\nApprove this operation?`
+							)
+							return response === "yesButtonClicked"
+						})
+						
+						// Request approval
+						const approvalResult = await approvalManager.requestApproval(approvalRequest)
+						
+						// Log the approval result
+						if (cline.agentLogger) {
+							cline.agentLogger.logAction(
+								approvalResult.approved ? "approval_granted" : "approval_denied",
+								{
+									tool: block.name,
+									approvalId: approvalRequest.id,
+									supervisorId: approvalResult.supervisorId,
+									reason: approvalResult.reason,
+								},
+								approvalResult.approved ? "success" : "error"
+							)
+						}
+						
+						// If denied, abort tool execution
+						if (!approvalResult.approved) {
+							cline.consecutiveMistakeCount++
+							pushToolResult(
+								formatResponse.toolError(
+									`Operation denied: ${approvalResult.reason || "User did not approve"}`
+								)
+							)
+							break
+						}
+						
+						// If approved, log with approval metadata
+						if (cline.agentLogger) {
+							cline.agentLogger.logAction(
+								"tool_execution_approved",
+								{
+									tool: block.name,
+									params: block.params,
+									approvalId: approvalRequest.id,
+									approvedBy: approvalResult.supervisorId,
+								},
+								undefined,
+								true,
+								approvalResult.supervisorId
+							)
+						}
+					}
+				}
+			}
+			// kilocode_change end
 
 			// Check for identical consecutive tool calls.
 			if (!block.partial) {
