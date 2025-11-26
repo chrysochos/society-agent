@@ -84,9 +84,15 @@ export class CLI {
 			})
 			logs.debug("Telemetry service initialized", "CLI")
 
-			// Get identity from Identity Manager
+				// Get identity from Identity Manager
 			const identityManager = getIdentityManager()
 			const identity = identityManager.getIdentity()
+
+			// kilocode_change start - Get agent identity from identity service
+			const { getIdentityService } = await import("./services/identity.js")
+			const agentIdentityService = getIdentityService()
+			const agentIdentity = agentIdentityService.export()
+			// kilocode_change end
 
 			// Create ExtensionService with identity
 			const serviceOptions: Parameters<typeof createExtensionService>[0] = {
@@ -105,6 +111,33 @@ export class CLI {
 			if (this.options.customModes) {
 				serviceOptions.customModes = this.options.customModes
 			}
+
+			// kilocode_change start - Add agent metadata if agent identity is initialized
+			if (agentIdentity) {
+				const path = await import("path")
+				const os = await import("os")
+				const sessionId = identity?.sessionId || `session-${Date.now()}`
+				const historyPath = path.join(
+					this.options.workspace || process.cwd(),
+					".society-agent",
+					"logs",
+					`${agentIdentity.id}.jsonl`
+				)
+
+				serviceOptions.agentMetadata = {
+					identity: agentIdentity,
+					currentTaskId: undefined, // Will be set when task is created
+					sessionId,
+					historyPath,
+				}
+
+				logs.info("Agent metadata configured for ExtensionService", "CLI", {
+					agentId: agentIdentity.id,
+					role: agentIdentity.role,
+					capabilities: agentIdentity.capabilities,
+				})
+			}
+			// kilocode_change end
 
 			this.service = createExtensionService(serviceOptions)
 			logs.debug("ExtensionService created with identity", "CLI", {

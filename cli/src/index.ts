@@ -18,6 +18,9 @@ import { envConfigExists, getMissingEnvVars } from "./config/env-config.js"
 import { getParallelModeParams } from "./parallel/parallel.js"
 import { DEBUG_MODES, DEBUG_FUNCTIONS } from "./debug/index.js"
 import { logs } from "./services/logs.js"
+// kilocode_change start
+import { initializeAgentIdentity } from "./services/identity.js"
+// kilocode_change end
 
 const program = new Command()
 let cli: CLI | null = null
@@ -44,6 +47,13 @@ program
 	.option("-pv, --provider <id>", "Select provider by ID (e.g., 'kilocode-1')")
 	.option("-mo, --model <model>", "Override model for the selected provider")
 	.option("--nosplash", "Disable the welcome message and update notifications", false)
+	// kilocode_change start - Society Agent CLI options
+	.option("--agent-id <id>", "Custom agent identifier (auto-generated if not provided)")
+	.option("--agent-name <name>", "Human-readable agent name (e.g., 'Code Analyzer')")
+	.option("--agent-role <role>", "Agent role: worker, supervisor, or coordinator (default: worker)")
+	.option("--capabilities <list>", "Comma-separated list of agent capabilities (e.g., 'file-read,code-analysis')")
+	.option("--domain <domain>", "Agent specialty domain (e.g., 'testing', 'security', 'frontend')")
+	// kilocode_change end
 	.argument("[prompt]", "The prompt or command to execute")
 	.action(async (prompt, options) => {
 		// Validate that --existing-branch requires --parallel
@@ -196,6 +206,26 @@ program
 		}
 
 		logs.debug("Starting Kilo Code CLI", "Index", { options })
+
+		// kilocode_change start - Initialize agent identity if agent options provided
+		let agentIdentity = null
+		if (options.agentId || options.agentName || options.agentRole || options.capabilities || options.domain) {
+			try {
+				agentIdentity = initializeAgentIdentity({
+					agentId: options.agentId,
+					agentName: options.agentName,
+					role: options.agentRole,
+					capabilities: options.capabilities ? options.capabilities.split(",").map((c: string) => c.trim()) : undefined,
+					domain: options.domain,
+				})
+				logs.info(`Agent identity initialized: ${agentIdentity.name} (${agentIdentity.id})`, "Index")
+				logs.debug("Agent capabilities:", "Index", { capabilities: agentIdentity.capabilities })
+			} catch (error) {
+				console.error("Error initializing agent identity:", error instanceof Error ? error.message : error)
+				process.exit(1)
+			}
+		}
+		// kilocode_change end
 
 		cli = new CLI({
 			mode: options.mode,

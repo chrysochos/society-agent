@@ -5,6 +5,9 @@ import { logs } from "./logs.js"
 import { resolveExtensionPaths } from "../utils/extension-paths.js"
 import type { ExtensionMessage, WebviewMessage, ExtensionState, ModeConfig } from "../types/messages.js"
 import type { IdentityInfo } from "../host/VSCode.js"
+// kilocode_change start
+import type { AgentMetadata } from "../../../src/services/society-agent/types"
+// kilocode_change end
 
 /**
  * Configuration options for ExtensionService
@@ -22,6 +25,10 @@ export interface ExtensionServiceOptions {
 	extensionRootPath?: string
 	/** Identity information for VSCode environment */
 	identity?: IdentityInfo
+	// kilocode_change start
+	/** Agent metadata for Society Agent framework (optional) */
+	agentMetadata?: AgentMetadata
+	// kilocode_change end
 }
 
 /**
@@ -73,9 +80,12 @@ export interface ExtensionServiceEvents {
 export class ExtensionService extends EventEmitter {
 	private extensionHost: ExtensionHost
 	private messageBridge: MessageBridge
-	private options: Required<Omit<ExtensionServiceOptions, "identity" | "customModes">> & {
+	private options: Required<Omit<ExtensionServiceOptions, "identity" | "customModes" | "agentMetadata">> & {
 		identity?: IdentityInfo
 		customModes?: ModeConfig[]
+		// kilocode_change start
+		agentMetadata?: AgentMetadata
+		// kilocode_change end
 	}
 	private isInitialized = false
 	private isDisposed = false
@@ -95,6 +105,9 @@ export class ExtensionService extends EventEmitter {
 			extensionRootPath: options.extensionRootPath || extensionPaths.extensionRootPath,
 			...(options.identity && { identity: options.identity }),
 			...(options.customModes && { customModes: options.customModes }),
+			// kilocode_change start
+			...(options.agentMetadata && { agentMetadata: options.agentMetadata }),
+			// kilocode_change end
 		}
 
 		// Create extension host
@@ -365,18 +378,47 @@ export class ExtensionService extends EventEmitter {
 			logs.info("Extension Service disposed", "ExtensionService")
 		} catch (error) {
 			logs.error("Error disposing Extension Service", "ExtensionService", { error })
-			throw error
 		}
 	}
 
+	// kilocode_change start
 	/**
-	 * Type-safe event emitter methods
+	 * Get agent metadata if configured
 	 */
-	override on<K extends keyof ExtensionServiceEvents>(event: K, listener: ExtensionServiceEvents[K]): this {
-		return super.on(event, listener as (...args: unknown[]) => void)
+	getAgentMetadata(): AgentMetadata | undefined {
+		return this.options.agentMetadata
+	}
+	// kilocode_change end
+
+	/**
+	 * Check if service is activated
+	 */
+	isServiceActivated(): boolean {
+		return this.isActivated
 	}
 
-	override once<K extends keyof ExtensionServiceEvents>(event: K, listener: ExtensionServiceEvents[K]): this {
+	/**
+	 * Check if service is disposed
+	 */
+	isServiceDisposed(): boolean {
+		return this.isDisposed
+	}
+
+	/**
+	 * Get current workspace path
+	 */
+	getWorkspace(): string {
+		return this.options.workspace
+	}
+
+	// kilocode_change start - Remove duplicate method
+	// Removed duplicate isServiceDisposed() and isServiceActivated() methods
+	// kilocode_change end
+
+	override once<K extends keyof ExtensionServiceEvents>(
+		event: K,
+		listener: ExtensionServiceEvents[K],
+	): this {
 		return super.once(event, listener as (...args: unknown[]) => void)
 	}
 
