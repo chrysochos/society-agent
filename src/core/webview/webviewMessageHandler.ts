@@ -4080,7 +4080,7 @@ export const webviewMessageHandler = async (
 			const context = getSocietyAgentContext()
 			
 			if (!context) {
-				vscode.window.showErrorMessage("No Society Agent context available")
+				vscode.window.showErrorMessage("No Society Agent (SA) context available")
 				break
 			}
 

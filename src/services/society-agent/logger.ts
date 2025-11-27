@@ -85,7 +85,7 @@ export class SocietyAgentLogger {
 			await fs.appendFile(this.logPath, line, 'utf-8')
 		} catch (error) {
 			// Don't throw - logging failures shouldn't break agent execution
-			console.error('[Society Agent Logger] Failed to write log:', error)
+			console.error('[Society Agent (SA) Logger] Failed to write log:', error)
 		}
 	}
 

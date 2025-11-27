@@ -1,11 +1,10 @@
 // kilocode_change - new file
 /**
- * /logs command - View Society Agent action logs
+ * /logs command - View Society Agent (SA) action logs
  */
 
-import fs from "fs/promises"
-import path from "path"
-import { generateMessage } from "../ui/utils/messages.js"
+import * as fs from "fs/promises"
+import * as path from "path"
 import type { Command, CommandContext } from "./core/types.js"
 import type { AgentAction } from "../../../src/services/society-agent/types.js"
 import { formatAgentAction } from "../../../src/services/society-agent/logger.js"
@@ -58,7 +57,7 @@ async function readAgentLogs(logPath: string, limit?: number): Promise<AgentActi
 		const sorted = actions.reverse()
 		return limit ? sorted.slice(0, limit) : sorted
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+		if ((error as any).code === "ENOENT") {
 			return []
 		}
 		throw error
@@ -71,9 +70,9 @@ async function readAgentLogs(logPath: string, limit?: number): Promise<AgentActi
 async function findAgentLogFiles(logsDir: string): Promise<string[]> {
 	try {
 		const files = await fs.readdir(logsDir)
-		return files.filter((file) => file.endsWith(".jsonl")).map((file) => path.join(logsDir, file))
+		return files.filter((file: string) => file.endsWith(".jsonl")).map((file: string) => path.join(logsDir, file))
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+		if ((error as any).code === "ENOENT") {
 			return []
 		}
 		throw error
@@ -96,52 +95,37 @@ async function displayAgentLogs(
 	logPath: string,
 	agentId: string,
 	limit?: number,
-	follow: boolean = false,
 ): Promise<void> {
 	const logs = await readAgentLogs(logPath, limit)
 
 	if (logs.length === 0) {
-		context.ui.output(generateMessage(`No logs found for agent: ${agentId}`, "info"))
+		context.addMessage({
+			id: Date.now().toString(),
+			type: "system",
+			content: `No logs found for agent: ${agentId}`,
+			ts: Date.now(),
+		})
 		return
 	}
 
-	context.ui.output(generateMessage(`\n=== Agent Logs: ${agentId} ===`, "info"))
-	context.ui.output(generateMessage(`Log file: ${logPath}`, "dim"))
-	context.ui.output(generateMessage(`Total actions: ${logs.length}\n`, "dim"))
+	let output = `\n=== Agent Logs: ${agentId} ===\n`
+	output += `Log file: ${logPath}\n`
+	output += `Total actions: ${logs.length}\n\n`
 
 	for (const log of logs) {
-		const timeStr = formatRelativeTime(log.timestamp)
-		const absTimeStr = formatAbsoluteTime(log.timestamp)
+		const timestamp = typeof log.timestamp === "number" ? log.timestamp : new Date(log.timestamp).getTime()
+		const timeStr = formatRelativeTime(timestamp)
 		const formatted = formatAgentAction(log)
 
-		// Color-code by action type
-		let color: "success" | "error" | "warning" | "info" = "info"
-		if (log.result === "error") {
-			color = "error"
-		} else if (log.result === "success") {
-			color = "success"
-		} else if (log.requiredApproval) {
-			color = "warning"
-		}
-
-		context.ui.output(generateMessage(`[${timeStr}] ${formatted}`, color))
-		if (context.args.includes("--verbose") || context.args.includes("-v")) {
-			context.ui.output(generateMessage(`  Time: ${absTimeStr}`, "dim"))
-			if (log.params) {
-				context.ui.output(generateMessage(`  Params: ${JSON.stringify(log.params)}`, "dim"))
-			}
-			if (log.error) {
-				context.ui.output(generateMessage(`  Error: ${log.error}`, "error"))
-			}
-		}
+		output += `[${timeStr}] ${formatted}\n`
 	}
 
-	context.ui.output("")
-
-	// TODO: Implement follow mode (tail -f style)
-	if (follow) {
-		context.ui.output(generateMessage("Follow mode not yet implemented", "warning"))
-	}
+	context.addMessage({
+		id: Date.now().toString(),
+		type: "system",
+		content: output,
+		ts: Date.now(),
+	})
 }
 
 /**
@@ -149,121 +133,106 @@ async function displayAgentLogs(
  */
 export const logsCommand: Command = {
 	name: "logs",
-	description: "View Society Agent action logs",
+	description: "View Society Agent (SA) action logs",
 	aliases: ["log"],
-	args: [
-		{
-			name: "agentId",
-			description: "Specific agent ID to view logs for",
-			required: false,
-		},
-	],
-	options: [
-		{
-			name: "--limit",
-			aliases: ["-n"],
-			description: "Limit the number of log entries to display",
-			requiresValue: true,
-		},
-		{
-			name: "--follow",
-			aliases: ["-f"],
-			description: "Follow log output in real-time (not yet implemented)",
-			requiresValue: false,
-		},
-		{
-			name: "--verbose",
-			aliases: ["-v"],
-			description: "Show detailed information for each log entry",
-			requiresValue: false,
-		},
-		{
-			name: "--all",
-			aliases: ["-a"],
-			description: "Show logs for all agents",
-			requiresValue: false,
-		},
-	],
+	usage: "/logs [agentId]",
+	examples: ["/logs", "/logs agent-123"],
+	category: "system",
+	priority: 7,
+	handler: async (context) => {
+		const { args, addMessage } = context
 
-	async execute(context: CommandContext): Promise<void> {
-		const { args, ui } = context
-
-		// Determine logs directory
-		const logsDir = path.join(process.cwd(), ".society-agent", "logs")
+		// Determine logs directory (use process.cwd() from Node.js globals)
+		const logsDir = path.join((globalThis as any).process.cwd(), ".society-agent", "logs")
 
 		// Check if logs directory exists
 		try {
 			await fs.access(logsDir)
 		} catch {
-			ui.output(
-				generateMessage(
-					`No Society Agent logs found. Logs directory does not exist: ${logsDir}\n` +
-						`Make sure to run the CLI with agent options (--agent-id, --agent-name, etc.) to enable logging.`,
-					"warning",
-				),
-			)
+			addMessage({
+				id: Date.now().toString(),
+				type: "system",
+				content:
+					`No Society Agent (SA) logs found. Logs directory does not exist: ${logsDir}\n\n` +
+					`Make sure to run the CLI with agent options (--agent-id, --agent-name, etc.) to enable logging.`,
+				ts: Date.now(),
+			})
 			return
 		}
 
-		// Parse options
-		const limitStr = context.getOption("--limit")
-		const limit = limitStr ? parseInt(limitStr, 10) : undefined
-		const follow = context.hasOption("--follow")
-		const showAll = context.hasOption("--all")
+		// Get agent ID from first arg
+		const agentIdArg = args[0]
 
-		// Get agent ID from args or options
-		const agentIdArg = args.find((arg) => !arg.startsWith("-"))
-
-		if (agentIdArg && !showAll) {
+		if (agentIdArg) {
 			// Show logs for specific agent
 			const logPath = path.join(logsDir, `${agentIdArg}.jsonl`)
 			try {
 				await fs.access(logPath)
-				await displayAgentLogs(context, logPath, agentIdArg, limit, follow)
+				await displayAgentLogs(context, logPath, agentIdArg, 10)
 			} catch {
-				ui.output(generateMessage(`No logs found for agent: ${agentIdArg}`, "error"))
-				ui.output(generateMessage(`Expected log file: ${logPath}`, "dim"))
+				let output = `No logs found for agent: ${agentIdArg}\n`
+				output += `Expected log file: ${logPath}\n\n`
 
 				// Show available agents
 				const logFiles = await findAgentLogFiles(logsDir)
 				if (logFiles.length > 0) {
-					ui.output(generateMessage("\nAvailable agents:", "info"))
+					output += "Available agents:\n"
 					for (const file of logFiles) {
 						const id = getAgentIdFromPath(file)
-						ui.output(generateMessage(`  - ${id}`, "dim"))
+						output += `  - ${id}\n`
 					}
 				}
+
+				addMessage({
+					id: Date.now().toString(),
+					type: "system",
+					content: output,
+					ts: Date.now(),
+				})
 			}
 		} else {
 			// Show logs for all agents
 			const logFiles = await findAgentLogFiles(logsDir)
 
 			if (logFiles.length === 0) {
-				ui.output(generateMessage("No Society Agent logs found.", "warning"))
-				ui.output(
-					generateMessage(
+				addMessage({
+					id: Date.now().toString(),
+					type: "system",
+					content:
+						`No Society Agent (SA) logs found.\n\n` +
 						`Make sure to run the CLI with agent options (--agent-id, --agent-name, etc.) to enable logging.`,
-						"dim",
-					),
-				)
+					ts: Date.now(),
+				})
 				return
 			}
 
-			ui.output(generateMessage(`Found ${logFiles.length} agent log file(s)\n`, "info"))
+			let output = `Found ${logFiles.length} agent log file(s)\n\n`
 
 			for (const logPath of logFiles) {
 				const agentId = getAgentIdFromPath(logPath)
-				await displayAgentLogs(context, logPath, agentId, limit || 10, false)
+				const logs = await readAgentLogs(logPath, 10)
+
+				if (logs.length > 0) {
+					output += `=== Agent: ${agentId} ===\n`
+					for (const log of logs) {
+						const timestamp =
+							typeof log.timestamp === "number" ? log.timestamp : new Date(log.timestamp).getTime()
+						const timeStr = formatRelativeTime(timestamp)
+						const formatted = formatAgentAction(log)
+						output += `[${timeStr}] ${formatted}\n`
+					}
+					output += "\n"
+				}
 			}
 
-			if (!limit) {
-				ui.output(
-					generateMessage(
-						`Showing 10 most recent entries per agent. Use --limit to see more.`,
-						"dim",
-					),
-				)
-			}
+			output += "Showing 10 most recent entries per agent."
+
+			addMessage({
+				id: Date.now().toString(),
+				type: "system",
+				content: output,
+				ts: Date.now(),
+			})
 		}
 	},
 }

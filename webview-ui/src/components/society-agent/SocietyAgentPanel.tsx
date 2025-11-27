@@ -129,7 +129,7 @@ export const SocietyAgentPanel: React.FC<SocietyAgentPanelProps> = ({ onAgentSel
 		<div className="flex flex-col h-full">
 			{/* Header */}
 			<div className="flex items-center justify-between p-4 border-b border-border">
-				<h2 className="text-lg font-semibold">Society Agents</h2>
+				<h2 className="text-lg font-semibold">Society Agents (SA)</h2>
 				<div className="flex items-center gap-2">
 					<div className="text-xs text-muted-foreground">{agents.length} active</div>
 					<VSCodeButton appearance="icon" onClick={handleRefresh}>

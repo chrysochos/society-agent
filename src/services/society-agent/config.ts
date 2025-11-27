@@ -132,7 +132,7 @@ export function validateRole(role: string): AgentRole {
 		return role as AgentRole
 	}
 
-	console.warn(`[Society Agent] Invalid role: ${role}, defaulting to 'worker'`)
+	console.warn(`[Society Agent (SA)] Invalid role: ${role}, defaulting to 'worker'`)
 	return 'worker'
 }
 
