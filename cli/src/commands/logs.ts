@@ -29,10 +29,10 @@ function formatRelativeTime(ts: number): string {
 /**
  * Format an absolute timestamp as human-readable
  */
-function formatAbsoluteTime(ts: number): string {
-	const date = new Date(ts)
-	return date.toLocaleString()
-}
+// function formatAbsoluteTime(ts: number): string {
+// 	const date = new Date(ts)
+// 	return date.toLocaleString()
+// }
 
 /**
  * Read agent logs from a JSONL file
@@ -46,9 +46,10 @@ async function readAgentLogs(logPath: string, limit?: number): Promise<AgentActi
 		for (const line of lines) {
 			if (!line.trim()) continue
 			try {
-				const action = JSON.parse(line) as AgentAction
+				const parsed = JSON.parse(line) as unknown // kilocode_change
+				const action = parsed as AgentAction
 				actions.push(action)
-			} catch (error) {
+			} catch {
 				console.error(`Failed to parse log line: ${line}`)
 			}
 		}
@@ -56,8 +57,9 @@ async function readAgentLogs(logPath: string, limit?: number): Promise<AgentActi
 		// Return most recent logs first
 		const sorted = actions.reverse()
 		return limit ? sorted.slice(0, limit) : sorted
-	} catch (error) {
-		if ((error as any).code === "ENOENT") {
+	} catch (error: NodeJS.ErrnoException) {
+		const nodeError = error // kilocode_change
+		if (nodeError.code === "ENOENT") {
 			return []
 		}
 		throw error
@@ -69,10 +71,13 @@ async function readAgentLogs(logPath: string, limit?: number): Promise<AgentActi
  */
 async function findAgentLogFiles(logsDir: string): Promise<string[]> {
 	try {
-		const files = await fs.readdir(logsDir)
-		return files.filter((file: string) => file.endsWith(".jsonl")).map((file: string) => path.join(logsDir, file))
+		const entries = await fs.readdir(logsDir, { withFileTypes: true })
+		return entries
+			.filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+			.map((entry) => path.join(logsDir, entry.name))
 	} catch (error) {
-		if ((error as any).code === "ENOENT") {
+		const nodeError = error as NodeJS.ErrnoException // kilocode_change
+		if (nodeError.code === "ENOENT") {
 			return []
 		}
 		throw error
@@ -143,7 +148,8 @@ export const logsCommand: Command = {
 		const { args, addMessage } = context
 
 		// Determine logs directory (use process.cwd() from Node.js globals)
-		const logsDir = path.join((globalThis as any).process.cwd(), ".society-agent", "logs")
+		const nodeGlobal = globalThis as typeof globalThis & { process: NodeJS.Process } // kilocode_change
+		const logsDir = path.join(nodeGlobal.process.cwd(), ".society-agent", "logs")
 
 		// Check if logs directory exists
 		try {

@@ -7,7 +7,7 @@
  */
 
 import React, { useState } from "react"
-import { VSCodeButton, VSCodeTextField, VSCodeTextArea } from "@vscode/webview-ui-toolkit/react"
+import { VSCodeButton, VSCodeTextArea } from "@vscode/webview-ui-toolkit/react" // kilocode_change
 import "./PurposeInput.css"
 
 // kilocode_change start

@@ -1,9 +1,10 @@
 // kilocode_change - new file
 /**
  * Society Agent Components
- * 
+ *
  * React components for Society Agent UI integration.
  */
 
-export { SocietyAgentPanel } from "./SocietyAgentPanel"
-export { AgentMessageViewer } from "./AgentMessageViewer"
+// Week 2 components disabled for MVP (have type errors)
+// export { SocietyAgentPanel } from "./SocietyAgentPanel"
+// export { AgentMessageViewer } from "./AgentMessageViewer"

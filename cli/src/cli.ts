@@ -84,7 +84,7 @@ export class CLI {
 			})
 			logs.debug("Telemetry service initialized", "CLI")
 
-				// Get identity from Identity Manager
+			// Get identity from Identity Manager
 			const identityManager = getIdentityManager()
 			const identity = identityManager.getIdentity()
 
@@ -114,14 +114,13 @@ export class CLI {
 
 			// kilocode_change start - Add agent metadata if agent identity is initialized
 			if (agentIdentity) {
-				const path = await import("path")
-				const os = await import("os")
+				const path = await import("path") // kilocode_change
 				const sessionId = identity?.sessionId || `session-${Date.now()}`
 				const historyPath = path.join(
 					this.options.workspace || process.cwd(),
 					".society-agent",
 					"logs",
-					`${agentIdentity.id}.jsonl`
+					`${agentIdentity.id}.jsonl`,
 				)
 
 				serviceOptions.agentMetadata = {
