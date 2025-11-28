@@ -32,8 +32,15 @@ import { TooltipProvider } from "./components/ui/tooltip"
 import { STANDARD_TOOLTIP_DELAY } from "./components/ui/standard-tooltip"
 import { useKiloIdentity } from "./utils/kilocode/useKiloIdentity"
 import { MemoryWarningBanner } from "./kilocode/MemoryWarningBanner"
+import { Dashboard as SocietyAgentDashboard } from "./components/society-agent/Dashboard" // kilocode_change
 
 type Tab = "settings" | "history" | "mcp" | "modes" | "chat" | "marketplace" | "account" | "cloud" | "profile" // kilocode_change: add "profile"
+
+// kilocode_change start - Check if this is the Society Agent view
+const isSocietyAgentView = () => {
+	return document.body.dataset.vscodeViewType === "societyAgent"
+}
+// kilocode_change end
 
 interface HumanRelayDialogState {
 	isOpen: boolean
@@ -398,18 +405,36 @@ const App = () => {
 
 const queryClient = new QueryClient()
 
-const AppWithProviders = () => (
-	<ErrorBoundary>
-		<ExtensionStateContextProvider>
-			<TranslationProvider>
-				<QueryClientProvider client={queryClient}>
+// kilocode_change start - Society Agent entry point
+const AppWithProviders = () => {
+	// If this is the Society Agent view, render just the dashboard
+	if (isSocietyAgentView()) {
+		return (
+			<ErrorBoundary>
+				<TranslationProvider>
 					<TooltipProvider delayDuration={STANDARD_TOOLTIP_DELAY}>
-						<App />
+						<SocietyAgentDashboard />
 					</TooltipProvider>
-				</QueryClientProvider>
-			</TranslationProvider>
-		</ExtensionStateContextProvider>
-	</ErrorBoundary>
-)
+				</TranslationProvider>
+			</ErrorBoundary>
+		)
+	}
+
+	// Otherwise render the full Kilo Code app
+	return (
+		<ErrorBoundary>
+			<ExtensionStateContextProvider>
+				<TranslationProvider>
+					<QueryClientProvider client={queryClient}>
+						<TooltipProvider delayDuration={STANDARD_TOOLTIP_DELAY}>
+							<App />
+						</TooltipProvider>
+					</QueryClientProvider>
+				</TranslationProvider>
+			</ExtensionStateContextProvider>
+		</ErrorBoundary>
+	)
+}
+// kilocode_change end
 
 export default AppWithProviders

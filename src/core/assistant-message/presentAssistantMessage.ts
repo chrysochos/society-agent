@@ -456,9 +456,10 @@ export async function presentAssistantMessage(cline: Task) {
 				break
 			}
 
-			// kilocode_change start - Society Agent permission checking
-			// Check if agent has permission to use this tool
-			if (cline.agentLogger) {
+			// kilocode_change start - Society Agent permission checking (disabled for MVP)
+			/*
+		// Check if agent has permission to use this tool
+		if (cline.agentLogger) {
 				// Only check permissions if agent metadata is available
 				const context = cline.getContext()
 				const agentMetadata = (context as any).agentMetadata
@@ -566,7 +567,8 @@ export async function presentAssistantMessage(cline: Task) {
 					}
 				}
 			}
-			// kilocode_change end
+			*/
+			// kilocode_change end (disabled for MVP)
 
 			// Check for identical consecutive tool calls.
 			if (!block.partial) {

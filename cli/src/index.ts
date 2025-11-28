@@ -20,6 +20,7 @@ import { DEBUG_MODES, DEBUG_FUNCTIONS } from "./debug/index.js"
 import { logs } from "./services/logs.js"
 // kilocode_change start
 import { initializeAgentIdentity } from "./services/identity.js"
+import { registerSocietyCommands } from "./commands/society.js"
 // kilocode_change end
 
 const program = new Command()
@@ -215,7 +216,9 @@ program
 					agentId: options.agentId,
 					agentName: options.agentName,
 					role: options.agentRole,
-					capabilities: options.capabilities ? options.capabilities.split(",").map((c: string) => c.trim()) : undefined,
+					capabilities: options.capabilities
+						? options.capabilities.split(",").map((c: string) => c.trim())
+						: undefined,
 					domain: options.domain,
 				})
 				logs.info(`Agent identity initialized: ${agentIdentity.name} (${agentIdentity.id})`, "Index")
@@ -280,6 +283,10 @@ program
 
 		await debugFunction()
 	})
+
+// kilocode_change start - Register Society Agent commands
+registerSocietyCommands(program)
+// kilocode_change end
 
 // Handle process termination signals
 process.on("SIGINT", async () => {

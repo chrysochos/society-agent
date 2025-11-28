@@ -1,0 +1,78 @@
+/* kilocode_change - new file */
+.terminal-pane {
+	position: fixed;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	height: 50vh;
+	background: var(--vscode-editor-background);
+	border-top: 1px solid var(--vscode-panel-border);
+	display: flex;
+	flex-direction: column;
+	z-index: 1000;
+}
+
+.terminal-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 10px 16px;
+	background: var(--vscode-titleBar-activeBackground);
+	border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.terminal-title {
+	font-size: 14px;
+	font-weight: 600;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.terminal-status {
+	font-size: 12px;
+	font-weight: normal;
+	color: var(--vscode-descriptionForeground);
+}
+
+.terminal-actions {
+	display: flex;
+	gap: 8px;
+}
+
+.terminal-body {
+	flex: 1;
+	padding: 10px;
+	overflow: hidden;
+}
+
+/* Override xterm.js styles for better integration */
+.terminal-body .xterm {
+	height: 100%;
+}
+
+.terminal-body .xterm-viewport {
+	background-color: transparent !important;
+}
+
+.terminal-body .xterm-screen {
+	background-color: transparent !important;
+}
+
+/* Scrollbar styling */
+.terminal-body .xterm-viewport::-webkit-scrollbar {
+	width: 10px;
+}
+
+.terminal-body .xterm-viewport::-webkit-scrollbar-track {
+	background: var(--vscode-scrollbarSlider-background);
+}
+
+.terminal-body .xterm-viewport::-webkit-scrollbar-thumb {
+	background: var(--vscode-scrollbarSlider-hoverBackground);
+	border-radius: 5px;
+}
+
+.terminal-body .xterm-viewport::-webkit-scrollbar-thumb:hover {
+	background: var(--vscode-scrollbarSlider-activeBackground);
+}

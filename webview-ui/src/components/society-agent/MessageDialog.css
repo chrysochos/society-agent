@@ -1,0 +1,117 @@
+/* kilocode_change - new file */
+.message-dialog-overlay {
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background: rgba(0, 0, 0, 0.5);
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	z-index: 2000;
+}
+
+.message-dialog {
+	background: var(--vscode-editor-background);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 8px;
+	width: 90%;
+	max-width: 600px;
+	max-height: 80vh;
+	display: flex;
+	flex-direction: column;
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.message-dialog-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 16px 20px;
+	border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.message-dialog-title {
+	font-size: 16px;
+	font-weight: 600;
+}
+
+.message-dialog-body {
+	flex: 1;
+	padding: 20px;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 20px;
+}
+
+.quick-messages {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.quick-messages-label {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--vscode-descriptionForeground);
+}
+
+.quick-messages-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.quick-message-button {
+	padding: 10px 14px;
+	font-size: 13px;
+	text-align: left;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 4px;
+	cursor: pointer;
+	transition: all 0.2s;
+}
+
+.quick-message-button:hover {
+	background: var(--vscode-button-secondaryHoverBackground);
+	border-color: var(--vscode-focusBorder);
+}
+
+.message-input-container {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.message-input-container label {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+}
+
+.message-hint {
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+	font-style: italic;
+}
+
+.message-hint kbd {
+	font-family: monospace;
+	padding: 2px 6px;
+	background: var(--vscode-textCodeBlock-background);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 3px;
+	font-size: 11px;
+}
+
+.message-dialog-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
+	padding: 16px 20px;
+	border-top: 1px solid var(--vscode-panel-border);
+}

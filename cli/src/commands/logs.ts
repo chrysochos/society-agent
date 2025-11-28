@@ -3,8 +3,8 @@
  * /logs command - View Society Agent (SA) action logs
  */
 
-import * as fs from "fs/promises"
-import * as path from "path"
+import fs from "fs/promises"
+import path from "path"
 import type { Command, CommandContext } from "./core/types.js"
 import type { AgentAction } from "../../../src/services/society-agent/types.js"
 import { formatAgentAction } from "../../../src/services/society-agent/logger.js"

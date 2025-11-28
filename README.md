@@ -32,6 +32,7 @@
 - **Automated Refactoring:** Kilo can refactor and improve existing code.
 - **MCP Server Marketplace**: Kilo can easily find, and use MCP servers to extend the agent capabilities.
 - **Multi Mode**: Plan with Architect, Code with Coder, and Debug with Debugger, and make your own custom modes.
+- **Society Agent (Coming Soon):** Purpose-driven multi-agent system where a supervisor coordinates specialized workers to achieve your goals autonomously. [Learn more →](./SOCIETY_AGENT_README.md)
 
 ## How to get started with Kilo Code
 

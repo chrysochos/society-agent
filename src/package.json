@@ -124,6 +124,12 @@
 					"name": "%views.sidebar.name%",
 					"icon": "assets/icons/kilo.png",
 					"darkIcon": "assets/icons/kilo-dark.png"
+				},
+				{
+					"type": "webview",
+					"id": "kilocode.societyAgentView",
+					"name": "Society Agent",
+					"icon": "$(organization)"
 				}
 			]
 		},
@@ -172,6 +178,12 @@
 				"command": "kilo-code.settingsButtonClicked",
 				"title": "%command.settings.title%",
 				"icon": "$(settings-gear)"
+			},
+			{
+				"command": "kilocode.societyAgent.showDashboard",
+				"title": "Society Agent: Show Dashboard",
+				"icon": "$(organization)",
+				"category": "Society Agent"
 			},
 			{
 				"command": "kilo-code.helpButtonClicked",

@@ -4038,9 +4038,11 @@ export const webviewMessageHandler = async (
 		// probably. So casting as any as to not define a more permanent type
 		case "requestManagedIndexerEnabled" as any: {
 			ManagedIndexer.getInstance()?.sendEnabledStateToWebview()
+			break
 		}
 
-		// kilocode_change start: Society Agent message handlers
+		// kilocode_change start: Society Agent message handlers (disabled for MVP)
+		/*
 		case "getAgentRegistry": {
 			// Get agent registry from society agent registry service
 			const { AgentRegistry } = await import("../../services/society-agent/registry")
@@ -4143,7 +4145,8 @@ export const webviewMessageHandler = async (
 			})
 			break
 		}
-		// kilocode_change end: Society Agent message handlers
+		*/
+		// kilocode_change end: Society Agent message handlers (disabled for MVP)
 		// kilocode_change end
 	}
 }

@@ -1,0 +1,333 @@
+// kilocode_change - new file
+import * as vscode from "vscode"
+import { SocietyManager } from "../../services/society-agent/society-manager"
+import { TerminalManager } from "../../services/society-agent/terminal-manager"
+import { ExecutionLogger } from "../../services/society-agent/execution-logger"
+import { getUri } from "./getUri"
+import { getNonce } from "./getNonce"
+
+/**
+ * Society Agent Provider - Manages the Society Agent webview panel
+ * Connects backend services (SocietyManager, TerminalManager) to frontend dashboard
+ */
+export class SocietyAgentProvider implements vscode.WebviewViewProvider {
+	public static readonly viewType = "kilocode.societyAgentView"
+
+	private _view?: vscode.WebviewView
+	private societyManager?: SocietyManager
+	private terminalManager?: TerminalManager
+	private logger?: ExecutionLogger
+
+	constructor(
+		private readonly _extensionUri: vscode.Uri,
+		private readonly context: vscode.ExtensionContext
+	) {}
+
+	public resolveWebviewView(
+		webviewView: vscode.WebviewView,
+		_context: vscode.WebviewViewResolveContext,
+		_token: vscode.CancellationToken
+	) {
+		this._view = webviewView
+
+		// Configure webview
+		webviewView.webview.options = {
+			enableScripts: true,
+			localResourceRoots: [this._extensionUri],
+		}
+
+		// Set HTML content
+		webviewView.webview.html = this._getHtmlForWebview(webviewView.webview)
+
+		// Initialize services
+		this._initializeServices()
+
+		// Handle messages from webview
+		webviewView.webview.onDidReceiveMessage(async (data) => {
+			await this._handleMessage(data)
+		})
+
+		// Cleanup on dispose
+		webviewView.onDidDispose(() => {
+			this._dispose()
+		})
+	}
+
+	/**
+	 * Initialize backend services
+	 */
+	private _initializeServices(): void {
+		try {
+			// Initialize society manager
+			this.societyManager = new SocietyManager({
+				apiHandler: this.context.globalState.get("apiHandler"), // Get from extension context
+				workspaceRoot: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd(),
+				onPurposeComplete: (purposeId, summary) => {
+					this._sendToWebview({
+						type: "purpose-completed",
+						purposeId,
+						summary,
+					})
+				},
+				onAgentStatusChange: (agentId, status) => {
+					this._sendToWebview({
+						type: "agent-status-update",
+						agentId,
+						status,
+					})
+				},
+				onAgentActivity: (agentId, activity) => {
+					this._sendToWebview({
+						type: "agent-activity",
+						agentId,
+						activity,
+					})
+				},
+			})
+
+			// Initialize terminal manager
+			this.terminalManager = new TerminalManager({
+				useXterm: true, // Use xterm.js for webview terminals
+			})
+
+			// Initialize logger
+			this.logger = new ExecutionLogger({
+				logDirectory: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+					? `${vscode.workspace.workspaceFolders[0].uri.fsPath}/.society-agent/logs`
+					: ".society-agent/logs",
+				consoleOutput: true,
+			})
+
+			this.logger.info("system", "Society Agent services initialized")
+		} catch (error) {
+			console.error("Failed to initialize Society Agent services:", error)
+			this._sendToWebview({
+				type: "error",
+				message: "Failed to initialize Society Agent. Please check logs.",
+			})
+		}
+	}
+
+	/**
+	 * Handle messages from webview
+	 */
+	private async _handleMessage(data: any): Promise<void> {
+		if (!this.societyManager || !this.terminalManager || !this.logger) {
+			console.error("Services not initialized")
+			return
+		}
+
+		try {
+			switch (data.type) {
+				case "start-purpose": {
+					const { description, context, constraints, successCriteria } = data
+					this.logger.info("system", "Starting purpose", { description })
+
+					// Start purpose with proper API
+					const purposeId = await this.societyManager.startPurpose({
+						description,
+						context,
+						constraints,
+						successCriteria,
+					})
+
+					// Get the created purpose
+					const activePurpose = this.societyManager.getActivePurpose(purposeId)
+					
+					if (activePurpose) {
+						// Send confirmation to webview
+						this._sendToWebview({
+							type: "purpose-started",
+							purpose: {
+								id: activePurpose.purpose.id,
+								description: activePurpose.purpose.description,
+								status: activePurpose.status,
+								createdAt: activePurpose.purpose.createdAt,
+							},
+						})
+
+						// Send team formation update
+						this._sendToWebview({
+							type: "team-formed",
+							agents: activePurpose.team.getAllMembers().map((member) => ({
+								id: member.agent.id,
+								role: member.agent.role,
+								capabilities: member.agent.capabilities,
+								status: member.agent.getState().status,
+								currentTask: member.currentTask,
+							})),
+						})
+					}
+
+					break
+				}
+
+				case "pause-agent": {
+					const { agentId } = data
+					this.logger.info("system", "Pausing agent", { agentId })
+
+					const purpose = this.societyManager.getActivePurpose()
+					if (purpose) {
+						const agent = purpose.team.getMembers().find((m) => m.agent.id === agentId)?.agent
+						if (agent) {
+							await agent.pause()
+							this._sendToWebview({
+								type: "agent-status-update",
+								agentId,
+								status: "paused",
+							})
+						}
+					}
+					break
+				}
+
+				case "pause-all": {
+					this.logger.info("system", "Pausing all agents")
+
+					const purpose = this.societyManager.getActivePurpose()
+					if (purpose) {
+						await purpose.team.pauseAll()
+						this._sendToWebview({
+							type: "all-agents-paused",
+						})
+					}
+					break
+				}
+
+				case "resume-all": {
+					this.logger.info("system", "Resuming all agents")
+
+					const purpose = this.societyManager.getActivePurpose()
+					if (purpose) {
+						await purpose.team.resumeAll()
+						this._sendToWebview({
+							type: "all-agents-resumed",
+						})
+					}
+					break
+				}
+
+				case "stop-purpose": {
+					const { purposeId } = data
+					this.logger.info("system", "Stopping purpose", { purposeId })
+
+					await this.societyManager.stopPurpose(purposeId)
+					this._sendToWebview({
+						type: "purpose-stopped",
+						purposeId,
+					})
+					break
+				}
+
+				case "send-message-to-agent": {
+					const { agentId, message } = data
+					this.logger.info("system", "Sending message to agent", { agentId, message })
+
+					await this.societyManager.sendMessageToAgent(agentId, message)
+					break
+				}
+
+				case "terminal-input": {
+					const { agentId, input } = data
+					this.logger.debug("system", "Terminal input", { agentId, input })
+
+					// Route input to agent (simulate command execution)
+					const purpose = this.societyManager.getActivePurpose()
+					if (purpose) {
+						const agent = purpose.team.getMembers().find((m) => m.agent.id === agentId)?.agent
+						if (agent) {
+							// Send command as message to agent
+							await agent.sendMessage(`Execute command: ${input}`)
+
+							// Simulate output (in real implementation, this would come from actual execution)
+							this._sendToWebview({
+								type: "terminal-output",
+								agentId,
+								output: `$ ${input}\n[Executing...]\n`,
+							})
+						}
+					}
+					break
+				}
+
+				case "get-agent-status": {
+					const { agentId } = data
+					const purpose = this.societyManager.getActivePurpose()
+					if (purpose) {
+						const member = purpose.team.getMembers().find((m) => m.agent.id === agentId)
+						if (member) {
+							const state = member.agent.getState()
+							this._sendToWebview({
+								type: "agent-status-update",
+								agentId,
+								status: state.status,
+								currentTask: member.currentTask,
+								metadata: state.metadata,
+							})
+						}
+					}
+					break
+				}
+
+				default:
+					console.warn("Unknown message type:", data.type)
+			}
+		} catch (error) {
+			console.error("Error handling message:", error)
+			this.logger?.error("system", "Message handling error", { error, data })
+			this._sendToWebview({
+				type: "error",
+				message: error instanceof Error ? error.message : "Unknown error occurred",
+			})
+		}
+	}
+
+	/**
+	 * Send message to webview
+	 */
+	private _sendToWebview(message: any): void {
+		if (this._view) {
+			this._view.webview.postMessage(message)
+		}
+	}
+
+	/**
+	 * Cleanup
+	 */
+	private _dispose(): void {
+		this.logger?.info("system", "Disposing Society Agent services")
+		this.societyManager?.dispose()
+		this.societyManager = undefined
+		this.terminalManager = undefined
+		this.logger = undefined
+	}
+
+	/**
+	 * Get HTML for webview
+	 */
+	private _getHtmlForWebview(webview: vscode.Webview): string {
+		const scriptUri = getUri(webview, this._extensionUri, [
+			"webview-ui",
+			"build",
+			"assets",
+			"index.js",
+		])
+		const styleUri = getUri(webview, this._extensionUri, ["webview-ui", "build", "assets", "index.css"])
+		const nonce = getNonce()
+
+		return `<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+	<link rel="stylesheet" type="text/css" href="${styleUri}">
+	<title>Society Agent</title>
+</head>
+<body>
+	<div id="root"></div>
+	<script type="module" nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`
+	}
+}

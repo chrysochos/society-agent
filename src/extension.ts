@@ -47,6 +47,7 @@ import { registerMainThreadForwardingLogger } from "./utils/fowardingLogger" // 
 import { getKiloCodeWrapperProperties } from "./core/kilocode/wrapper" // kilocode_change
 import { flushModels, getModels } from "./api/providers/fetchers/modelCache"
 import { ManagedIndexer } from "./services/code-index/managed/ManagedIndexer" // kilocode_change
+import { registerSocietyAgentProvider } from "./core/webview/registerSocietyAgentProvider" // kilocode_change
 
 /**
  * Built using https://github.com/microsoft/vscode-webview-ui-toolkit
@@ -366,6 +367,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		registerMainThreadForwardingLogger(context)
 	}
 	registerCommitMessageProvider(context, outputChannel) // kilocode_change
+	registerSocietyAgentProvider(context) // kilocode_change
 	// kilocode_change end - Kilo Code specific registrations
 
 	registerCodeActions(context)
