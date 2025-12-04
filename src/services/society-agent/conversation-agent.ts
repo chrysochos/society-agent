@@ -9,6 +9,10 @@
 import Anthropic from "@anthropic-ai/sdk"
 import { ApiHandler } from "../../api"
 import { ApiStream } from "../../api/transform/stream"
+import * as fs from "fs/promises"
+import * as path from "path"
+import * as fs from "fs/promises"
+import * as path from "path"
 
 // kilocode_change start
 export interface AgentIdentity {
@@ -37,6 +41,7 @@ export interface ConversationAgentConfig {
 	identity: AgentIdentity
 	apiHandler: ApiHandler
 	systemPrompt?: string
+	workspacePath?: string
 	onMessage?: (message: AgentMessage) => void
 	onStatusChange?: (status: AgentState["status"]) => void
 }
@@ -50,12 +55,14 @@ export class ConversationAgent {
 	private state: AgentState
 	private apiHandler: ApiHandler
 	private systemPrompt: string
+	private workspacePath: string
 	private onMessage?: (message: AgentMessage) => void
 	private onStatusChange?: (status: AgentState["status"]) => void
 	// kilocode_change end
 
 	constructor(config: ConversationAgentConfig) {
 		// kilocode_change start
+		this.workspacePath = config.workspacePath || process.cwd() // Use provided workspace or default to current directory
 		this.state = {
 			identity: config.identity,
 			conversationHistory: [],
@@ -148,7 +155,121 @@ export class ConversationAgent {
 	async assignTask(task: string): Promise<void> {
 		// kilocode_change start
 		this.state.currentTask = task
-		await this.sendMessage(`New task assigned: ${task}`)
+		this.state.status = "working"
+		
+		console.log(`✅ ${this.state.identity.id} received task: ${task}`)
+		
+		// Start working on the task
+		this.executeTask(task).catch((error) => {
+			console.error(`❌ ${this.state.identity.id} task execution failed:`, error)
+			this.state.status = "error"
+		})
+		// kilocode_change end
+	}
+
+	/**
+	 * Execute the assigned task
+	 */
+	private async executeTask(task: string): Promise<void> {
+		// kilocode_change start
+		console.log(`🚀 ${this.state.identity.id} starting work on task...`)
+		
+		// Check if task mentions delays/timing
+		const hasDelay = /\d+\s*seconds?/i.test(task) || /delay/i.test(task) || /apart/i.test(task)
+		const delayMatch = task.match(/(\d+)\s*seconds?/i)
+		const delaySeconds = delayMatch ? parseInt(delayMatch[1]) : 0
+		
+		// Ask the LLM what to create
+		const workPrompt = `Your task: ${task}
+
+You must create the ACTUAL FILES directly in your response. Do NOT create scripts or programs that would create files later.
+
+Respond with ONLY a JSON object listing every file to create:
+
+{
+  "files": [
+    {"path": "file1.txt", "content": "actual content"},
+    {"path": "file2.txt", "content": "actual content"},
+    {"path": "file3.txt", "content": "actual content"}
+  ]
+}
+
+IMPORTANT:
+- If task says "create 10 files", list all 10 files in the JSON
+- Include the actual content for each file
+- Do NOT create helper scripts or package.json unless explicitly required
+- Create data files directly
+
+Respond with the complete JSON now:`
+
+		try {
+			const response = await this.sendMessage(workPrompt)
+			console.log(`💡 ${this.state.identity.id} received implementation plan`)
+			console.log(`📄 ${this.state.identity.id} LLM response:`, response.substring(0, 500))
+			
+			// Extract JSON from response
+			let jsonText = response.trim()
+			if (jsonText.includes("```")) {
+				const match = jsonText.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/)
+				if (match) jsonText = match[1]
+			}
+			const jsonMatch = jsonText.match(/\{[\s\S]*"files"[\s\S]*\}/)
+			if (jsonMatch) jsonText = jsonMatch[0]
+			
+			const parsed = JSON.parse(jsonText)
+			const files = parsed.files || []
+			
+			if (files.length === 0) {
+				console.warn(`⚠️ ${this.state.identity.id} parsed 0 files from response!`)
+				console.warn(`Raw JSON: ${jsonText}`)
+			}
+			
+			// Create the files with optional delays
+			for (let i = 0; i < files.length; i++) {
+				const file = files[i]
+				await this.createFile(file.path, file.content)
+				
+				// Add delay between files if requested
+				if (hasDelay && delaySeconds > 0 && i < files.length - 1) {
+					console.log(`⏳ ${this.state.identity.id} waiting ${delaySeconds} seconds before next file...`)
+					await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000))
+				}
+			}
+			
+			console.log(`✅ ${this.state.identity.id} created ${files.length} files`)
+			this.setStatus("completed")
+			
+		} catch (error) {
+			console.error(`❌ ${this.state.identity.id} failed to execute task:`, error)
+			// Fallback: create a simple status file
+			await this.createFile(
+				`${this.state.identity.id}-status.txt`,
+				`Task: ${task}\nStatus: Attempted but encountered error\nError: ${error}`
+			)
+			this.setStatus("completed")
+		}
+		// kilocode_change end
+	}
+
+	/**
+	 * Create a file in the workspace
+	 */
+	private async createFile(relativePath: string, content: string): Promise<void> {
+		// kilocode_change start
+		const fullPath = path.join(this.workspacePath, relativePath)
+		const dir = path.dirname(fullPath)
+		
+		console.log(`📂 ${this.state.identity.id} workspace path: ${this.workspacePath}`)
+		console.log(`📂 ${this.state.identity.id} full file path: ${fullPath}`)
+		
+		// Create directory if needed
+		await fs.mkdir(dir, { recursive: true })
+		
+		// Write file
+		await fs.writeFile(fullPath, content, "utf-8")
+		
+		console.log(`📝 ${this.state.identity.id} created file: ${relativePath}`)
+		this.addMessage("assistant", `Created file: ${relativePath}`)
 		// kilocode_change end
 	}
 
@@ -244,26 +365,34 @@ Follow instructions provided by the supervisor for your specific role and capabi
 	 */
 	private async callLLM(): Promise<string> {
 		// kilocode_change start
+		console.log(`🤖 Calling LLM for ${this.state.identity.id}...`)
+		
 		// Convert conversation history to Anthropic format
 		const messages: Anthropic.MessageParam[] = this.state.conversationHistory.map((msg) => ({
 			role: msg.role === "user" ? "user" : "assistant",
 			content: msg.content,
 		}))
 
-		// TODO: Fix ApiHandler integration - using placeholder for MVP
-		// const stream = this.apiHandler.createApiStreamHandler(new AbortController().signal)
-		const stream: any[] = [] // Placeholder
+		try {
+			// Use ApiHandler.createMessage to get stream
+			const systemPrompt = this.state.systemPrompt || this.getDefaultSystemPrompt()
+			const stream = this.apiHandler.createMessage(systemPrompt, messages)
+			
+			let fullResponse = ""
 
-		let fullResponse = ""
-
-		// Stream LLM response (disabled for MVP)
-		for await (const chunk of stream) {
-			if (chunk.type === "text") {
-				fullResponse += chunk.text
+			// Collect streamed response
+			for await (const chunk of stream) {
+				if (chunk.type === "text") {
+					fullResponse += chunk.text
+				}
 			}
-		}
 
-		return fullResponse.trim()
+			console.log(`✅ LLM response received (${fullResponse.length} chars)`)
+			return fullResponse.trim()
+		} catch (error) {
+			console.error(`❌ LLM call failed for ${this.state.identity.id}:`, error)
+			throw error
+		}
 		// kilocode_change end
 	}
 

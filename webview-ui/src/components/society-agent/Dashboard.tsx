@@ -8,6 +8,7 @@
 
 import React, { useState, useEffect } from "react"
 import { VSCodeButton, VSCodeProgressRing } from "@vscode/webview-ui-toolkit/react"
+import { vscode } from "../../utils/vscode"
 import { AgentCard } from "./AgentCard"
 import { TerminalPane } from "./TerminalPane"
 import { PurposeInput } from "./PurposeInput"
@@ -54,8 +55,13 @@ export const Dashboard: React.FC = () => {
 
 	// Handle messages from extension
 	useEffect(() => {
+		// Notify extension that webview is ready
+		console.log("📡 Society Agent Dashboard mounted, sending ready signal")
+		vscode.postMessage({ type: "webview-ready" })
+		
 		const handleMessage = (event: MessageEvent) => {
 			const message = event.data
+			console.log("📨 Dashboard received message:", message.type, message)
 
 			switch (message.type) {
 				case "purpose-started":
@@ -73,16 +79,25 @@ export const Dashboard: React.FC = () => {
 					}))
 					break
 
-				case "agent-status-update":
-					setState((prev) => ({
-						...prev,
-						agents: prev.agents.map((agent) =>
-							agent.id === message.agentId ? { ...agent, status: message.status } : agent,
-						),
-					}))
-					break
+			case "agent-status-update":
+				setState((prev) => ({
+					...prev,
+					agents: prev.agents.map((agent) =>
+						agent.id === message.agentId 
+							? { 
+								...agent, 
+								status: message.status,
+								currentTask: message.currentTask || agent.currentTask,
+								recentActivity: message.status !== agent.status 
+									? [`Status: ${message.status}`, ...agent.recentActivity.slice(0, 4)]
+									: agent.recentActivity
+							} 
+							: agent,
+					),
+				}))
+				break
 
-				case "agent-activity":
+			case "agent-activity":
 					setState((prev) => ({
 						...prev,
 						agents: prev.agents.map((agent) =>
@@ -123,10 +138,11 @@ export const Dashboard: React.FC = () => {
 		constraints?: string[]
 		successCriteria?: string[]
 	}) => {
+		console.log("📤 Sending purpose to extension:", purposeData)
 		// Send to extension
 		vscode.postMessage({
 			type: "start-purpose",
-			purpose: purposeData,
+			...purposeData, // Spread the fields at top level
 		})
 	}
 
@@ -150,19 +166,19 @@ export const Dashboard: React.FC = () => {
 		vscode.postMessage({
 			type: "pause-agent",
 			agentId,
-		})
+		} as any)
 	}
 
 	const handlePauseAll = () => {
 		vscode.postMessage({
 			type: "pause-all",
-		})
+		} as any)
 	}
 
 	const handleResumeAll = () => {
 		vscode.postMessage({
 			type: "resume-all",
-		})
+		} as any)
 	}
 
 	const handleStopPurpose = () => {
@@ -170,7 +186,7 @@ export const Dashboard: React.FC = () => {
 			vscode.postMessage({
 				type: "stop-purpose",
 				purposeId: state.purpose?.id,
-			})
+			} as any)
 		}
 	}
 
@@ -201,11 +217,14 @@ export const Dashboard: React.FC = () => {
 				<div className="header-content">
 					<h1>Society Agent Control Panel</h1>
 					<div className="purpose-info">
-						<div className="purpose-description">{state.purpose.description}</div>
-						<div className="progress-container">
-							<div className="progress-text">Progress: {state.purpose.progress}%</div>
-							<VSCodeProgressRing />
+					<div className="purpose-description">{state.purpose.description}</div>
+					<div className="progress-container">
+						<div className="progress-text">
+							Progress: {state.purpose.progress}%
+							{state.purpose.status === "completed" && " ✅"}
 						</div>
+						{state.purpose.status !== "completed" && <VSCodeProgressRing />}
+					</div>
 					</div>
 				</div>
 
@@ -243,9 +262,4 @@ export const Dashboard: React.FC = () => {
 		</div>
 	)
 	// kilocode_change end
-}
-
-// VSCode API global
-declare const vscode: {
-	postMessage: (message: any) => void
 }

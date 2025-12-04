@@ -33,10 +33,15 @@ export const PurposeInput: React.FC<PurposeInputProps> = ({ onSubmit }) => {
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault()
 
+		console.log("🔍 Form submitted - description value:", description)
+		console.log("🔍 Description length:", description.length)
+
 		if (!description.trim()) {
-			alert("Please provide a purpose description")
+			console.error("❌ Purpose description is required - field is empty")
 			return
 		}
+
+		console.log("✅ Purpose form submitted:", description)
 
 		const purposeData = {
 			description: description.trim(),
@@ -51,6 +56,7 @@ export const PurposeInput: React.FC<PurposeInputProps> = ({ onSubmit }) => {
 				.filter((s) => s),
 		}
 
+		console.log("📦 Purpose data prepared:", purposeData)
 		onSubmit(purposeData)
 	}
 
@@ -81,7 +87,11 @@ export const PurposeInput: React.FC<PurposeInputProps> = ({ onSubmit }) => {
 						<VSCodeTextArea
 							id="purpose-description"
 							value={description}
-							onChange={(e: any) => setDescription(e.target.value)}
+							onInput={(e: any) => {
+								const newValue = e.target?.value || ""
+								console.log("🔍 Input changed:", newValue)
+								setDescription(newValue)
+							}}
 							placeholder="E.g., 'Build authentication system with OAuth'"
 							rows={3}
 							style={{ width: "100%" }}

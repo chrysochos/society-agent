@@ -22,10 +22,13 @@ export interface ActivePurpose {
 
 export interface SocietyManagerConfig {
 	apiHandler: ApiHandler
+	workspacePath?: string
 	onPurposeStarted?: (purpose: Purpose) => void
 	onPurposeCompleted?: (purpose: Purpose, summary: string) => void
 	onTeamFormed?: (purposeId: string, teamSize: number) => void
+	onProgressUpdate?: (purposeId: string, progress: number) => void
 	onMessage?: (purposeId: string, agentId: string, message: string) => void
+	onStatusChange?: (purposeId: string, agentId: string, status: string, task?: string) => void
 }
 
 export interface SocietyState {
@@ -127,11 +130,29 @@ export class SocietyManager {
 		const teamConfig: AgentTeamConfig = {
 			purpose,
 			apiHandler: this.config.apiHandler,
+			workspacePath: this.config.workspacePath,
 			onMessage: (agentId, content) => {
 				this.config.onMessage?.(purpose.id, agentId, content)
 			},
 			onStatusChange: (agentId, status) => {
-				// Could emit status change events here
+				// Get current task for this agent
+				const agent = Array.from(this.state.activePurposes.get(purpose.id)?.team.getState().workers.values() || [])
+					.find(w => w.getIdentity().id === agentId)
+				const task = agent?.getState().currentTask
+				this.config.onStatusChange?.(purpose.id, agentId, status, task)
+			},
+			onProgressUpdate: (progress) => {
+				this.config.onProgressUpdate?.(purpose.id, progress)
+				
+				// Auto-complete when reaching 100% (check if purpose still exists to avoid double completion)
+				if (progress === 100 && this.state.activePurposes.has(purpose.id)) {
+					setTimeout(() => {
+						// Double-check purpose still exists before completing
+						if (this.state.activePurposes.has(purpose.id)) {
+							this.completePurpose(purpose.id)
+						}
+					}, 1000)
+				}
 			},
 		}
 

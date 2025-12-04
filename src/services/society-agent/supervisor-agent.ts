@@ -119,35 +119,69 @@ export class SupervisorAgent extends ConversationAgent {
 		// kilocode_change start
 		this.supervisorState.currentPhase = "analyzing"
 
-		const analysisPrompt = `Analyze this purpose and determine what worker agents are needed:
+		const analysisPrompt = `You are a supervisor agent creating a team. Analyze this purpose and determine what worker agents are needed.
 
 Purpose: ${this.supervisorState.purpose.description}
 Context: ${this.supervisorState.purpose.context || "None provided"}
 Constraints: ${this.supervisorState.purpose.constraints?.join(", ") || "None"}
 Success Criteria: ${this.supervisorState.purpose.successCriteria?.join(", ") || "None"}
 
-Determine:
-1. What worker types are needed (backend, frontend, security, tester, devops, custom)
-2. How many of each type
-3. Why each is needed
-
-Respond in JSON format:
+Respond with ONLY a JSON object (no markdown, no explanation, just the JSON):
 {
   "workers": [
-    {"workerType": "backend", "count": 1, "reason": "..."},
-    {"workerType": "tester", "count": 1, "reason": "..."}
+    {"workerType": "backend", "count": 1, "reason": "Implement server-side logic"},
+    {"workerType": "frontend", "count": 1, "reason": "Build user interface"}
   ]
-}`
+}
+
+Available worker types: backend, frontend, security, tester, devops, custom
+
+Respond with the JSON now:`
 
 		const response = await this.sendMessage(analysisPrompt)
+		console.log("🤖 Supervisor LLM response:", response)
 
 		try {
-			const parsed = JSON.parse(response)
+			// Extract JSON from response (handle markdown code blocks)
+			let jsonText = response.trim()
+			
+			// Remove markdown code blocks if present
+			if (jsonText.includes("```")) {
+				const match = jsonText.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/)
+				if (match) {
+					jsonText = match[1]
+				}
+			}
+			
+			// Try to find JSON object in the response
+			const jsonMatch = jsonText.match(/\{[\s\S]*"workers"[\s\S]*\}/)
+			if (jsonMatch) {
+				jsonText = jsonMatch[0]
+			}
+			
+			console.log("📋 Extracted JSON:", jsonText)
+			
+			const parsed = JSON.parse(jsonText)
 			this.supervisorState.teamSpec = parsed.workers || []
+			
+			console.log("✅ Team spec parsed:", this.supervisorState.teamSpec)
+			
 			this.onTeamCreated?.(this.supervisorState.teamSpec)
 			return this.supervisorState.teamSpec
 		} catch (error) {
-			throw new Error(`Failed to parse team specification: ${error}`)
+			console.error("❌ Failed to parse team specification:", error)
+			console.error("Raw response was:", response)
+			
+			// Fallback: create a default team
+			const defaultTeam: WorkerSpec[] = [
+				{ workerType: "backend", count: 1, reason: "Default backend worker" },
+				{ workerType: "frontend", count: 1, reason: "Default frontend worker" },
+			]
+			
+			console.log("⚠️ Using default team:", defaultTeam)
+			this.supervisorState.teamSpec = defaultTeam
+			this.onTeamCreated?.(defaultTeam)
+			return defaultTeam
 		}
 		// kilocode_change end
 	}
@@ -171,10 +205,14 @@ Respond in JSON format:
 			task,
 			context,
 			assignedAt: Date.now(),
-			status: "pending",
+			status: "in-progress",
 		}
 
 		this.supervisorState.taskAssignments.push(assignment)
+		
+		console.log(`📨 Delegating task to ${workerId}:`, task)
+		
+		// Trigger callback so the team can assign the task
 		this.onTaskAssigned?.(assignment)
 
 		return assignment
@@ -201,14 +239,20 @@ Respond in JSON format:
 		// kilocode_change start
 		const totalTasks = this.supervisorState.taskAssignments.length
 		if (totalTasks === 0) {
+			// Don't send 0% update - it would override the startup progress
 			this.supervisorState.progressPercentage = 0
 			return
 		}
 
 		const completedTasks = this.supervisorState.taskAssignments.filter((a) => a.status === "completed").length
 
-		this.supervisorState.progressPercentage = Math.round((completedTasks / totalTasks) * 100)
-		this.onProgressUpdate?.(this.supervisorState.progressPercentage)
+		// Calculate progress: 50% base (from startExecution) + (50% * completion ratio)
+		// This ensures progress goes 50% → 75% → 100% as tasks complete
+		const completionRatio = completedTasks / totalTasks
+		const progressPercentage = 50 + Math.round(completionRatio * 50)
+		
+		this.supervisorState.progressPercentage = progressPercentage
+		this.onProgressUpdate?.(progressPercentage)
 		// kilocode_change end
 	}
 
@@ -282,6 +326,155 @@ Otherwise, provide direct guidance to the worker.`
 			escalation.response = response
 			escalation.respondedAt = Date.now()
 		}
+		// kilocode_change end
+	}
+
+	/**
+	 * Start executing the purpose - create work plan and delegate tasks
+	 */
+	async startExecution(): Promise<void> {
+		// kilocode_change start
+		this.supervisorState.currentPhase = "planning"
+
+		console.log("📋 Supervisor creating work plan...")
+
+		const planningPrompt = `You are supervising a team to complete this purpose:
+
+Purpose: ${this.supervisorState.purpose.description}
+Context: ${this.supervisorState.purpose.context || "None"}
+Success Criteria: ${this.supervisorState.purpose.successCriteria?.join(", ") || "None"}
+
+Your team (${this.supervisorState.workerIds.length} workers):
+${this.supervisorState.workerIds.map((id, i) => `- ${id} (${this.supervisorState.teamSpec[Math.floor(i / this.supervisorState.teamSpec[0]?.count || 1)]?.workerType || "worker"})`).join("\n")}
+
+CRITICAL: You MUST create exactly ${this.supervisorState.workerIds.length} tasks (one task per worker). Every worker must be assigned work.
+
+Create a work plan. Break down the purpose into specific tasks for each worker.
+
+IMPORTANT: For each task, specify dependencies ONLY if truly necessary (e.g., tests depend on code being written first).
+Most tasks should run in PARALLEL with empty dependencies [].
+
+Respond with ONLY a JSON object:
+{
+  "tasks": [
+    {"workerId": "${this.supervisorState.workerIds[0] || "worker-1"}", "task": "Task description", "context": "Additional context", "dependencies": []},
+    {"workerId": "${this.supervisorState.workerIds[1] || "worker-2"}", "task": "Task description", "context": "Additional context", "dependencies": []}
+  ]
+}
+
+Rules for dependencies:
+- Independent tasks (backend + frontend, different files, etc.) → dependencies: []
+- Dependent tasks (tests need code first, deployment needs build) → dependencies: ["workerId-of-prerequisite"]
+
+Prefer PARALLEL execution (empty dependencies) unless there's a clear technical reason for sequential.
+
+Respond with the JSON now:`
+
+		try {
+			const response = await this.sendMessage(planningPrompt)
+			console.log("🤖 Work plan response:", response)
+
+			// Parse JSON (handle markdown)
+			let jsonText = response.trim()
+			if (jsonText.includes("```")) {
+				const match = jsonText.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/)
+				if (match) jsonText = match[1]
+			}
+			const jsonMatch = jsonText.match(/\{[\s\S]*"tasks"[\s\S]*\}/)
+			if (jsonMatch) jsonText = jsonMatch[0]
+
+		const parsed = JSON.parse(jsonText)
+		const tasks = parsed.tasks || []
+
+		console.log("✅ Parsed tasks:", JSON.stringify(tasks, null, 2))
+		
+		// Validate: ensure all workers have tasks
+		const assignedWorkers = new Set(tasks.map(t => t.workerId))
+		const missingWorkers = this.supervisorState.workerIds.filter(id => !assignedWorkers.has(id))
+		if (missingWorkers.length > 0) {
+			console.warn(`⚠️ Warning: ${missingWorkers.length} workers not assigned tasks:`, missingWorkers)
+		}
+		
+		// Delegate tasks to workers
+			this.onProgressUpdate?.(35) // Work plan created
+			
+			// Execute tasks with dependency management
+			await this.executeTasksWithDependencies(tasks)
+
+			this.supervisorState.currentPhase = "executing"
+			this.onProgressUpdate?.(50) // Tasks delegated, work started
+			console.log("🚀 Work delegation complete, execution started")
+		} catch (error) {
+			console.error("❌ Failed to create work plan:", error)
+			console.error("Error details:", error instanceof Error ? error.message : String(error))
+			// Fallback: assign simple tasks in parallel
+			console.log("⚠️ Using fallback task assignment (parallel)")
+			const fallbackTasks = this.supervisorState.workerIds.map(workerId => ({
+				workerId,
+				task: `Work on: ${this.supervisorState.purpose.description}`,
+				context: "Contribute to completing the purpose",
+				dependencies: [] as string[]
+			}))
+			await this.executeTasksWithDependencies(fallbackTasks)
+		}
+		// kilocode_change end
+	}
+
+	/**
+	 * Execute tasks with intelligent parallelization based on dependencies
+	 */
+	private async executeTasksWithDependencies(
+		tasks: Array<{ workerId: string; task: string; context: string; dependencies?: string[] }>
+	): Promise<void> {
+		// kilocode_change start
+		const completed = new Set<string>()
+		const inProgress = new Map<string, Promise<void>>()
+		
+		// Process tasks in waves based on dependencies
+		while (completed.size < tasks.length) {
+			// Find tasks that can start now (dependencies met)
+			const readyTasks = tasks.filter(
+				(task) =>
+					!completed.has(task.workerId) &&
+					!inProgress.has(task.workerId) &&
+					(task.dependencies || []).every((dep) => completed.has(dep))
+			)
+
+			if (readyTasks.length === 0) {
+				// Wait for at least one in-progress task to complete
+				if (inProgress.size > 0) {
+					await Promise.race(Array.from(inProgress.values()))
+					continue
+				}
+				// No ready tasks and nothing in progress - break to avoid infinite loop
+				break
+			}
+
+		console.log(
+			`🔄 Starting ${readyTasks.length} task(s) in parallel: ${readyTasks.map((t) => t.workerId).join(", ")}`
+		)
+
+		// Start all ready tasks in parallel
+		const startTime = Date.now()
+		for (const task of readyTasks) {
+			const taskStartTime = Date.now()
+			const promise = this.delegateTask(task.workerId, task.task, task.context || "").then(() => {
+				const duration = ((Date.now() - taskStartTime) / 1000).toFixed(1)
+				completed.add(task.workerId)
+				inProgress.delete(task.workerId)
+				console.log(`✅ Task completed: ${task.workerId} in ${duration}s (${completed.size}/${tasks.length})`)
+			})
+			inProgress.set(task.workerId, promise)
+		}
+		
+		// If multiple tasks started, this proves they're running in parallel
+		if (readyTasks.length > 1) {
+			console.log(`⚡ ${readyTasks.length} tasks started in ${Date.now() - startTime}ms (parallel execution initiated)`)
+		}			// Wait for all tasks in this wave to complete before starting next wave
+			await Promise.all(Array.from(inProgress.values()))
+		}
+
+		console.log(`✅ All ${tasks.length} tasks delegated (${completed.size} completed)`)
 		// kilocode_change end
 	}
 

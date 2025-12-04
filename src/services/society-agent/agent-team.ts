@@ -19,8 +19,10 @@ export interface TeamMember {
 export interface AgentTeamConfig {
 	purpose: Purpose
 	apiHandler: ApiHandler
+	workspacePath?: string
 	onMessage?: (agentId: string, content: string) => void
 	onStatusChange?: (agentId: string, status: string) => void
+	onProgressUpdate?: (progress: number) => void
 }
 
 export interface TeamState {
@@ -38,13 +40,17 @@ export interface TeamState {
 export class AgentTeam {
 	// kilocode_change start
 	private state: TeamState
+	private config: AgentTeamConfig
 	private apiHandler: ApiHandler
 	private onMessage?: (agentId: string, content: string) => void
 	private onStatusChange?: (agentId: string, status: string) => void
+	private onProgressUpdate?: (progress: number) => void
 	// kilocode_change end
 
 	constructor(config: AgentTeamConfig) {
 		// kilocode_change start
+		this.config = config
+		
 		const supervisorIdentity: AgentIdentity = {
 			id: `supervisor-${Date.now()}`,
 			role: "supervisor",
@@ -73,6 +79,7 @@ export class AgentTeam {
 		this.apiHandler = config.apiHandler
 		this.onMessage = config.onMessage
 		this.onStatusChange = config.onStatusChange
+		this.onProgressUpdate = config.onProgressUpdate
 		// kilocode_change end
 	}
 
@@ -125,6 +132,9 @@ export class AgentTeam {
 		// Workers are created in the callback
 
 		this.state.status = "executing"
+
+		// Start the actual work!
+		await this.state.supervisor.startExecution()
 		// kilocode_change end
 	}
 
@@ -144,15 +154,22 @@ export class AgentTeam {
 					createdAt: Date.now(),
 				}
 
-				const worker = new ConversationAgent({
-					identity: workerIdentity,
-					apiHandler: this.apiHandler,
-					onMessage: (msg) => this.onMessage?.(workerId, msg.content),
-					onStatusChange: (status) => this.onStatusChange?.(workerId, status),
-				})
-
-				this.state.workers.set(workerId, worker)
-				this.state.supervisor.registerWorker(workerId)
+			const worker = new ConversationAgent({
+				identity: workerIdentity,
+				apiHandler: this.apiHandler,
+			workspacePath: this.config.workspacePath,
+			onMessage: (msg) => this.onMessage?.(workerId, msg.content),
+			onStatusChange: (status) => {
+				this.onStatusChange?.(workerId, status)
+				// Update supervisor when worker completes
+				if (status === "completed") {
+					this.state.supervisor.updateTaskStatus(workerId, "completed")
+				}
+			},
+		})
+		
+		this.state.workers.set(workerId, worker)
+		this.state.supervisor.registerWorker(workerId)
 			}
 		}
 		// kilocode_change end
@@ -208,7 +225,8 @@ export class AgentTeam {
 	 */
 	private updateProgress(progress: number): void {
 		// kilocode_change start
-		console.log(`Progress: ${progress}%`)
+		console.log(`📊 Progress update: ${progress}%`)
+		this.onProgressUpdate?.(progress)
 		// kilocode_change end
 	}
 
