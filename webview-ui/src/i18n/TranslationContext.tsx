@@ -17,7 +17,15 @@ export const TranslationProvider: React.FC<{ children: ReactNode }> = ({ childre
 	// Initialize with default configuration
 	const { i18n } = useTranslation()
 	// Get the extension state directly - it already contains all state properties
-	const extensionState = useExtensionState()
+	// kilocode_change start - make optional for Society Agent view
+	let extensionState: ReturnType<typeof useExtensionState> | null = null
+	try {
+		extensionState = useExtensionState()
+	} catch (error) {
+		// Not in ExtensionStateContext - use default language
+		console.log("[TranslationProvider] Running without ExtensionStateContext, using default language")
+	}
+	// kilocode_change end
 
 	// Load translations once when the component mounts
 	useEffect(() => {
@@ -29,8 +37,11 @@ export const TranslationProvider: React.FC<{ children: ReactNode }> = ({ childre
 	}, [])
 
 	useEffect(() => {
-		i18n.changeLanguage(extensionState.language)
-	}, [i18n, extensionState.language])
+		// kilocode_change - only change language if we have extension state
+		if (extensionState) {
+			i18n.changeLanguage(extensionState.language)
+		}
+	}, [i18n, extensionState?.language]) // kilocode_change - optional chaining
 
 	// Memoize the translation function to prevent unnecessary re-renders
 	const translate = useCallback(

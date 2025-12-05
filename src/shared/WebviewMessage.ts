@@ -328,6 +328,8 @@ export interface WebviewMessage {
 		| "sendAgentMessage" // kilocode_change: Send message to agent
 		| "viewAgentLogs" // kilocode_change: View specific agent logs
 		| "clearAgentMessages" // kilocode_change: Clear message history
+		| "webview-ready" // kilocode_change: Society Agent webview ready
+		| "start-purpose" // kilocode_change: Society Agent start purpose
 	text?: string
 	editedMessageContent?: string
 	tab?: "settings" | "history" | "mcp" | "modes" | "chat" | "marketplace" | "cloud"

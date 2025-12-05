@@ -3,6 +3,11 @@ set -e
 
 echo "🚀 Setting up Kilo Code development environment..."
 
+# Start Xvfb for extension development
+echo "🖥️  Starting virtual display..."
+/usr/local/bin/xvfb-run.sh &
+sleep 2
+
 # Ensure we're in the right directory
 cd /workspace
 

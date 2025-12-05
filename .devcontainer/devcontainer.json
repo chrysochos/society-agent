@@ -1,7 +1,8 @@
 {
 	"name": "Kilo Code Development",
-	"dockerFile": "Dockerfile",
-	"context": "..",
+	"dockerComposeFile": "docker-compose.yml",
+	"service": "dev",
+	"shutdownAction": "stopCompose",
 
 	"features": {
 		"ghcr.io/devcontainers/features/git:1": {},
@@ -54,8 +55,21 @@
 	"remoteUser": "root",
 	"containerUser": "root",
 
-	"mounts": [
-		"source=${localWorkspaceFolder}/.git,target=/workspace/.git,type=bind,consistency=cached",
-		"source=kilocode-node-modules,target=/workspace/node_modules,type=volume"
-	]
+	"updateContentCommand": "pnpm install",
+
+	"workspaceFolder": "/workspace",
+
+	"hostRequirements": {
+		"gpu": false
+	},
+
+	"overrideCommand": false,
+
+	"init": true,
+	"privileged": false,
+
+	"remoteEnv": {
+		"WAYLAND_DISPLAY": "",
+		"DISPLAY": ":99"
+	}
 }

@@ -444,12 +444,63 @@ kilo society stop
 
 ## Development
 
+### Setting Up Development Environment
+
+**Prerequisites:**
+
+- Docker Desktop running
+- VS Code installed
+- Repository cloned to `c:\dev\kilocode`
+
+**Steps:**
+
+1. **Start the development container:**
+
+    ```powershell
+    cd c:\dev\kilocode
+    .\.devcontainer\start-container.ps1
+    ```
+
+2. **Attach VS Code to the container:**
+
+    - Open VS Code (any folder or new window)
+    - Press `F1` → Type: `Dev Containers: Attach to Running Container`
+    - Select: `kilocode-dev`
+    - When prompted, open folder: `/workspace`
+
+3. **Install dependencies and build:**
+
+    ```bash
+    # In container terminal
+    pnpm install
+    pnpm run build
+    ```
+
+4. **Start debugging:**
+    - Press `Ctrl+Shift+B` → Select `watch` (starts auto-rebuild)
+    - Press `F5` → Extension Development Host opens
+    - Make changes → Press `Ctrl+R` in Extension Development Host to reload
+
+### File Persistence
+
+**Important:** Use `/workspace` for persistent storage:
+
+```bash
+# ✅ Persists across container restarts (syncs to c:\dev\kilocode)
+/workspace/john
+/workspace/your-files
+
+# ❌ Temporary, deleted on container restart
+/tmp/john
+/tmp/your-files
+```
+
+All files in `/workspace` sync to your Windows `c:\dev\kilocode` folder in real-time.
+
 ### Running in Dev Mode
 
 ```bash
-# Start KiloCode extension in debug mode (F5)
-# Society Agent is integrated
-
+# In Extension Development Host (opened via F5):
 kilo society start "Test purpose"
 ```
 

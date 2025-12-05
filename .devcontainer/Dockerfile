@@ -15,6 +15,14 @@ RUN apt-get update && apt-get install -y \
   ca-certificates \
   gnupg \
   lsb-release \
+  xvfb \
+  libgtk-3-0 \
+  libgbm1 \
+  libnss3 \
+  libasound2 \
+  libxss1 \
+  libxtst6 \
+  x11-xserver-utils \
   && rm -rf /var/lib/apt/lists/*
 
 # Enable corepack for pnpm (matching package.json version)
@@ -30,6 +38,10 @@ ENV PATH="$PNPM_HOME:$PATH"
 
 # Create pnpm directories
 RUN mkdir -p /root/.local/share/pnpm
+
+# Setup Xvfb for headless extension testing
+RUN echo '#!/bin/bash\nXvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &\nexec "$@"' > /usr/local/bin/xvfb-run.sh && \
+    chmod +x /usr/local/bin/xvfb-run.sh
 
 # Default command
 CMD ["bash"]

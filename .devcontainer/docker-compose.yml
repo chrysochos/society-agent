@@ -1,0 +1,25 @@
+# kilocode_change - Alternative: Use docker-compose to avoid WSL auto-detection
+version: '3.8'
+
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    volumes:
+      - ..:/workspace:cached
+      - kilocode-node-modules:/workspace/node_modules
+    command: sleep infinity
+    init: true
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_PTRACE
+    environment:
+      DISPLAY: ":99"
+      ELECTRON_ENABLE_LOGGING: "1"
+      ELECTRON_DISABLE_SANDBOX: "1"
+      WAYLAND_DISPLAY: ""
+
+volumes:
+  kilocode-node-modules:

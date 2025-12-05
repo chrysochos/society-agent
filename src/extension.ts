@@ -160,6 +160,17 @@ export async function activate(context: vscode.ExtensionContext) {
 	const provider = new ClineProvider(context, outputChannel, "sidebar", contextProxy, mdmService)
 	// const initManagedCodeIndexing = updateCodeIndexWithKiloProps(provider) // kilocode_change
 
+	// kilocode_change start - Initialize Society Agent with ClineProvider reference
+	console.log("🚀 EXTENSION: About to register Society Agent provider...")
+	try {
+		registerSocietyAgentProvider(context, provider)
+		console.log("✅ EXTENSION: Society Agent provider registered successfully")
+	} catch (error) {
+		console.error("❌ EXTENSION: Failed to register Society Agent:", error)
+		vscode.window.showErrorMessage(`Failed to register Society Agent: ${error}`)
+	}
+	// kilocode_change end
+
 	// Initialize Roo Code Cloud service.
 	const postStateListener = () => ClineProvider.getVisibleInstance()?.postStateToWebview()
 
@@ -367,7 +378,6 @@ export async function activate(context: vscode.ExtensionContext) {
 		registerMainThreadForwardingLogger(context)
 	}
 	registerCommitMessageProvider(context, outputChannel) // kilocode_change
-	registerSocietyAgentProvider(context) // kilocode_change
 	// kilocode_change end - Kilo Code specific registrations
 
 	registerCodeActions(context)

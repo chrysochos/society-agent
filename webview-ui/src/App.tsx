@@ -408,7 +408,11 @@ const queryClient = new QueryClient()
 // kilocode_change start - Society Agent entry point
 const AppWithProviders = () => {
 	// If this is the Society Agent view, render just the dashboard
-	if (isSocietyAgentView()) {
+	const isSocietyAgent = isSocietyAgentView()
+	console.log("🌐 App.tsx: isSocietyAgentView =", isSocietyAgent, "viewType =", document.body.dataset.vscodeViewType)
+
+	if (isSocietyAgent) {
+		console.log("✅ Rendering Society Agent Dashboard")
 		return (
 			<ErrorBoundary>
 				<TranslationProvider>

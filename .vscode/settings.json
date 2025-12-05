@@ -24,5 +24,8 @@
 	"markdown.copyFiles.destination": {
 		"**/*": "/static/img/${documentBaseName}/${documentBaseName}.${fileName/(.*)\\.(.*)/$2/}"
 	},
-	"java.configuration.updateBuildConfiguration": "interactive"
+	"java.configuration.updateBuildConfiguration": "interactive",
+	// kilocode_change - Disable WSL integration for dev containers
+	"dev.containers.executeInWSL": false,
+	"dev.containers.dockerPath": "docker"
 }
