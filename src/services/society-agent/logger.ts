@@ -31,15 +31,15 @@ export class SocietyAgentLogger {
 		requiredApproval = false,
 		approvedBy?: string,
 	): Promise<void> {
-		const entry: AgentAction = {
-			timestamp: new Date(),
-			agentId: this.agentMetadata.identity.id,
-			action,
-			...(params !== undefined && { params }),
-			...(result !== undefined && { result }),
-			requiredApproval,
-			approvedBy,
-		}
+	const entry: AgentAction = {
+		timestamp: new Date(),
+		agentId: this.agentMetadata.identity.id,
+		action,
+		...(params !== undefined && { params }),
+		...(result !== undefined && { result }),
+		requiredApproval,
+		...(approvedBy !== undefined && { approvedBy }),
+	}
 
 		await this.writeLogEntry(entry)
 	}
