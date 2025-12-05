@@ -57,8 +57,9 @@ async function readAgentLogs(logPath: string, limit?: number): Promise<AgentActi
 		// Return most recent logs first
 		const sorted = actions.reverse()
 		return limit ? sorted.slice(0, limit) : sorted
-	} catch (error: NodeJS.ErrnoException) {
-		const nodeError = error // kilocode_change
+	} catch (error: unknown) {
+		// kilocode_change
+		const nodeError = error as NodeJS.ErrnoException // kilocode_change
 		if (nodeError.code === "ENOENT") {
 			return []
 		}

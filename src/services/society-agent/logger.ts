@@ -1,13 +1,13 @@
 // kilocode_change - new file
 /**
  * Society Agent Logger
- * 
+ *
  * Structured logging for agent actions with context.
  */
 
-import * as fs from 'fs/promises'
-import * as path from 'path'
-import type { AgentAction, AgentIdentity, AgentMetadata } from './types'
+import * as fs from "fs/promises"
+import * as path from "path"
+import type { AgentAction, AgentIdentity, AgentMetadata } from "./types"
 
 /**
  * Society Agent Logger
@@ -29,14 +29,14 @@ export class SocietyAgentLogger {
 		params?: Record<string, unknown>,
 		result?: { success: boolean; data?: unknown; error?: string },
 		requiredApproval = false,
-		approvedBy?: string
+		approvedBy?: string,
 	): Promise<void> {
 		const entry: AgentAction = {
 			timestamp: new Date(),
 			agentId: this.agentMetadata.identity.id,
 			action,
-			params,
-			result,
+			...(params !== undefined && { params }),
+			...(result !== undefined && { result }),
 			requiredApproval,
 			approvedBy,
 		}
@@ -66,7 +66,7 @@ export class SocietyAgentLogger {
 		action: string,
 		approvedBy: string,
 		params?: Record<string, unknown>,
-		result?: { success: boolean; data?: unknown; error?: string }
+		result?: { success: boolean; data?: unknown; error?: string },
 	): Promise<void> {
 		await this.logAction(action, params, result, true, approvedBy)
 	}
@@ -81,11 +81,11 @@ export class SocietyAgentLogger {
 			await fs.mkdir(logDir, { recursive: true })
 
 			// Append as JSONL (one JSON object per line)
-			const line = JSON.stringify(entry) + '\n'
-			await fs.appendFile(this.logPath, line, 'utf-8')
+			const line = JSON.stringify(entry) + "\n"
+			await fs.appendFile(this.logPath, line, "utf-8")
 		} catch (error) {
 			// Don't throw - logging failures shouldn't break agent execution
-			console.error('[Society Agent (SA) Logger] Failed to write log:', error)
+			console.error("[Society Agent (SA) Logger] Failed to write log:", error)
 		}
 	}
 
@@ -94,22 +94,22 @@ export class SocietyAgentLogger {
 	 */
 	async readHistory(limit?: number): Promise<AgentAction[]> {
 		try {
-			const content = await fs.readFile(this.logPath, 'utf-8')
-			const lines = content.trim().split('\n').filter(Boolean)
-			
-			const actions = lines.map(line => JSON.parse(line) as AgentAction)
-			
+			const content = await fs.readFile(this.logPath, "utf-8")
+			const lines = content.trim().split("\n").filter(Boolean)
+
+			const actions = lines.map((line) => JSON.parse(line) as AgentAction)
+
 			if (limit) {
 				return actions.slice(-limit)
 			}
-			
+
 			return actions
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
 				// File doesn't exist yet - return empty array
 				return []
 			}
-			console.error('[Society Agent Logger] Failed to read history:', error)
+			console.error("[Society Agent Logger] Failed to read history:", error)
 			return []
 		}
 	}
@@ -141,8 +141,8 @@ export function createAgentLogger(metadata: AgentMetadata): SocietyAgentLogger {
  */
 export function formatAgentAction(action: AgentAction): string {
 	const timestamp = action.timestamp.toISOString()
-	const status = action.result?.success ? '✓' : '✗'
-	const approval = action.requiredApproval ? ` [Approved by: ${action.approvedBy}]` : ''
-	
+	const status = action.result?.success ? "✓" : "✗"
+	const approval = action.requiredApproval ? ` [Approved by: ${action.approvedBy}]` : ""
+
 	return `[${timestamp}] ${status} ${action.agentId}: ${action.action}${approval}`
 }

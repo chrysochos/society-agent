@@ -125,7 +125,7 @@ export class CLI {
 
 				serviceOptions.agentMetadata = {
 					identity: agentIdentity,
-					currentTaskId: undefined, // Will be set when task is created
+					// currentTaskId will be set when task is created
 					sessionId,
 					historyPath,
 				}
