@@ -1041,8 +1041,8 @@ importers:
         specifier: ^1.1.0
         version: 1.1.0
       '@xterm/addon-clipboard':
-        specifier: ^0.2.0-beta.82
-        version: 0.2.0-beta.101(@xterm/xterm@5.6.0-beta.118)
+        specifier: ^0.3.0-beta.148
+        version: 0.3.0-beta.148(@xterm/xterm@5.6.0-beta.118)
       '@xterm/addon-image':
         specifier: ^0.9.0-beta.99
         version: 0.9.0-beta.118(@xterm/xterm@5.6.0-beta.118)
@@ -8217,10 +8217,10 @@ packages:
   '@xobotyi/scrollbar-width@1.9.5':
     resolution: {integrity: sha512-N8tkAACJx2ww8vFMneJmaAgmjAG1tnVBZJRLRcx061tmsLRZHSEZSLuGWnwPtunsSLvSqXQ2wfp7Mgqg1I+2dQ==}
 
-  '@xterm/addon-clipboard@0.2.0-beta.101':
-    resolution: {integrity: sha512-Q20+bySNgX9gGb8NYidHah/TzoCyOm/0+Orea9+jwCHADN/dnqb0vzT0UIvxZckFFW4twZnjNps19rszWoGC0A==}
+  '@xterm/addon-clipboard@0.3.0-beta.148':
+    resolution: {integrity: sha512-GTcpI5dPvbhmeWFw4Xo7cP7c1ocnybb/NNj0AhuEQknqk3AqHkhLsMzlQ5CsYEMRB/wkUZjkMrhoRxNBg1Q6eQ==}
     peerDependencies:
-      '@xterm/xterm': ^5.6.0-beta.118
+      '@xterm/xterm': ^6.1.0-beta.148
 
   '@xterm/addon-image@0.9.0-beta.118':
     resolution: {integrity: sha512-PsFEO3VsP2PdZ3TunvJuQfgPX/xdDxBzbUJD5Lh74piY1vNfpUb4R3kypRwgKxn/HYH0+/mIzwmrlMyz8i57vQ==}
@@ -27534,7 +27534,7 @@ snapshots:
 
   '@xobotyi/scrollbar-width@1.9.5': {}
 
-  '@xterm/addon-clipboard@0.2.0-beta.101(@xterm/xterm@5.6.0-beta.118)':
+  '@xterm/addon-clipboard@0.3.0-beta.148(@xterm/xterm@5.6.0-beta.118)':
     dependencies:
       '@xterm/xterm': 5.6.0-beta.118
       js-base64: 3.7.8
