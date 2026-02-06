@@ -10,10 +10,8 @@ import React, { useState, useEffect } from "react"
 import { VSCodeButton, VSCodeProgressRing } from "@vscode/webview-ui-toolkit/react"
 import { vscode } from "../../utils/vscode"
 import { AgentCard } from "./AgentCard"
-import { TerminalPane } from "./TerminalPane"
 import { InteractiveTerminal } from "./InteractiveTerminal"
 import { PurposeInput } from "./PurposeInput"
-import { MessageDialog } from "./MessageDialog"
 import "./Dashboard.css"
 
 // kilocode_change start
@@ -192,21 +190,6 @@ export const Dashboard: React.FC = () => {
 				purposeId: state.purpose?.id,
 			} as any)
 		}
-	}
-
-	const closeTerminal = () => {
-		setState((prev) => ({
-			...prev,
-			showTerminal: false,
-			selectedAgent: undefined,
-		}))
-	}
-
-	const closeMessageDialog = () => {
-		setState((prev) => ({
-			...prev,
-			showMessageDialog: false,
-		}))
 	}
 
 	// Show purpose input if no active purpose

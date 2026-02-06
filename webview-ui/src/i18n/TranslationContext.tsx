@@ -21,7 +21,7 @@ export const TranslationProvider: React.FC<{ children: ReactNode }> = ({ childre
 	let extensionState: ReturnType<typeof useExtensionState> | null = null
 	try {
 		extensionState = useExtensionState()
-	} catch (error) {
+	} catch (_error) {
 		// Not in ExtensionStateContext - use default language
 		console.log("[TranslationProvider] Running without ExtensionStateContext, using default language")
 	}
@@ -41,7 +41,7 @@ export const TranslationProvider: React.FC<{ children: ReactNode }> = ({ childre
 		if (extensionState) {
 			i18n.changeLanguage(extensionState.language)
 		}
-	}, [i18n, extensionState?.language]) // kilocode_change - optional chaining
+	}, [i18n, extensionState?.language, extensionState]) // kilocode_change - optional chaining
 
 	// Memoize the translation function to prevent unnecessary re-renders
 	const translate = useCallback(

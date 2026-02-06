@@ -90,7 +90,7 @@ export const ChatInterface: React.FC = () => {
 			}
 		})
 
-		newSocket.on("agent-status-change", (data: any) => {
+newSocket.on("agent-status-change", (_data: any) => {
 			// Don't show individual agent status changes - too verbose
 			// Only show important messages via agent-message events
 		})
@@ -107,7 +107,7 @@ export const ChatInterface: React.FC = () => {
 		return () => {
 			newSocket.close()
 		}
-	}, [])
+	}, [currentPurpose])
 
 	// Auto-scroll to bottom
 	useEffect(() => {
@@ -262,9 +262,9 @@ export const ChatInterface: React.FC = () => {
 								<div className="example-prompts">
 									<p>Example:</p>
 									<ul>
-										<li>"Analyze this TypeScript code for security issues"</li>
-										<li>"Create a documentation file with examples"</li>
-										<li>"Review the authentication implementation"</li>
+									<li>&ldquo;Analyze this TypeScript code for security issues&rdquo;</li>
+									<li>&ldquo;Create a documentation file with examples&rdquo;</li>
+									<li>&ldquo;Review the authentication implementation&rdquo;</li>
 									</ul>
 								</div>
 							</div>

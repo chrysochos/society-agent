@@ -28,7 +28,6 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({ projec
 	const fitAddonRef = useRef<FitAddon | null>(null)
 	const socketRef = useRef<Socket | null>(null)
 	const [connected, setConnected] = useState(false)
-	const [currentCommand, setCurrentCommand] = useState("")
 	const [commandHistory, setCommandHistory] = useState<string[]>([])
 	const [historyIndex, setHistoryIndex] = useState(-1)
 	const workingDirRef = useRef(cwd || "/workspace")
@@ -236,7 +235,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({ projec
 			socket.disconnect()
 			terminal.dispose()
 		}
-	}, [])
+	}, [commandHistory, executeCommand, historyIndex, onCommandExecute])
 
 	const executeCommand = async (command: string) => {
 		try {
