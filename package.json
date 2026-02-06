@@ -39,13 +39,17 @@
 		"cli:dev": "pnpm --filter @kilocode/cli run dev",
 		"cli:run": "pnpm --filter @kilocode/cli run start",
 		"docs:start": "pnpm --filter kilocode-docs start",
-		"docs:build": "pnpm --filter kilocode-docs build"
+		"docs:build": "pnpm --filter kilocode-docs build",
+		"server": "node -r dotenv/config -r tsx/cjs src/api/society-server.ts",
+		"server:dev": "nodemon --watch src/api --watch src/services/society-agent --ext ts --exec 'node -r dotenv/config -r tsx/cjs src/api/society-server.ts'"
 	},
 	"devDependencies": {
 		"@changesets/changelog-github": "^0.5.1",
 		"@changesets/cli": "^2.27.10",
 		"@dotenvx/dotenvx": "^1.34.0",
 		"@roo-code/config-typescript": "workspace:^",
+		"@types/cors": "^2.8.19",
+		"@types/express": "^5.0.6",
 		"@types/glob": "^9.0.0",
 		"@types/node": "20.x",
 		"@vscode/vsce": "3.3.2",
@@ -56,6 +60,7 @@
 		"knip": "^5.44.4",
 		"lint-staged": "^16.0.0",
 		"mkdirp": "^3.0.1",
+		"nodemon": "^3.1.11",
 		"only-allow": "^1.2.1",
 		"ovsx": "0.10.4",
 		"prettier": "^3.4.2",
@@ -78,5 +83,12 @@
 			"bluebird": ">=3.7.2",
 			"type-fest": "2.19.0"
 		}
+	},
+	"dependencies": {
+		"@anthropic-ai/sdk": "^0.51.0",
+		"cors": "^2.8.6",
+		"dotenv": "^17.2.3",
+		"express": "^4.18.0",
+		"socket.io": "^4.8.3"
 	}
 }

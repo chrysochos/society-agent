@@ -60,6 +60,14 @@
 	flex: 1;
 }
 
+.terminal-section {
+	flex: 0 0 400px;
+	border-top: 2px solid var(--vscode-panel-border);
+	background: var(--vscode-editor-background);
+	display: flex;
+	flex-direction: column;
+}
+
 @media (max-width: 768px) {
 	.agent-grid {
 		grid-template-columns: 1fr;

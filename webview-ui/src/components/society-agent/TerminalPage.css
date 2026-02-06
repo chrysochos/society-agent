@@ -1,0 +1,34 @@
+/* kilocode_change - new file */
+.terminal-page {
+	display: flex;
+	flex-direction: column;
+	height: 100vh;
+	background: #1e1e1e;
+	overflow: hidden;
+}
+
+.terminal-page-header {
+	padding: 20px 24px;
+	background: #252526;
+	border-bottom: 2px solid #3c3c3c;
+	flex-shrink: 0;
+}
+
+.terminal-page-header h1 {
+	margin: 0 0 8px 0;
+	font-size: 24px;
+	font-weight: 600;
+	color: #cccccc;
+}
+
+.terminal-page-info {
+	font-size: 14px;
+	color: #999;
+}
+
+.terminal-page-content {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}

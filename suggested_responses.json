@@ -1,0 +1,20 @@
+{
+	"responses": [
+		{
+			"type": "friendly_acknowledgment",
+			"text": "Hello! I'm here to help you with various tasks. What would you like to work on today?"
+		},
+		{
+			"type": "capability_overview",
+			"text": "Hi there! I can help you with tasks like analyzing data, creating documents, answering questions, or working on projects. What interests you?"
+		},
+		{
+			"type": "open_ended",
+			"text": "Hello! Feel free to tell me about anything you'd like help with - I'm here to assist!"
+		},
+		{
+			"type": "guided_start",
+			"text": "Hi! To better assist you, could you share what you're hoping to accomplish or what kind of help you're looking for?"
+		}
+	]
+}

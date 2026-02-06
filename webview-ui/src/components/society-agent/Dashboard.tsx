@@ -11,6 +11,7 @@ import { VSCodeButton, VSCodeProgressRing } from "@vscode/webview-ui-toolkit/rea
 import { vscode } from "../../utils/vscode"
 import { AgentCard } from "./AgentCard"
 import { TerminalPane } from "./TerminalPane"
+import { InteractiveTerminal } from "./InteractiveTerminal"
 import { PurposeInput } from "./PurposeInput"
 import { MessageDialog } from "./MessageDialog"
 import "./Dashboard.css"
@@ -40,6 +41,7 @@ interface DashboardState {
 	selectedAgent?: Agent
 	showTerminal: boolean
 	showMessageDialog: boolean
+	showInteractiveTerminal: boolean
 }
 // kilocode_change end
 
@@ -49,6 +51,7 @@ export const Dashboard: React.FC = () => {
 		agents: [],
 		showTerminal: false,
 		showMessageDialog: false,
+		showInteractiveTerminal: false,
 	})
 
 	const [showPurposeInput, setShowPurposeInput] = useState(true)
@@ -58,7 +61,7 @@ export const Dashboard: React.FC = () => {
 		// Notify extension that webview is ready
 		console.log("📡 Society Agent Dashboard mounted, sending ready signal")
 		vscode.postMessage({ type: "webview-ready" })
-		
+
 		const handleMessage = (event: MessageEvent) => {
 			const message = event.data
 			console.log("📨 Dashboard received message:", message.type, message)
@@ -79,25 +82,26 @@ export const Dashboard: React.FC = () => {
 					}))
 					break
 
-			case "agent-status-update":
-				setState((prev) => ({
-					...prev,
-					agents: prev.agents.map((agent) =>
-						agent.id === message.agentId 
-							? { 
-								...agent, 
-								status: message.status,
-								currentTask: message.currentTask || agent.currentTask,
-								recentActivity: message.status !== agent.status 
-									? [`Status: ${message.status}`, ...agent.recentActivity.slice(0, 4)]
-									: agent.recentActivity
-							} 
-							: agent,
-					),
-				}))
-				break
+				case "agent-status-update":
+					setState((prev) => ({
+						...prev,
+						agents: prev.agents.map((agent) =>
+							agent.id === message.agentId
+								? {
+										...agent,
+										status: message.status,
+										currentTask: message.currentTask || agent.currentTask,
+										recentActivity:
+											message.status !== agent.status
+												? [`Status: ${message.status}`, ...agent.recentActivity.slice(0, 4)]
+												: agent.recentActivity,
+									}
+								: agent,
+						),
+					}))
+					break
 
-			case "agent-activity":
+				case "agent-activity":
 					setState((prev) => ({
 						...prev,
 						agents: prev.agents.map((agent) =>
@@ -217,18 +221,24 @@ export const Dashboard: React.FC = () => {
 				<div className="header-content">
 					<h1>Society Agent Control Panel</h1>
 					<div className="purpose-info">
-					<div className="purpose-description">{state.purpose.description}</div>
-					<div className="progress-container">
-						<div className="progress-text">
-							Progress: {state.purpose.progress}%
-							{state.purpose.status === "completed" && " ✅"}
+						<div className="purpose-description">{state.purpose.description}</div>
+						<div className="progress-container">
+							<div className="progress-text">
+								Progress: {state.purpose.progress}%{state.purpose.status === "completed" && " ✅"}
+							</div>
+							{state.purpose.status !== "completed" && <VSCodeProgressRing />}
 						</div>
-						{state.purpose.status !== "completed" && <VSCodeProgressRing />}
-					</div>
 					</div>
 				</div>
 
 				<div className="header-actions">
+					{" "}
+					<VSCodeButton
+						onClick={() =>
+							setState((prev) => ({ ...prev, showInteractiveTerminal: !prev.showInteractiveTerminal }))
+						}>
+						{state.showInteractiveTerminal ? "🖥️ Hide Terminal" : "🖥️ Open Terminal"}
+					</VSCodeButton>{" "}
 					<VSCodeButton onClick={handlePauseAll}>⏸️ Pause All</VSCodeButton>
 					<VSCodeButton onClick={handleResumeAll}>▶️ Resume All</VSCodeButton>
 					<VSCodeButton appearance="secondary" onClick={handleStopPurpose}>
@@ -250,14 +260,14 @@ export const Dashboard: React.FC = () => {
 				))}
 			</div>
 
-			{/* Terminal Pane */}
-			{state.showTerminal && state.selectedAgent && (
-				<TerminalPane agent={state.selectedAgent} onClose={closeTerminal} />
-			)}
-
-			{/* Message Dialog */}
-			{state.showMessageDialog && state.selectedAgent && (
-				<MessageDialog agent={state.selectedAgent} onClose={closeMessageDialog} />
+			{/* Interactive Terminal */}
+			{state.showInteractiveTerminal && (
+				<div className="terminal-section">
+					<InteractiveTerminal
+						cwd={process.cwd?.() || "/workspace"}
+						onCommandExecute={(cmd) => console.log("Executed:", cmd)}
+					/>
+				</div>
 			)}
 		</div>
 	)

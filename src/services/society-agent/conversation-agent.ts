@@ -4,13 +4,15 @@
  *
  * Each agent maintains its own conversation history with the LLM, enabling
  * autonomous decision-making and task execution while preserving context.
+ *
+ * Inherits Kilo's built-in conversation summarization for automatic memory management.
  */
 
 import Anthropic from "@anthropic-ai/sdk"
 import { ApiHandler } from "../../api"
 import { ApiStream } from "../../api/transform/stream"
-import * as fs from "fs/promises"
-import * as path from "path"
+import { ApiMessage } from "../../core/task-persistence/apiMessages"
+import { summarizeConversation } from "../../core/condense"
 import * as fs from "fs/promises"
 import * as path from "path"
 
@@ -44,6 +46,8 @@ export interface ConversationAgentConfig {
 	workspacePath?: string
 	onMessage?: (message: AgentMessage) => void
 	onStatusChange?: (status: AgentState["status"]) => void
+	maxMessages?: number // Max messages before summarization (default: 50)
+	summaryThreshold?: number // When to trigger summary (default: 40)
 }
 // kilocode_change end
 
@@ -58,11 +62,14 @@ export class ConversationAgent {
 	private workspacePath: string
 	private onMessage?: (message: AgentMessage) => void
 	private onStatusChange?: (status: AgentState["status"]) => void
+	private maxMessages: number // Kilocode: Max messages before summarization
+	private summaryThreshold: number // Kilocode: When to trigger summary
+	private conversationSummary: string = "" // Kilocode: Summarized older context
 	// kilocode_change end
 
 	constructor(config: ConversationAgentConfig) {
 		// kilocode_change start
-		this.workspacePath = config.workspacePath || process.cwd() // Use provided workspace or default to current directory
+		this.workspacePath = config.workspacePath || process.cwd()
 		this.state = {
 			identity: config.identity,
 			conversationHistory: [],
@@ -73,6 +80,10 @@ export class ConversationAgent {
 		this.systemPrompt = config.systemPrompt || this.getDefaultSystemPrompt()
 		this.onMessage = config.onMessage
 		this.onStatusChange = config.onStatusChange
+		// Kilocode: Memory management configuration
+		this.maxMessages = config.maxMessages || 50
+		this.summaryThreshold = config.summaryThreshold || 40
+		this.conversationSummary = ""
 		// kilocode_change end
 	}
 
@@ -116,7 +127,7 @@ export class ConversationAgent {
 	/**
 	 * Add message to conversation history
 	 */
-	private addMessage(role: "user" | "assistant", content: string): AgentMessage {
+	private async addMessage(role: "user" | "assistant", content: string): Promise<AgentMessage> {
 		// kilocode_change start
 		const message: AgentMessage = {
 			role,
@@ -125,6 +136,12 @@ export class ConversationAgent {
 		}
 		this.state.conversationHistory.push(message)
 		this.onMessage?.(message)
+
+		// Kilocode: Auto-summarize if conversation getting long
+		if (this.state.conversationHistory.length >= this.summaryThreshold) {
+			await this.summarizeOldMessages()
+		}
+
 		return message
 		// kilocode_change end
 	}
@@ -134,14 +151,40 @@ export class ConversationAgent {
 	 */
 	async sendMessage(content: string): Promise<string> {
 		// kilocode_change start
-		this.addMessage("user", content)
+		await this.addMessage("user", content)
 		this.setStatus("working")
 
 		try {
 			const response = await this.callLLM()
-			this.addMessage("assistant", response)
+			await this.addMessage("assistant", response)
 			this.setStatus("idle")
 			return response
+		} catch (error) {
+			this.setStatus("error")
+			throw error
+		}
+		// kilocode_change end
+	}
+
+	/**
+	 * Send message and stream response (yields chunks as they arrive)
+	 */
+	async *sendMessageStream(content: string): AsyncGenerator<string, void, unknown> {
+		// kilocode_change start
+		await this.addMessage("user", content)
+		this.setStatus("working")
+
+		try {
+			let fullResponse = ""
+
+			// Stream from LLM
+			for await (const chunk of this.callLLMStream()) {
+				fullResponse += chunk
+				yield chunk
+			}
+
+			await this.addMessage("assistant", fullResponse)
+			this.setStatus("idle")
 		} catch (error) {
 			this.setStatus("error")
 			throw error
@@ -156,9 +199,9 @@ export class ConversationAgent {
 		// kilocode_change start
 		this.state.currentTask = task
 		this.state.status = "working"
-		
+
 		console.log(`✅ ${this.state.identity.id} received task: ${task}`)
-		
+
 		// Start working on the task
 		this.executeTask(task).catch((error) => {
 			console.error(`❌ ${this.state.identity.id} task execution failed:`, error)
@@ -173,12 +216,12 @@ export class ConversationAgent {
 	private async executeTask(task: string): Promise<void> {
 		// kilocode_change start
 		console.log(`🚀 ${this.state.identity.id} starting work on task...`)
-		
+
 		// Check if task mentions delays/timing
 		const hasDelay = /\d+\s*seconds?/i.test(task) || /delay/i.test(task) || /apart/i.test(task)
 		const delayMatch = task.match(/(\d+)\s*seconds?/i)
 		const delaySeconds = delayMatch ? parseInt(delayMatch[1]) : 0
-		
+
 		// Ask the LLM what to create
 		const workPrompt = `Your task: ${task}
 
@@ -206,7 +249,7 @@ Respond with the complete JSON now:`
 			const response = await this.sendMessage(workPrompt)
 			console.log(`💡 ${this.state.identity.id} received implementation plan`)
 			console.log(`📄 ${this.state.identity.id} LLM response:`, response.substring(0, 500))
-			
+
 			// Extract JSON from response
 			let jsonText = response.trim()
 			if (jsonText.includes("```")) {
@@ -215,36 +258,35 @@ Respond with the complete JSON now:`
 			}
 			const jsonMatch = jsonText.match(/\{[\s\S]*"files"[\s\S]*\}/)
 			if (jsonMatch) jsonText = jsonMatch[0]
-			
+
 			const parsed = JSON.parse(jsonText)
 			const files = parsed.files || []
-			
+
 			if (files.length === 0) {
 				console.warn(`⚠️ ${this.state.identity.id} parsed 0 files from response!`)
 				console.warn(`Raw JSON: ${jsonText}`)
 			}
-			
+
 			// Create the files with optional delays
 			for (let i = 0; i < files.length; i++) {
 				const file = files[i]
 				await this.createFile(file.path, file.content)
-				
+
 				// Add delay between files if requested
 				if (hasDelay && delaySeconds > 0 && i < files.length - 1) {
 					console.log(`⏳ ${this.state.identity.id} waiting ${delaySeconds} seconds before next file...`)
-					await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000))
+					await new Promise((resolve) => setTimeout(resolve, delaySeconds * 1000))
 				}
 			}
-			
+
 			console.log(`✅ ${this.state.identity.id} created ${files.length} files`)
 			this.setStatus("completed")
-			
 		} catch (error) {
 			console.error(`❌ ${this.state.identity.id} failed to execute task:`, error)
 			// Fallback: create a simple status file
 			await this.createFile(
 				`${this.state.identity.id}-status.txt`,
-				`Task: ${task}\nStatus: Attempted but encountered error\nError: ${error}`
+				`Task: ${task}\nStatus: Attempted but encountered error\nError: ${error}`,
 			)
 			this.setStatus("completed")
 		}
@@ -258,16 +300,16 @@ Respond with the complete JSON now:`
 		// kilocode_change start
 		const fullPath = path.join(this.workspacePath, relativePath)
 		const dir = path.dirname(fullPath)
-		
+
 		console.log(`📂 ${this.state.identity.id} workspace path: ${this.workspacePath}`)
 		console.log(`📂 ${this.state.identity.id} full file path: ${fullPath}`)
-		
+
 		// Create directory if needed
 		await fs.mkdir(dir, { recursive: true })
-		
+
 		// Write file
 		await fs.writeFile(fullPath, content, "utf-8")
-		
+
 		console.log(`📝 ${this.state.identity.id} created file: ${relativePath}`)
 		this.addMessage("assistant", `Created file: ${relativePath}`)
 		// kilocode_change end
@@ -366,7 +408,7 @@ Follow instructions provided by the supervisor for your specific role and capabi
 	private async callLLM(): Promise<string> {
 		// kilocode_change start
 		console.log(`🤖 Calling LLM for ${this.state.identity.id}...`)
-		
+
 		// Convert conversation history to Anthropic format
 		const messages: Anthropic.MessageParam[] = this.state.conversationHistory.map((msg) => ({
 			role: msg.role === "user" ? "user" : "assistant",
@@ -377,7 +419,7 @@ Follow instructions provided by the supervisor for your specific role and capabi
 			// Use ApiHandler.createMessage to get stream
 			const systemPrompt = this.state.systemPrompt || this.getDefaultSystemPrompt()
 			const stream = this.apiHandler.createMessage(systemPrompt, messages)
-			
+
 			let fullResponse = ""
 
 			// Collect streamed response
@@ -392,6 +434,97 @@ Follow instructions provided by the supervisor for your specific role and capabi
 		} catch (error) {
 			console.error(`❌ LLM call failed for ${this.state.identity.id}:`, error)
 			throw error
+		}
+		// kilocode_change end
+	}
+
+	/**
+	 * Call LLM with streaming (yields chunks as they arrive)
+	 */
+	private async *callLLMStream(): AsyncGenerator<string, void, unknown> {
+		// kilocode_change start
+		console.log(`🤖 Streaming LLM call for ${this.state.identity.id}...`)
+
+		// Convert conversation history to Anthropic format
+		const messages: Anthropic.MessageParam[] = this.state.conversationHistory.map((msg) => ({
+			role: msg.role === "user" ? "user" : "assistant",
+			content: msg.content,
+		}))
+
+		try {
+			// Kilocode: Prepend summary as system context if exists
+			let systemPrompt = this.state.systemPrompt || this.getDefaultSystemPrompt()
+			if (this.conversationSummary) {
+				systemPrompt += `\n\n## Previous Conversation Summary\n${this.conversationSummary}\n\nThe messages below are the recent conversation. Use the summary for older context.`
+			}
+
+			const stream = this.apiHandler.createMessage(systemPrompt, messages)
+
+			// Yield chunks as they arrive
+			for await (const chunk of stream) {
+				if (chunk.type === "text") {
+					yield chunk.text
+				}
+			}
+
+			console.log(`✅ LLM streaming completed for ${this.state.identity.id}`)
+		} catch (error) {
+			console.error(`❌ LLM streaming failed for ${this.state.identity.id}:`, error)
+			throw error
+		}
+		// kilocode_change end
+	}
+
+	/**
+	 * Kilocode: Summarize old messages using Kilo's built-in summarization
+	 */
+	private async summarizeOldMessages(): Promise<void> {
+		// kilocode_change start
+		if (this.state.conversationHistory.length < this.summaryThreshold) {
+			return // Not long enough yet
+		}
+
+		console.log(
+			`📝 ${this.state.identity.id}: Using Kilo's summarization (${this.state.conversationHistory.length} messages)...`,
+		)
+
+		try {
+			// Convert to ApiMessage format (Kilo's format)
+			const apiMessages: ApiMessage[] = this.state.conversationHistory.map((msg) => ({
+				role: msg.role,
+				content: msg.content,
+			}))
+
+			// Use Kilo's built-in summarization
+			const result = await summarizeConversation(
+				apiMessages,
+				this.apiHandler,
+				this.systemPrompt,
+				this.state.identity.id, // taskId
+				0, // prevContextTokens (we'll implement proper tracking later)
+				true, // isAutomaticTrigger
+			)
+
+			if (result.error) {
+				console.error(`❌ ${this.state.identity.id}: Summarization error:`, result.error)
+				return
+			}
+
+			// Update history with summarized messages
+			this.state.conversationHistory = result.messages.map((msg, idx) => ({
+				role: msg.role as "user" | "assistant",
+				content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
+				timestamp: this.state.conversationHistory[idx]?.timestamp || Date.now(),
+			}))
+
+			// Store summary for reference
+			this.conversationSummary = result.summary
+
+			console.log(
+				`✅ ${this.state.identity.id}: Kilo summarized conversation (${result.messages.length} messages after, ${result.cost.toFixed(4)} cost)`,
+			)
+		} catch (error) {
+			console.error(`❌ ${this.state.identity.id}: Kilo summarization failed:`, error)
 		}
 		// kilocode_change end
 	}
