@@ -121,7 +121,7 @@
 		"string-width": "^8.1.0",
 		"strip-ansi": "^7.1.0",
 		"strip-bom": "^5.0.0",
-		"tiktoken": "^1.0.21",
+		"tiktoken": "^1.0.22",
 		"tmp": "^0.2.3",
 		"tree-sitter-wasms": "^0.1.12",
 		"ts-node": "^10.9.1",
