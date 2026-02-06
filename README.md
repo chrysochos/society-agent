@@ -1,103 +1,143 @@
 <p align="center">
-  <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://img.shields.io/visual-studio-marketplace/v/kilocode.Kilo-Code.svg?label=VS%20Code%20Marketplace" alt="VS Code Marketplace"></a>
-  <a href="https://x.com/kilocode"><img src="https://img.shields.io/twitter/follow/kilocode?style=flat&logo=x&color=555" alt="X (Twitter)"></a>
-  <a href="https://blog.kilocode.ai"><img src="https://img.shields.io/badge/Blog-555?style=flat&logo=substack&logoColor=white" alt="Substack Blog"></a>
-  <a href="https://kilocode.ai/discord"><img src="https://img.shields.io/discord/1349288496988160052?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://www.reddit.com/r/kilocode/"><img src="https://img.shields.io/reddit/subreddit-subscribers/kilocode?style=flat&logo=reddit&logoColor=white" alt="Reddit"></a>
+  <a href="https://github.com/chrysochos/society-agent"><img src="https://img.shields.io/badge/version-0.3.0--alpha-orange.svg" alt="Alpha Release"></a>
+  <a href="./SOCIETY_AGENT_README.md"><img src="https://img.shields.io/badge/docs-comprehensive-brightgreen.svg" alt="Documentation"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a>
 </p>
 
-# 🚀 Kilo Code
+# Society Agent ⚡
 
-> Kilo is an open-source VS Code AI agent. We frequently merge features from open-source projects while building our own vision.
+> **AI teams that work like human teams**
 
-- ✨ Generate code from natural language
-- ✅ Checks its own work
-- 🧪 Run terminal commands
-- 🌐 Automate the browser
-- 🤖 Latest AI models
-- 🎁 API keys optional
-- 💡 **Get $20 in bonus credits when you top-up for the first time** Credits can be used with 400+ models like Gemini 3 Pro, Claude 4 Sonnet & Opus, and GPT-5
+Transform your AI coding assistant into an **autonomous team** that achieves your goals with **80-90% less intervention**.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Kilo-Org/kilocode/refs/heads/main/kilo.gif" width="100%" />
-</p>
+---
 
-- [VS Code Marketplace](https://kilocode.ai/vscode-marketplace?utm_source=Readme) (download)
-- [Official KiloCode.ai Home page](https://kilocode.ai) (learn more)
+## 🎯 The Problem
 
-## Key Features
+```bash
+# Current AI assistants require constant micro-management:
+> "Create file auth.ts"
+> "Install passport"
+> "Write OAuth code"
+> "Add error handling"
+> "Write tests"
+... 50+ commands, constant supervision
+```
 
-- **Code Generation:** Kilo can generate code using natural language.
-- **Task Automation:** Kilo can automate repetitive coding tasks.
-- **Automated Refactoring:** Kilo can refactor and improve existing code.
-- **MCP Server Marketplace**: Kilo can easily find, and use MCP servers to extend the agent capabilities.
-- **Multi Mode**: Plan with Architect, Code with Coder, and Debug with Debugger, and make your own custom modes.
-- **Society Agent (Coming Soon):** Purpose-driven multi-agent system where a supervisor coordinates specialized workers to achieve your goals autonomously. [Learn more →](./SOCIETY_AGENT_README.md)
+**You spend more time directing the AI than coding.**
 
-## How to get started with Kilo Code
+---
 
-1. Install the Kilo Code extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code).
-2. Create your account to access 400+ cutting-edge AI models including Gemini 3 Pro, Claude 4 Sonnet & Opus, and GPT-5 – with transparent pricing that matches provider rates exactly.
-3. Start coding with AI that adapts to your workflow. Watch our quick-start guide to see Kilo Code in action:
+## ✨ The Solution
 
-[![Watch the video](https://img.youtube.com/vi/pqGfYXgrhig/maxresdefault.jpg)](https://youtu.be/pqGfYXgrhig)
+```bash
+# Society Agent - one purpose, autonomous execution:
+$ kilo society start "Add OAuth authentication to my app"
 
-## Extension Development
+Creating team...
+✓ Supervisor Agent (coordinates)
+✓ Backend Developer (implements)
+✓ Security Reviewer (audits)
+✓ Tester (validates)
 
-For details on building and developing the extension, see [DEVELOPMENT.md](/DEVELOPMENT.md)
+[Dashboard opens - watch agents work autonomously]
 
-## Contributors to Kilo
+✅ Complete in 15 minutes
+   Your oversight: 5 minutes
+   AI execution: 10 minutes autonomous
+```
 
-Thanks to all the contributors who help make Kilo Code better!
+---
 
-<table>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/mcowger">
-        <img src="https://avatars.githubusercontent.com/u/1929548?size=100" width="100" height="100" alt="mcowger" style="border-radius: 50%;" />
-      </a>
-    </td>    <td align="center">
-      <a href="https://github.com/bhaktatejas922">
-        <img src="https://avatars.githubusercontent.com/u/26863466?size=100" width="100" height="100" alt="bhaktatejas922" style="border-radius: 50%;" />
-      </a>
-    </td>    <td align="center">
-      <a href="https://github.com/NyxJae">
-        <img src="https://avatars.githubusercontent.com/u/52313587?size=100" width="100" height="100" alt="NyxJae" style="border-radius: 50%;" />
-      </a>
-    </td>    <td align="center">
-      <a href="https://github.com/Aikiboy123">
-        <img src="https://avatars.githubusercontent.com/u/161741275?size=100" width="100" height="100" alt="Aikiboy123" style="border-radius: 50%;" />
-      </a>
-    </td>    <td align="center">
-      <a href="https://github.com/cobra91">
-        <img src="https://avatars.githubusercontent.com/u/1060585?size=100" width="100" height="100" alt="cobra91" style="border-radius: 50%;" />
-      </a>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/ivanarifin">
-        <img src="https://avatars.githubusercontent.com/u/111653938?size=100" width="100" height="100" alt="ivanarifin" style="border-radius: 50%;" />
-      </a>
-    </td>    <td align="center">
-      <a href="https://github.com/PeterDaveHello">
-        <img src="https://avatars.githubusercontent.com/u/3691490?size=100" width="100" height="100" alt="PeterDaveHello" style="border-radius: 50%;" />
-      </a>
-    </td>    <td align="center">
-      <a href="https://github.com/possible055">
-        <img src="https://avatars.githubusercontent.com/u/38576169?size=100" width="100" height="100" alt="possible055" style="border-radius: 50%;" />
-      </a>
-    </td>    <td align="center">
-      <a href="https://github.com/seuros">
-        <img src="https://avatars.githubusercontent.com/u/2394703?size=100" width="100" height="100" alt="seuros" style="border-radius: 50%;" />
-      </a>
-    </td>    <td align="center">
-      <!-- added this line to test github action -->
-      <a href="https://kilocode.ai/#contributors">
-        <b>more ...</b>
-      </a>
-    </td>
-  </tr>
-</table>
+## 🚀 Key Features
+
+### 🎯 Purpose-Driven Workflow
+
+Define "what" you want, not "how" to do it
+
+- No step-by-step micro-management
+- Intelligent task decomposition
+- Context-aware planning
+
+### 🤖 Supervised Multi-Agent
+
+Coordinator + specialized workers
+
+- Backend, Frontend, Security, Testing, DevOps
+- Parallel execution
+- Conflict resolution
+
+### 📊 Real-Time Dashboard
+
+Web-based monitoring and control
+
+- Agent status cards
+- Activity feed
+- Embedded terminals (xterm.js)
+- Interactive controls
+
+### 💾 Persistent Memory
+
+Structured logging and learning
+
+- JSONL format for all actions
+- Forensic debugging
+- Replay capabilities
+
+---
+
+## 📖 Documentation
+
+**Quick Start:**
+
+- [Complete User Guide](./SOCIETY_AGENT_README.md) - Comprehensive 609-line guide
+- [Quick Start](./SOCIETY_AGENT_QUICKSTART.md) - Get started in 5 minutes
+- [System Overview](./AGENTS.md) - Architecture and design
+
+**Technical Deep Dive:**
+
+- [Architecture Models](./SOCIETY_AGENT_ARCHITECTURE_MODELS.md)
+- [Execution Flows](./SOCIETY_AGENT_EXECUTION_FLOWS.md)
+- [Implementation Status](./SOCIETY_AGENT_IMPLEMENTATION.md)
+
+**Philosophy:**
+
+- [Development Journey](./SOCIETY_AGENT_JOURNEY.md) - Our story
+- [Design Principles](./MULTI_AGENT_DESIGN_PRINCIPLES.md)
+
+---
+
+## ⚠️ Alpha Status
+
+**This is an alpha release - not production-ready!**
+
+✅ Complete: Architecture, core implementation, dashboard, docs  
+🔄 In Progress: Integration, E2E testing, error handling  
+⏳ Planned: Memory network, performance optimization, beta release
+
+**Use in development environments only.**
+
+---
+
+## 🏗️ Built on KiloCode
+
+Society Agent is built on [KiloCode](https://kilocode.ai), an open-source VS Code AI agent.
+**Use in development environments only.**
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
+
+---
+
+## 📄 License
+
+Apache License 2.0 - See [LICENSE](./LICENSE) for details.
+
+---
+
+**Built with ❤️ | Transforming AI from a tool into a team**
 
 <!-- END CONTRIBUTORS SECTION -->
