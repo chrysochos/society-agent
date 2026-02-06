@@ -10,7 +10,7 @@
  * - Keyboard shortcuts
  */
 
-import React, { useEffect, useRef, useState } from "react"
+import React, { useEffect, useRef, useState, useCallback } from "react"
 import { Terminal } from "xterm"
 import { FitAddon } from "xterm-addon-fit"
 import { io, Socket } from "socket.io-client"
@@ -32,7 +32,17 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({ projec
 	const [historyIndex, setHistoryIndex] = useState(-1)
 	const workingDirRef = useRef(cwd || "/workspace")
 
-	useEffect(() => {
+	const executeCommand = useCallback(async (command: string) => {
+		try {
+			await fetch("http://localhost:3000/api/terminal/execute", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					command,
+					cwd: workingDirRef.current,
+					projectId,
 		if (!terminalRef.current) return
 
 		// Create terminal

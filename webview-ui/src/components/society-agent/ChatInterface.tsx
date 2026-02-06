@@ -73,7 +73,7 @@ export const ChatInterface: React.FC = () => {
 			addSystemMessage(`� Working on: ${data.description}`)
 		})
 
-		newSocket.on("team-formed", (data: any) => {
+newSocket.on("team-formed", (_data: any) => {
 			// Don't show team formation details - only show results
 		})
 
