@@ -1023,8 +1023,8 @@ importers:
         specifier: 5.1.8-vscode
         version: 5.1.8-vscode
       '@vscode/sudo-prompt':
-        specifier: 9.3.1
-        version: 9.3.1
+        specifier: 9.3.2
+        version: 9.3.2
       '@vscode/tree-sitter-wasm':
         specifier: ^0.1.4
         version: 0.1.5
@@ -8026,8 +8026,8 @@ packages:
   '@vscode/sqlite3@5.1.8-vscode':
     resolution: {integrity: sha512-9Ku18yZej1kxS7mh6dhCWxkCof043HljcLIdq+RRJr65QdOeAqPOUJ2i6qXRL63l1Kd72uXV/zLA2SBwhfgiOw==}
 
-  '@vscode/sudo-prompt@9.3.1':
-    resolution: {integrity: sha512-9ORTwwS74VaTn38tNbQhsA5U44zkJfcb0BdTSyyG6frP4e8KMtHuTXYmwefe5dpL8XB1aGSIVTaLjD3BbWb5iA==}
+  '@vscode/sudo-prompt@9.3.2':
+    resolution: {integrity: sha512-gcXoCN00METUNFeQOFJ+C9xUI0DKB+0EGMVg7wbVYRHBw2Eq3fKisDZOkRdOz3kqXRKOENMfShPOmypw1/8nOw==}
 
   '@vscode/telemetry-extractor@1.17.0':
     resolution: {integrity: sha512-HnSLeeHqR3vyXjhLaIn7oPbPOKZxjhR5CLGkgwbVGSAZAB8Vl9xH0mF3MZRL7tn9BujujlIuXuHznxffOOTtZw==}
@@ -27296,7 +27296,7 @@ snapshots:
       node-addon-api: 8.5.0
       tar: 6.2.1
 
-  '@vscode/sudo-prompt@9.3.1': {}
+  '@vscode/sudo-prompt@9.3.2': {}
 
   '@vscode/telemetry-extractor@1.17.0':
     dependencies:
