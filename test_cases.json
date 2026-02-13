@@ -1,0 +1,47 @@
+{
+	"test_cases": [
+		{
+			"name": "Basic sequence test",
+			"description": "Program should output numbers 1 through 5",
+			"expected": ["1", "2", "3", "4", "5"],
+			"type": "positive"
+		},
+		{
+			"name": "Order verification",
+			"description": "Numbers must be in correct order",
+			"expected_order": [1, 2, 3, 4, 5],
+			"type": "positive"
+		},
+		{
+			"name": "No missing numbers",
+			"description": "All numbers 1-5 must be present",
+			"expected_count": 5,
+			"type": "positive"
+		},
+		{
+			"name": "No extra numbers",
+			"description": "Only numbers 1-5 should be printed",
+			"max_count": 5,
+			"type": "negative"
+		},
+		{
+			"name": "No whitespace issues",
+			"description": "Output should not have leading/trailing spaces",
+			"whitespace_check": true,
+			"type": "negative"
+		},
+		{
+			"name": "Numeric only",
+			"description": "Output should contain only numeric values",
+			"numeric_check": true,
+			"type": "negative"
+		}
+	],
+	"acceptance_criteria": [
+		"Program prints exactly 5 lines",
+		"Each line contains a single number",
+		"Numbers are 1, 2, 3, 4, 5 in that order",
+		"No additional output or formatting",
+		"Program terminates after printing 5"
+	]
+}

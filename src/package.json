@@ -186,6 +186,12 @@
 				"category": "Society Agent"
 			},
 			{
+				"command": "kilo-code.launchSocietyAgents",
+				"title": "Launch Society Agents",
+				"icon": "$(rocket)",
+				"category": "Kilo Code"
+			},
+			{
 				"command": "kilo-code.helpButtonClicked",
 				"title": "%command.documentation.title%",
 				"icon": "$(question)"
@@ -610,6 +616,43 @@
 					"minimum": 1,
 					"maximum": 200,
 					"description": "%settings.codeIndex.embeddingBatchSize.description%"
+				},
+				"kilo-code.societyAgent.workingDirectory": {
+					"type": "string",
+					"default": "",
+					"description": "Custom working directory for Society Agent. Leave empty to use VS Code workspace root. Useful for development and testing."
+				},
+				"kilo-code.societyAgent.agentId": {
+					"type": "string",
+					"default": "",
+					"description": "Unique identifier for this agent instance. Auto-generated if empty. Used for multi-VS Code coordination."
+				},
+				"kilo-code.societyAgent.role": {
+					"type": "string",
+					"enum": [
+						"supervisor",
+						"backend-developer",
+						"frontend-developer",
+						"tester",
+						"devops",
+						"security-reviewer",
+						"custom"
+					],
+					"default": "custom",
+					"description": "Role of this agent in multi-VS Code setup. Supervisor coordinates workers; workers execute tasks."
+				},
+				"kilo-code.societyAgent.sharedDir": {
+					"type": "string",
+					"default": "",
+					"description": "Shared directory for multi-agent coordination (.society-agent/). Required for multi-VS Code mode. All agents must point to same directory."
+				},
+				"kilo-code.societyAgent.capabilities": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"description": "Additional capabilities for this agent (e.g., 'database', 'api-design', 'testing'). Used for task routing."
 				}
 			}
 		},

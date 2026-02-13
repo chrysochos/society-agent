@@ -30,6 +30,7 @@ export interface TaskAssignment {
 	workerId: string
 	task: string
 	context: string
+	outputDir?: string // kilocode_change - Supervisor coordinates folder across workers
 	assignedAt: number
 	status: "pending" | "in-progress" | "completed" | "failed"
 }
@@ -126,15 +127,28 @@ Context: ${this.supervisorState.purpose.context || "None provided"}
 Constraints: ${this.supervisorState.purpose.constraints?.join(", ") || "None"}
 Success Criteria: ${this.supervisorState.purpose.successCriteria?.join(", ") || "None"}
 
+TEAM SIZE GUIDANCE:
+- SIMPLE tasks (one file, basic operation, straightforward) → 1 worker
+- MODERATE tasks (2-3 files, some complexity, testing) → 2 workers
+- COMPLEX tasks (full system, multiple components, integration) → 3+ workers
+
+Examples:
+- "Create a calculator" → 1 worker (simple, one task)
+- "Build REST API with tests" → 2 workers (backend + tester)
+- "Full e-commerce site with auth" → 3+ workers (backend + frontend + security + tester)
+
+IMPORTANT: Prefer FEWER workers for simple tasks to reduce overhead.
+
 Respond with ONLY a JSON object (no markdown, no explanation, just the JSON):
 {
   "workers": [
-    {"workerType": "backend", "count": 1, "reason": "Implement server-side logic"},
-    {"workerType": "frontend", "count": 1, "reason": "Build user interface"}
+    {"workerType": "backend", "count": 1, "reason": "Implement server-side logic"}
   ]
 }
 
-Available worker types: backend, frontend, security, tester, devops, custom
+Available worker types: backend, frontend, security, tester, devops, customAvailable worker types: backend, frontend, security, tester, devops, custom
+
+For simple tasks, just use ONE worker of the appropriate type.
 
 Respond with the JSON now:`
 
@@ -144,7 +158,7 @@ Respond with the JSON now:`
 		try {
 			// Extract JSON from response (handle markdown code blocks)
 			let jsonText = response.trim()
-			
+
 			// Remove markdown code blocks if present
 			if (jsonText.includes("```")) {
 				const match = jsonText.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/)
@@ -152,32 +166,32 @@ Respond with the JSON now:`
 					jsonText = match[1]
 				}
 			}
-			
+
 			// Try to find JSON object in the response
 			const jsonMatch = jsonText.match(/\{[\s\S]*"workers"[\s\S]*\}/)
 			if (jsonMatch) {
 				jsonText = jsonMatch[0]
 			}
-			
+
 			console.log("📋 Extracted JSON:", jsonText)
-			
+
 			const parsed = JSON.parse(jsonText)
 			this.supervisorState.teamSpec = parsed.workers || []
-			
+
 			console.log("✅ Team spec parsed:", this.supervisorState.teamSpec)
-			
+
 			this.onTeamCreated?.(this.supervisorState.teamSpec)
 			return this.supervisorState.teamSpec
 		} catch (error) {
 			console.error("❌ Failed to parse team specification:", error)
 			console.error("Raw response was:", response)
-			
+
 			// Fallback: create a default team
 			const defaultTeam: WorkerSpec[] = [
 				{ workerType: "backend", count: 1, reason: "Default backend worker" },
 				{ workerType: "frontend", count: 1, reason: "Default frontend worker" },
 			]
-			
+
 			console.log("⚠️ Using default team:", defaultTeam)
 			this.supervisorState.teamSpec = defaultTeam
 			this.onTeamCreated?.(defaultTeam)
@@ -198,20 +212,24 @@ Respond with the JSON now:`
 	/**
 	 * Delegate task to specific worker
 	 */
-	async delegateTask(workerId: string, task: string, context: string): Promise<TaskAssignment> {
+	async delegateTask(workerId: string, task: string, context: string, outputDir?: string): Promise<TaskAssignment> {
 		// kilocode_change start
 		const assignment: TaskAssignment = {
 			workerId,
 			task,
 			context,
+			outputDir, // kilocode_change - Pass folder decision to worker
 			assignedAt: Date.now(),
 			status: "in-progress",
 		}
 
 		this.supervisorState.taskAssignments.push(assignment)
-		
+
 		console.log(`📨 Delegating task to ${workerId}:`, task)
-		
+		if (outputDir) {
+			console.log(`📁 Output directory: ${outputDir}`)
+		}
+
 		// Trigger callback so the team can assign the task
 		this.onTaskAssigned?.(assignment)
 
@@ -250,7 +268,7 @@ Respond with the JSON now:`
 		// This ensures progress goes 50% → 75% → 100% as tasks complete
 		const completionRatio = completedTasks / totalTasks
 		const progressPercentage = 50 + Math.round(completionRatio * 50)
-		
+
 		this.supervisorState.progressPercentage = progressPercentage
 		this.onProgressUpdate?.(progressPercentage)
 		// kilocode_change end
@@ -383,21 +401,73 @@ Respond with the JSON now:`
 			const jsonMatch = jsonText.match(/\{[\s\S]*"tasks"[\s\S]*\}/)
 			if (jsonMatch) jsonText = jsonMatch[0]
 
-		const parsed = JSON.parse(jsonText)
-		const tasks = parsed.tasks || []
+			const parsed = JSON.parse(jsonText)
+			const tasks = parsed.tasks || []
 
-		console.log("✅ Parsed tasks:", JSON.stringify(tasks, null, 2))
-		
-		// Validate: ensure all workers have tasks
-		const assignedWorkers = new Set(tasks.map(t => t.workerId))
-		const missingWorkers = this.supervisorState.workerIds.filter(id => !assignedWorkers.has(id))
-		if (missingWorkers.length > 0) {
-			console.warn(`⚠️ Warning: ${missingWorkers.length} workers not assigned tasks:`, missingWorkers)
-		}
-		
-		// Delegate tasks to workers
+			console.log("✅ Parsed tasks:", JSON.stringify(tasks, null, 2))
+
+			// Validate: ensure all workers have tasks
+			const assignedWorkers = new Set(tasks.map((t) => t.workerId))
+			const missingWorkers = this.supervisorState.workerIds.filter((id) => !assignedWorkers.has(id))
+			if (missingWorkers.length > 0) {
+				console.warn(`⚠️ Warning: ${missingWorkers.length} workers not assigned tasks:`, missingWorkers)
+			}
+
+			// Delegate tasks to workers
 			this.onProgressUpdate?.(35) // Work plan created
-			
+
+			// kilocode_change start - AI decides folder structure based on task parallelism
+			const folderPrompt = `Purpose: ${this.supervisorState.purpose.description}
+
+Tasks assigned:
+${tasks.map((t, i) => `${i + 1}. Worker ${i + 1}: ${t.task} ${t.dependencies?.length ? `(depends on: ${t.dependencies.join(", ")})` : "(parallel)"}`).join("\n")}
+
+ANALYZE FOLDER STRUCTURE NEEDS:
+
+Base folder will be: projects/${this.supervisorState.purpose.description.toLowerCase().replace(/\s+/g, "-").substring(0, 30)}
+
+Should each worker use:
+A) SHARED - All workers write to same base folder (sequential work, building on each other)
+B) ISOLATED - Each worker gets subfolder (parallel work, different components)
+
+Consider:
+- Do tasks build on each other? → SHARED
+- Do tasks work on different components? → ISOLATED
+- Are there dependencies between tasks? → SHARED if sequential, ISOLATED if parallel
+
+Respond with JSON:
+{
+  "strategy": "SHARED" or "ISOLATED",
+  "folders": ["folder-for-task-1", "folder-for-task-2", ...],
+  "reasoning": "why you chose this"
+}
+
+If SHARED, all folders should be "" (empty string, meaning base folder).
+If ISOLATED, provide descriptive subfolders like "auth", "frontend", "tests".
+
+Respond with JSON now:`
+
+			const folderResponse = await this.sendMessage(folderPrompt)
+			let folderJson = folderResponse.trim()
+			if (folderJson.includes("```")) {
+				const match = folderJson.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/)
+				if (match) folderJson = match[1]
+			}
+
+			const folderDecision = JSON.parse(folderJson)
+			const baseFolder = `projects/${this.supervisorState.purpose.description.toLowerCase().replace(/\s+/g, "-").substring(0, 30)}`
+
+			console.log(`📁 Folder strategy: ${folderDecision.strategy}`)
+			console.log(`💭 Reasoning: ${folderDecision.reasoning}`)
+
+			// Assign folders to tasks
+			tasks.forEach((task: any, index: number) => {
+				const subfolder = folderDecision.folders?.[index] || ""
+				task.outputDir = subfolder ? `${baseFolder}/${subfolder}` : baseFolder
+				console.log(`  → ${task.workerId}: ${task.outputDir}`)
+			})
+			// kilocode_change end
+
 			// Execute tasks with dependency management
 			await this.executeTasksWithDependencies(tasks)
 
@@ -409,11 +479,11 @@ Respond with the JSON now:`
 			console.error("Error details:", error instanceof Error ? error.message : String(error))
 			// Fallback: assign simple tasks in parallel
 			console.log("⚠️ Using fallback task assignment (parallel)")
-			const fallbackTasks = this.supervisorState.workerIds.map(workerId => ({
+			const fallbackTasks = this.supervisorState.workerIds.map((workerId) => ({
 				workerId,
 				task: `Work on: ${this.supervisorState.purpose.description}`,
 				context: "Contribute to completing the purpose",
-				dependencies: [] as string[]
+				dependencies: [] as string[],
 			}))
 			await this.executeTasksWithDependencies(fallbackTasks)
 		}
@@ -424,12 +494,12 @@ Respond with the JSON now:`
 	 * Execute tasks with intelligent parallelization based on dependencies
 	 */
 	private async executeTasksWithDependencies(
-		tasks: Array<{ workerId: string; task: string; context: string; dependencies?: string[] }>
+		tasks: Array<{ workerId: string; task: string; context: string; dependencies?: string[]; outputDir?: string }>,
 	): Promise<void> {
 		// kilocode_change start
 		const completed = new Set<string>()
 		const inProgress = new Map<string, Promise<void>>()
-		
+
 		// Process tasks in waves based on dependencies
 		while (completed.size < tasks.length) {
 			// Find tasks that can start now (dependencies met)
@@ -437,7 +507,7 @@ Respond with the JSON now:`
 				(task) =>
 					!completed.has(task.workerId) &&
 					!inProgress.has(task.workerId) &&
-					(task.dependencies || []).every((dep) => completed.has(dep))
+					(task.dependencies || []).every((dep) => completed.has(dep)),
 			)
 
 			if (readyTasks.length === 0) {
@@ -450,27 +520,33 @@ Respond with the JSON now:`
 				break
 			}
 
-		console.log(
-			`🔄 Starting ${readyTasks.length} task(s) in parallel: ${readyTasks.map((t) => t.workerId).join(", ")}`
-		)
+			console.log(
+				`🔄 Starting ${readyTasks.length} task(s) in parallel: ${readyTasks.map((t) => t.workerId).join(", ")}`,
+			)
 
-		// Start all ready tasks in parallel
-		const startTime = Date.now()
-		for (const task of readyTasks) {
-			const taskStartTime = Date.now()
-			const promise = this.delegateTask(task.workerId, task.task, task.context || "").then(() => {
-				const duration = ((Date.now() - taskStartTime) / 1000).toFixed(1)
-				completed.add(task.workerId)
-				inProgress.delete(task.workerId)
-				console.log(`✅ Task completed: ${task.workerId} in ${duration}s (${completed.size}/${tasks.length})`)
-			})
-			inProgress.set(task.workerId, promise)
-		}
-		
-		// If multiple tasks started, this proves they're running in parallel
-		if (readyTasks.length > 1) {
-			console.log(`⚡ ${readyTasks.length} tasks started in ${Date.now() - startTime}ms (parallel execution initiated)`)
-		}			// Wait for all tasks in this wave to complete before starting next wave
+			// Start all ready tasks in parallel
+			const startTime = Date.now()
+			for (const task of readyTasks) {
+				const taskStartTime = Date.now()
+				const promise = this.delegateTask(task.workerId, task.task, task.context || "", task.outputDir).then(
+					() => {
+						const duration = ((Date.now() - taskStartTime) / 1000).toFixed(1)
+						completed.add(task.workerId)
+						inProgress.delete(task.workerId)
+						console.log(
+							`✅ Task completed: ${task.workerId} in ${duration}s (${completed.size}/${tasks.length})`,
+						)
+					},
+				)
+				inProgress.set(task.workerId, promise)
+			}
+
+			// If multiple tasks started, this proves they're running in parallel
+			if (readyTasks.length > 1) {
+				console.log(
+					`⚡ ${readyTasks.length} tasks started in ${Date.now() - startTime}ms (parallel execution initiated)`,
+				)
+			} // Wait for all tasks in this wave to complete before starting next wave
 			await Promise.all(Array.from(inProgress.values()))
 		}
 

@@ -96,9 +96,10 @@ import { truncateConversationIfNeeded } from "../sliding-window"
 import { ClineProvider } from "../webview/ClineProvider"
 import { MultiSearchReplaceDiffStrategy } from "../diff/strategies/multi-search-replace"
 import { MultiFileSearchReplaceDiffStrategy } from "../diff/strategies/multi-file-search-replace"
-// kilocode_change start - Society Agent logging
+// kilocode_change start - Society Agent integration
 import type { AgentMetadata } from "../../services/society-agent/types"
 import { createAgentLogger, type SocietyAgentLogger } from "../../services/society-agent/logger"
+import { SocietyManager } from "../../services/society-agent/society-manager"
 // kilocode_change end
 import {
 	type ApiMessage,
@@ -302,8 +303,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	enableBridge: boolean
 
 	// Message Queue Service
-	// kilocode_change start - Society Agent logging
+	// kilocode_change start - Society Agent integration
 	agentLogger?: SocietyAgentLogger
+	public agentMetadata?: AgentMetadata // kilocode_change: metadata for worker agents
+	private societyManager?: SocietyManager // kilocode_change: multi-agent coordinator
 	// kilocode_change end
 	public readonly messageQueueService: MessageQueueService
 	private messageQueueStateChangedHandler: (() => void) | undefined
@@ -666,7 +669,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		return readApiMessages({ taskId: this.taskId, globalStoragePath: this.globalStoragePath })
 	}
 
-	private async addToApiConversationHistory(message: Anthropic.MessageParam) {
+	// kilocode_change - Made public for society agent message injection
+	async addToApiConversationHistory(message: Anthropic.MessageParam) {
 		// kilocode_change start: prevent consecutive same-role messages, this happens when returning from subtask
 		const lastMessage = this.apiConversationHistory.at(-1)
 		if (lastMessage && lastMessage.role === message.role) {
@@ -1898,11 +1902,49 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		}
 	}
 
+	// kilocode_change start - Society Agent multi-agent detection
+	/**
+	 * Determines if task requires multi-agent Society Agent system
+	 * Only called for main KiloCode agent (not worker agents)
+	 */
+	private async shouldUseSocietyAgent(userContent: Anthropic.Messages.ContentBlockParam[]): Promise<boolean> {
+		// Worker agents never spawn more agents
+		if (this.agentMetadata) {
+			return false
+		}
+
+		// Extract task text
+		const taskText = userContent
+			.filter((block): block is { type: "text"; text: string } => block.type === "text")
+			.map((block) => block.text)
+			.join("\n")
+			.toLowerCase()
+
+		// Explicit multi-agent triggers
+		const multiAgentKeywords = [
+			"use multiple agents",
+			"use multi-agent",
+			"spawn agents",
+			"create agents",
+			"use society agent",
+			"delegate to agents",
+		]
+
+		if (multiAgentKeywords.some((keyword) => taskText.includes(keyword))) {
+			return true
+		}
+
+		// Future: Add complexity analysis via API call
+		// For now, only activate on explicit request
+		return false
+	}
+	// kilocode_change end
+
 	public async recursivelyMakeClineRequests(
 		userContent: Anthropic.Messages.ContentBlockParam[],
 		includeFileDetails: boolean = false,
 	): Promise<boolean> {
-		// kilocode_change start - Society Agent logging
+		// kilocode_change start - Society Agent integration
 		if (this.agentLogger) {
 			try {
 				this.agentLogger.logAction("agentic_loop_started", {
@@ -1913,6 +1955,83 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			} catch (error) {
 				// Non-blocking
 				console.error("Agent logger error:", error)
+			}
+		}
+
+		// Check if task should use multi-agent system
+		// Only check on first iteration (not already a worker agent)
+		if (!this.agentMetadata && (await this.shouldUseSocietyAgent(userContent))) {
+			const provider = this.providerRef.deref()
+			if (provider) {
+				provider.log(`[Society Agent] Task complexity requires multi-agent system`)
+
+				// Initialize society manager if not already done
+				if (!this.societyManager) {
+					// kilocode_change start - Read working directory from settings
+					const config = vscode.workspace.getConfiguration("kilo-code")
+					const customWorkDir = config.get<string>("societyAgent.workingDirectory")
+					const workspacePath = customWorkDir || this.cwd
+					// kilocode_change end
+
+					this.societyManager = new SocietyManager({
+						apiHandler: this.api,
+						workspacePath: workspacePath, // kilocode_change
+						onMessage: (purposeId, agentId, message) => {
+							// Forward agent messages to webview
+							provider.postMessageToWebview({
+								type: "society-agent-message",
+								purposeId,
+								agentId,
+								message,
+								timestamp: Date.now(),
+							})
+						},
+						onStatusChange: (purposeId, agentId, status, task) => {
+							// Forward status updates to webview
+							provider.postMessageToWebview({
+								type: "society-agent-status",
+								purposeId,
+								agentId,
+								status,
+								task,
+								timestamp: Date.now(),
+							})
+						},
+					})
+				}
+
+				// Extract task text from userContent
+				const taskText = userContent
+					.filter((block): block is { type: "text"; text: string } => block.type === "text")
+					.map((block) => block.text)
+					.join("\n")
+
+				// Delegate to Society Agent system
+				provider.log(`[Society Agent] Delegating to multi-agent system: "${taskText.slice(0, 100)}..."`)
+
+				await this.say(
+					"text",
+					"🤖 **Multi-Agent Mode Activated**\n\nThis task requires specialized agents. Creating team...",
+				)
+
+				try {
+					const result = await this.societyManager.startPurpose({
+						description: taskText,
+						workspacePath: this.cwd,
+						contextItems: [], // Can add attachments here
+					})
+
+					await this.say("text", `✅ **Multi-Agent Execution Complete**\n\n${result}`)
+					await this.say("completion_result", result)
+
+					return true
+				} catch (error) {
+					await this.say(
+						"error",
+						`Multi-agent execution failed: ${error instanceof Error ? error.message : String(error)}`,
+					)
+					return false
+				}
 			}
 		}
 		// kilocode_change end

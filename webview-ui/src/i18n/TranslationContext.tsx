@@ -18,8 +18,11 @@ export const TranslationProvider: React.FC<{ children: ReactNode }> = ({ childre
 	const { i18n } = useTranslation()
 	// Get the extension state directly - it already contains all state properties
 	// kilocode_change start - make optional for Society Agent view
+	// Note: This pattern is needed to support both standalone and extension contexts
+	// TODO: Refactor to use proper optional context pattern
 	let extensionState: ReturnType<typeof useExtensionState> | null = null
 	try {
+		// eslint-disable-next-line react-hooks/rules-of-hooks
 		extensionState = useExtensionState()
 	} catch (_error) {
 		// Not in ExtensionStateContext - use default language

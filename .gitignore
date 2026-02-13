@@ -29,6 +29,9 @@ docs/_site/
 .env.*
 !.env.*.sample
 
+# kilocode_change - Society Agent outputs
+/projects/
+
 # Logging
 logs
 *.log
@@ -41,6 +44,11 @@ logs
 .aider*
 .docker-cache/
 .society-agent/
+
+# kilocode_change - Agent workspaces (separate git repos)
+/supervisor-workspace/
+/backend-worker/
+/frontend-worker/
 
 # Turborepo
 .turbo

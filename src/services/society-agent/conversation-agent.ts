@@ -195,15 +195,18 @@ export class ConversationAgent {
 	/**
 	 * Assign task to agent
 	 */
-	async assignTask(task: string): Promise<void> {
+	async assignTask(task: string, outputDir?: string): Promise<void> {
 		// kilocode_change start
 		this.state.currentTask = task
 		this.state.status = "working"
 
 		console.log(`✅ ${this.state.identity.id} received task: ${task}`)
+		if (outputDir) {
+			console.log(`📁 ${this.state.identity.id} will use directory: ${outputDir}`)
+		}
 
 		// Start working on the task
-		this.executeTask(task).catch((error) => {
+		this.executeTask(task, outputDir).catch((error) => {
 			console.error(`❌ ${this.state.identity.id} task execution failed:`, error)
 			this.state.status = "error"
 		})
@@ -213,39 +216,259 @@ export class ConversationAgent {
 	/**
 	 * Execute the assigned task
 	 */
-	private async executeTask(task: string): Promise<void> {
-		// kilocode_change start
+	private async executeTask(task: string, supervisorOutputDir?: string): Promise<void> {
+		// kilocode_change start - LLM-driven intent and folder decisions
 		console.log(`🚀 ${this.state.identity.id} starting work on task...`)
 
-		// Check if task mentions delays/timing
-		const hasDelay = /\d+\s*seconds?/i.test(task) || /delay/i.test(task) || /apart/i.test(task)
-		const delayMatch = task.match(/(\d+)\s*seconds?/i)
-		const delaySeconds = delayMatch ? parseInt(delayMatch[1]) : 0
+		// Step 1: Ask LLM to classify the task intent
+		const intentPrompt = `Task: "${task}"
 
-		// Ask the LLM what to create
-		const workPrompt = `Your task: ${task}
+What type of response does this task require?
 
-You must create the ACTUAL FILES directly in your response. Do NOT create scripts or programs that would create files later.
+A) TEXT_ONLY - Just answer with text/output (e.g., "Print numbers 1 to 5", "What is X?", "Calculate sum")
+B) CREATE_FILES - Create actual files in workspace (e.g., "Create a Python program", "Build REST API", "Generate test files")
+C) EXECUTE_AND_SHOW - Write code, execute it, show output (e.g., "Run a simulation", "Process data and show results")
+
+Respond with ONLY the letter (A, B, or C):`
+
+		try {
+			const intentResponse = await this.sendMessage(intentPrompt)
+			const intent = intentResponse.trim().toUpperCase().charAt(0)
+
+			console.log(
+				`🤔 ${this.state.identity.id} classified task as: ${intent === "A" ? "TEXT_ONLY" : intent === "B" ? "CREATE_FILES" : "EXECUTE_AND_SHOW"}`,
+			)
+
+			// Step 2: For file creation, ask AI where to put files
+			// kilocode_change - Use dedicated projects/ directory to separate from extension code
+			const BASE_OUTPUT_DIR = "projects"
+			let outputDir = supervisorOutputDir || `${BASE_OUTPUT_DIR}/temp`
+
+			// Only run folder decision if supervisor didn't already decide
+			if (!supervisorOutputDir && (intent === "B" || intent === "C")) {
+				// kilocode_change - Check if user explicitly specified a folder in the task
+				const explicitPathMatch = task.match(
+					/(?:in|to|at|into|under)\s+(?:folder\s+)?["`']?([a-zA-Z0-9_\-\/]+)["`']?/i,
+				)
+				if (explicitPathMatch) {
+					const userPath = explicitPathMatch[1]
+					outputDir = userPath.startsWith(BASE_OUTPUT_DIR) ? userPath : `${BASE_OUTPUT_DIR}/${userPath}`
+					console.log(`📁 User specified folder: ${outputDir}`)
+				} else {
+					// No explicit path - run AI folder decision
+					// Get workspace context
+					const fs = await import("fs/promises")
+					const path = await import("path")
+					let workspaceStructure = "Empty workspace"
+					let sessionContext = "No previous work"
+
+					try {
+						// Try to read session context
+						const contextPath = path.join(this.workspacePath, `${BASE_OUTPUT_DIR}/.session-context.json`)
+						const contextData = await fs.readFile(contextPath, "utf-8")
+						const context = JSON.parse(contextData)
+						sessionContext = `Current project: ${context.currentProject || "none"}
+Last 3 purposes:
+${
+	context.purposeHistory
+		?.slice(-3)
+		.map((p: any) => `  • "${p.description}" → ${p.path}`)
+		.join("\n") || "  (none)"
+}`
+					} catch {
+						// No context yet, first purpose
+					}
+
+					try {
+						// Get workspace structure (projects/ directory only)
+						const projectsPath = path.join(this.workspacePath, BASE_OUTPUT_DIR)
+						try {
+							await fs.mkdir(projectsPath, { recursive: true })
+						} catch {
+							// Directory exists
+						}
+						const entries = await fs.readdir(projectsPath, { withFileTypes: true })
+						const dirs = entries
+							.filter((e) => e.isDirectory() && !e.name.startsWith("."))
+							.map((e) => e.name)
+						workspaceStructure = dirs.length > 0 ? dirs.join(", ") : "Empty workspace"
+					} catch {
+						// Can't read workspace
+					}
+
+					const folderPrompt = `Task: "${task}"
+
+WORKSPACE CONTEXT:
+${sessionContext}
+
+EXISTING PROJECTS:
+${workspaceStructure}
+
+ANALYZE THE USER'S INTENT:
+
+1. CHECK FOR EXPLICIT PROJECT MENTION:
+   - Does the user mention a specific project name?
+   - Example: "Add auth to the calculator" → mentions "calculator"
+   - Example: "Improve the e-commerce API" → mentions "e-commerce"
+
+2. CHECK FOR EXISTING PROJECT MATCH:
+   - Does the task relate to an existing project?
+   - Look for keywords in existing project names
+   - Example: task mentions "calculator", folder "calculator" exists → REUSE IT
+
+3. CHECK CONTINUATION:
+   - If current project exists and user doesn't mention switching → CONTINUE
+   - Only create NEW if explicitly requested or clearly different
+
+RULES:
+- PREFER REUSING existing folders over creating duplicates
+- Match keywords: "calculator" matches "calculator", "calc", "simple-calculator"
+- If user says "the X project", reuse existing X folder
+- If current project active and task doesn't mention new project → CONTINUE
+- Only create NEW when: explicitly requested, or no matching folder exists
+
+Respond with JSON:
+{
+  "action": "continue|reuse|new",
+  "path": "project-name",
+  "projectName": "descriptive-name",
+  "reasoning": "why you chose this",
+  "matched": "folder-name-if-reusing"
+}
+
+Examples:
+- Task: "Add tests to calculator", Existing: ["calculator"] → {"action": "reuse", "path": "calculator", "matched": "calculator"}
+- Task: "Improve the API", Current: "ecommerce-api" → {"action": "continue", "path": "ecommerce-api"}
+- Task: "Create new mobile app" → {"action": "new", "path": "mobile-app"}
+- Task: "Fix bugs", Current: "calculator", Existing: ["calculator"] → {"action": "continue", "path": "calculator"}
+
+Respond with JSON now:`
+
+					const folderResponse = await this.sendMessage(folderPrompt)
+					let folderJson = folderResponse.trim()
+					if (folderJson.includes("```")) {
+						const match = folderJson.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/)
+						if (match) folderJson = match[1]
+					}
+
+					const folderDecision = JSON.parse(folderJson)
+					outputDir = `${BASE_OUTPUT_DIR}/${folderDecision.path}`
+
+					const actionLabel =
+						folderDecision.action === "reuse"
+							? "REUSE"
+							: folderDecision.action === "continue"
+								? "CONTINUE"
+								: "NEW"
+					console.log(`📁 AI decided: ${actionLabel} → ${outputDir}`)
+					console.log(`💭 Reasoning: ${folderDecision.reasoning}`)
+					if (folderDecision.matched) {
+						console.log(`♻️ Reusing existing folder: ${folderDecision.matched}`)
+					}
+
+					// Update session context
+					try {
+						const contextPath = path.join(this.workspacePath, `${BASE_OUTPUT_DIR}/.session-context.json`)
+						await fs.mkdir(path.dirname(contextPath), { recursive: true })
+
+						let context: any = { purposeHistory: [] }
+						try {
+							const existing = await fs.readFile(contextPath, "utf-8")
+							context = JSON.parse(existing)
+						} catch {
+							// New context file
+						}
+
+						context.currentProject = folderDecision.projectName
+						context.currentProjectPath = outputDir
+						context.purposeHistory = context.purposeHistory || []
+						context.purposeHistory.push({
+							description: task,
+							path: outputDir,
+							timestamp: Date.now(),
+						})
+
+						// Keep only last 10 purposes
+						if (context.purposeHistory.length > 10) {
+							context.purposeHistory = context.purposeHistory.slice(-10)
+						}
+
+						await fs.writeFile(contextPath, JSON.stringify(context, null, 2))
+						console.log(`💾 Updated session context: project = ${folderDecision.projectName}`)
+					} catch (error) {
+						console.warn(`⚠️ Could not update session context:`, error)
+					}
+				} // kilocode_change - Close else block for AI folder decision
+			}
+
+			// Handle based on intent
+			if (intent === "A") {
+				// TEXT_ONLY: Just get the answer and log it
+				const answer = await this.sendMessage(task)
+				console.log(`✅ ${this.state.identity.id} response:`, answer)
+				this.addMessage("assistant", answer)
+
+				// Save response to a results file
+				const resultsPath = `${outputDir}/response.txt`
+				await this.createFile(resultsPath, answer)
+
+				this.setStatus("completed")
+				return
+			}
+
+			if (intent === "C") {
+				// EXECUTE_AND_SHOW: Create code, run it, capture output
+				const codePrompt = `${task}
+
+Write code to accomplish this task, then I'll execute it and show you the output.
+
+Respond with a JSON object:
+{
+  "code": "your code here",
+  "language": "python|javascript|bash",
+  "filename": "script.py"
+}
+
+Respond with ONLY the JSON:`
+
+				const codeResponse = await this.sendMessage(codePrompt)
+				let jsonText = codeResponse.trim()
+				if (jsonText.includes("```")) {
+					const match = jsonText.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/)
+					if (match) jsonText = match[1]
+				}
+
+				const codeData = JSON.parse(jsonText)
+				// Use AI-decided output directory
+				await this.createFile(`${outputDir}/${codeData.filename}`, codeData.code)
+
+				// Note: Actual execution would happen here in full implementation
+				console.log(`✅ ${this.state.identity.id} created executable code at ${outputDir}`)
+				this.setStatus("completed")
+				return
+			}
+
+			// B) CREATE_FILES: Original file creation logic
+			const workPrompt = `Your task: ${task}
+
+Create the ACTUAL FILES directly in your response.
 
 Respond with ONLY a JSON object listing every file to create:
 
 {
   "files": [
-    {"path": "file1.txt", "content": "actual content"},
-    {"path": "file2.txt", "content": "actual content"},
-    {"path": "file3.txt", "content": "actual content"}
+    {"name": "file1.txt", "content": "actual content"},
+    {"name": "file2.txt", "content": "actual content"}
   ]
 }
 
 IMPORTANT:
-- If task says "create 10 files", list all 10 files in the JSON
 - Include the actual content for each file
-- Do NOT create helper scripts or package.json unless explicitly required
-- Create data files directly
+- Use just the filename, not full path (we'll handle directory placement)
+- Do NOT create helper scripts unless explicitly required
 
 Respond with the complete JSON now:`
 
-		try {
 			const response = await this.sendMessage(workPrompt)
 			console.log(`💡 ${this.state.identity.id} received implementation plan`)
 			console.log(`📄 ${this.state.identity.id} LLM response:`, response.substring(0, 500))
@@ -267,27 +490,21 @@ Respond with the complete JSON now:`
 				console.warn(`Raw JSON: ${jsonText}`)
 			}
 
-			// Create the files with optional delays
-			for (let i = 0; i < files.length; i++) {
-				const file = files[i]
-				await this.createFile(file.path, file.content)
+			console.log(`📁 ${this.state.identity.id} creating files in: ${outputDir}`)
 
-				// Add delay between files if requested
-				if (hasDelay && delaySeconds > 0 && i < files.length - 1) {
-					console.log(`⏳ ${this.state.identity.id} waiting ${delaySeconds} seconds before next file...`)
-					await new Promise((resolve) => setTimeout(resolve, delaySeconds * 1000))
-				}
+			// Create the files in AI-decided directory
+			for (const file of files) {
+				const filePath = `${outputDir}/${file.name || file.path}` // Support both formats
+				await this.createFile(filePath, file.content)
 			}
 
-			console.log(`✅ ${this.state.identity.id} created ${files.length} files`)
+			console.log(`✅ ${this.state.identity.id} created ${files.length} files in ${outputDir}`)
 			this.setStatus("completed")
 		} catch (error) {
 			console.error(`❌ ${this.state.identity.id} failed to execute task:`, error)
 			// Fallback: create a simple status file
-			await this.createFile(
-				`${this.state.identity.id}-status.txt`,
-				`Task: ${task}\nStatus: Attempted but encountered error\nError: ${error}`,
-			)
+			const errorDir = `.society-agent/outputs/error-${Date.now()}`
+			await this.createFile(`${errorDir}/status.txt`, `Task: ${task}\nStatus: Error\nError: ${error}`)
 			this.setStatus("completed")
 		}
 		// kilocode_change end

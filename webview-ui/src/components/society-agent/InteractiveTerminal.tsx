@@ -20,15 +20,22 @@ interface InteractiveTerminalProps {
 	projectId?: string
 	cwd?: string
 	onCommandExecute?: (command: string) => void
+	_onClose?: () => void // kilocode_change - unused but kept for future use
 }
 
-export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({ projectId, cwd, onCommandExecute }) => {
+export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
+	projectId,
+	cwd,
+	onCommandExecute,
+	_onClose,
+}) => {
+	// kilocode_change
 	const terminalRef = useRef<HTMLDivElement>(null)
 	const xtermRef = useRef<Terminal | null>(null)
 	const fitAddonRef = useRef<FitAddon | null>(null)
 	const socketRef = useRef<Socket | null>(null)
 	const [connected, setConnected] = useState(false)
-	const [currentCommand, setCurrentCommand] = useState("")
+	const [_currentCommand, _setCurrentCommand] = useState("") // kilocode_change - unused but kept for future use
 	const [commandHistory, setCommandHistory] = useState<string[]>([])
 	const [historyIndex, setHistoryIndex] = useState(-1)
 	const workingDirRef = useRef(cwd || "/workspace")
@@ -236,6 +243,8 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({ projec
 			socket.disconnect()
 			terminal.dispose()
 		}
+		// kilocode_change - Terminal setup should run once, dependencies would cause unwanted re-renders
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [])
 
 	const executeCommand = async (command: string) => {

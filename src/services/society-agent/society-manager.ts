@@ -10,6 +10,7 @@ import { AgentTeam, AgentTeamConfig } from "./agent-team"
 import { Purpose } from "./supervisor-agent"
 import { PurposeAnalyzer, PurposeContext } from "./purpose-analyzer"
 import { ApiHandler } from "../../api"
+import { ExecutionLogger } from "./execution-logger"
 
 // kilocode_change start
 export interface ActivePurpose {
@@ -45,6 +46,7 @@ export class SocietyManager {
 	// kilocode_change start
 	private state: SocietyState
 	private config: SocietyManagerConfig
+	private logger: ExecutionLogger
 	// kilocode_change end
 
 	constructor(config: SocietyManagerConfig) {
@@ -55,6 +57,10 @@ export class SocietyManager {
 			totalAgentsCreated: 0,
 		}
 		this.config = config
+		this.logger = new ExecutionLogger({
+			workspaceRoot: config.workspacePath || process.cwd(),
+			enableConsole: true,
+		})
 		// kilocode_change end
 	}
 
@@ -86,6 +92,16 @@ export class SocietyManager {
 			successCriteria: purposeContext.successCriteria,
 			createdAt: Date.now(),
 		}
+
+		// kilocode_change - AI decides if task is simple enough for direct execution
+		const complexityCheck = await this.checkComplexity(purpose)
+
+		if (complexityCheck.isSimple) {
+			console.log("🎯 Simple task detected - using direct execution (no multi-agent overhead)")
+			return await this.executeSimpleTask(purpose, complexityCheck.workerType)
+		}
+
+		console.log("🏢 Complex task - forming multi-agent team")
 
 		// Analyze purpose
 		const analysis = PurposeAnalyzer.analyze(purposeContext)
@@ -136,14 +152,15 @@ export class SocietyManager {
 			},
 			onStatusChange: (agentId, status) => {
 				// Get current task for this agent
-				const agent = Array.from(this.state.activePurposes.get(purpose.id)?.team.getState().workers.values() || [])
-					.find(w => w.getIdentity().id === agentId)
+				const agent = Array.from(
+					this.state.activePurposes.get(purpose.id)?.team.getState().workers.values() || [],
+				).find((w) => w.getIdentity().id === agentId)
 				const task = agent?.getState().currentTask
 				this.config.onStatusChange?.(purpose.id, agentId, status, task)
 			},
 			onProgressUpdate: (progress) => {
 				this.config.onProgressUpdate?.(purpose.id, progress)
-				
+
 				// Auto-complete when reaching 100% (check if purpose still exists to avoid double completion)
 				if (progress === 100 && this.state.activePurposes.has(purpose.id)) {
 					setTimeout(() => {
@@ -263,6 +280,108 @@ export class SocietyManager {
 		activePurpose.team.dispose()
 		this.state.activePurposes.delete(purposeId)
 		// kilocode_change end
+	}
+
+	/**
+	 * Check if task is simple enough for direct execution
+	 * kilocode_change - AI decides complexity
+	 */
+	private async checkComplexity(purpose: Purpose): Promise<{ isSimple: boolean; workerType: string }> {
+		const { buildApiHandler } = require("../../api")
+		const providerSettings = this.config.apiHandler
+			? null
+			: require("../../core/webview/ClineProvider").getProviderSettings?.()
+		const apiHandler = this.config.apiHandler || buildApiHandler(providerSettings)
+
+		// Quick LLM call to determine complexity
+		const prompt = `Analyze this task:
+
+"${purpose.description}"
+
+Is this a SIMPLE task that one person could do quickly (1-2 files, straightforward)?
+Or COMPLEX requiring multiple specialists (multiple components, integration, testing)?
+
+Examples of SIMPLE:
+- "Create a calculator"
+- "Write a Python script to sort data"
+- "Build a todo list"
+
+Examples of COMPLEX:
+- "Build e-commerce site with auth and payments"
+- "Create REST API with tests and deployment"
+- "Full stack app with frontend and backend"
+
+Respond with JSON:
+{
+  "isSimple": true/false,
+  "workerType": "backend|frontend|custom",
+  "reasoning": "why"
+}
+
+Respond with ONLY the JSON:`
+
+		try {
+			const response = await apiHandler.createMessage("anthropic", [{ role: "user", content: prompt }])
+
+			let jsonText = response.content[0].text.trim()
+			if (jsonText.includes("```")) {
+				const match = jsonText.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/)
+				if (match) jsonText = match[1]
+			}
+
+			const result = JSON.parse(jsonText)
+			console.log(`🤔 Complexity: ${result.isSimple ? "SIMPLE" : "COMPLEX"} - ${result.reasoning}`)
+			return { isSimple: result.isSimple, workerType: result.workerType || "backend" }
+		} catch (error) {
+			console.warn("⚠️ Complexity check failed, defaulting to complex:", error)
+			return { isSimple: false, workerType: "backend" }
+		}
+	}
+
+	/**
+	 * Execute simple task with single agent (no multi-agent overhead)
+	 * kilocode_change - Direct execution path
+	 */
+	private async executeSimpleTask(purpose: Purpose, workerType: string): Promise<string> {
+		const { ConversationAgent } = require("./conversation-agent")
+
+		// Create single agent
+		const agent = new ConversationAgent({
+			identity: {
+				id: `simple-${Date.now()}`,
+				role: "worker",
+				workerType,
+				capabilities: ["file-write", "code-analysis"],
+				createdAt: Date.now(),
+			},
+			apiHandler: this.config.apiHandler,
+			workspacePath: this.config.workspacePath,
+		})
+
+		this.state.totalAgentsCreated++
+
+		// Report progress
+		this.config.onPurposeStarted?.(purpose)
+		this.config.onTeamFormed?.(purpose.id, 1) // Just 1 agent
+		this.config.onProgressUpdate?.(purpose.id, 50)
+
+		// Execute directly
+		await agent.assignTask(purpose.description)
+
+		// Wait for completion (poll status)
+		await new Promise((resolve) => {
+			const checkInterval = setInterval(() => {
+				if (agent.getState().status === "completed") {
+					clearInterval(checkInterval)
+					resolve(undefined)
+				}
+			}, 500)
+		})
+
+		this.config.onProgressUpdate?.(purpose.id, 100)
+		this.config.onPurposeCompleted?.(purpose.id, { success: true })
+
+		return purpose.id
 	}
 
 	/**

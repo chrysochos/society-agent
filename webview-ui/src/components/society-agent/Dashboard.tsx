@@ -6,12 +6,15 @@
  * controls for monitoring and intervention.
  */
 
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useRef } from "react"
 import { VSCodeButton, VSCodeProgressRing } from "@vscode/webview-ui-toolkit/react"
 import { vscode } from "../../utils/vscode"
 import { AgentCard } from "./AgentCard"
 import { InteractiveTerminal } from "./InteractiveTerminal"
 import { PurposeInput } from "./PurposeInput"
+import { TerminalPane } from "./TerminalPane"
+import { MessageDialog } from "./MessageDialog"
+import { MessageStream, type AgentMessage } from "./MessageStream"
 import "./Dashboard.css"
 
 // kilocode_change start
@@ -36,7 +39,9 @@ interface Purpose {
 interface DashboardState {
 	purpose?: Purpose
 	agents: Agent[]
+	messages: AgentMessage[]
 	selectedAgent?: Agent
+	selectedFilter: string // "all" or agent ID
 	showTerminal: boolean
 	showMessageDialog: boolean
 	showInteractiveTerminal: boolean
@@ -47,12 +52,15 @@ export const Dashboard: React.FC = () => {
 	// kilocode_change start
 	const [state, setState] = useState<DashboardState>({
 		agents: [],
+		messages: [],
+		selectedFilter: "all",
 		showTerminal: false,
 		showMessageDialog: false,
 		showInteractiveTerminal: false,
 	})
 
 	const [showPurposeInput, setShowPurposeInput] = useState(true)
+	const messageStreamRef = useRef<HTMLDivElement>(null)
 
 	// Handle messages from extension
 	useEffect(() => {
@@ -120,12 +128,75 @@ export const Dashboard: React.FC = () => {
 					}))
 					break
 
+				case "terminal-output": // kilocode_change - Handle terminal output
+					setState((prev) => ({
+						...prev,
+						agents: prev.agents.map((agent) =>
+							agent.id === message.agentId
+								? {
+										...agent,
+										recentActivity: [message.output, ...agent.recentActivity.slice(0, 4)],
+									}
+								: agent,
+						),
+					}))
+					break
+
 				case "purpose-completed":
 					setState((prev) => ({
 						...prev,
 						purpose: prev.purpose ? { ...prev.purpose, status: "completed", progress: 100 } : undefined,
 					}))
+					// kilocode_change start - Show completion notification
+					if (message.result) {
+						console.log("✅ Purpose completed:", message.result)
+					}
+					// kilocode_change end
 					break
+
+				// kilocode_change start - Handle Society Agent messages
+				case "society-agent-message":
+					setState((prev) => ({
+						...prev,
+						messages: [
+							...prev.messages,
+							{
+								id: `msg-${Date.now()}-${Math.random()}`,
+								fromAgent: message.agentId,
+								toAgent: message.toAgent,
+								message: message.message,
+								timestamp: message.timestamp,
+								type: "message",
+							},
+						],
+					}))
+					break
+
+				case "society-agent-status":
+					setState((prev) => ({
+						...prev,
+						messages: [
+							...prev.messages,
+							{
+								id: `status-${Date.now()}-${Math.random()}`,
+								fromAgent: message.agentId,
+								message: `Status: ${message.status}${message.task ? ` - ${message.task}` : ""}`,
+								timestamp: message.timestamp,
+								type: "status",
+							},
+						],
+						agents: prev.agents.map((agent) =>
+							agent.id === message.agentId
+								? {
+										...agent,
+										status: message.status,
+										currentTask: message.task || agent.currentTask,
+									}
+								: agent,
+						),
+					}))
+					break
+				// kilocode_change end
 			}
 		}
 
@@ -227,8 +298,54 @@ export const Dashboard: React.FC = () => {
 					<VSCodeButton appearance="secondary" onClick={handleStopPurpose}>
 						⏹️ Stop
 					</VSCodeButton>
+					{/* kilocode_change start - Add New Purpose button (always visible) */}
+					<VSCodeButton
+						onClick={() => {
+							if (state.purpose?.status !== "completed") {
+								if (!confirm("Current purpose is still running. Start a new purpose anyway?")) {
+									return
+								}
+							}
+							setState((prev) => ({
+								...prev,
+								agents: [],
+								showTerminal: false,
+								showMessageDialog: false,
+								showInteractiveTerminal: false,
+								messages: [],
+								selectedFilter: "all",
+							}))
+							setShowPurposeInput(true)
+						}}
+						title="Start new purpose">
+						➕ New Purpose
+					</VSCodeButton>
+					{/* kilocode_change end */}
 				</div>
 			</div>
+
+			{/* kilocode_change start - Agent Filter Tabs */}
+			<div className="agent-filter-tabs">
+				<button
+					className={`filter-tab ${state.selectedFilter === "all" ? "active" : ""}`}
+					onClick={() => setState((prev) => ({ ...prev, selectedFilter: "all" }))}>
+					All Messages
+				</button>
+				{state.agents.map((agent) => (
+					<button
+						key={agent.id}
+						className={`filter-tab ${state.selectedFilter === agent.id ? "active" : ""}`}
+						onClick={() => setState((prev) => ({ ...prev, selectedFilter: agent.id }))}>
+						{agent.name}
+					</button>
+				))}
+			</div>
+
+			{/* Message Stream */}
+			<div className="message-stream-container" ref={messageStreamRef}>
+				<MessageStream messages={state.messages} filterAgent={state.selectedFilter} />
+			</div>
+			{/* kilocode_change end */}
 
 			{/* Agent Grid */}
 			<div className="agent-grid">
@@ -247,10 +364,29 @@ export const Dashboard: React.FC = () => {
 			{state.showInteractiveTerminal && (
 				<div className="terminal-section">
 					<InteractiveTerminal
-						cwd={process.cwd?.() || "/workspace"}
+						cwd="/workspace"
 						onCommandExecute={(cmd) => console.log("Executed:", cmd)}
+						onClose={() => setState((prev) => ({ ...prev, showInteractiveTerminal: false }))}
 					/>
 				</div>
+			)}
+
+			{/* Agent Terminal Pane */}
+			{state.showTerminal && state.selectedAgent && (
+				<TerminalPane
+					agent={state.selectedAgent}
+					onClose={() => setState((prev) => ({ ...prev, showTerminal: false, selectedAgent: undefined }))}
+				/>
+			)}
+
+			{/* Message Dialog */}
+			{state.showMessageDialog && state.selectedAgent && (
+				<MessageDialog
+					agent={state.selectedAgent}
+					onClose={() =>
+						setState((prev) => ({ ...prev, showMessageDialog: false, selectedAgent: undefined }))
+					}
+				/>
 			)}
 		</div>
 	)

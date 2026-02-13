@@ -104,6 +104,7 @@ const sectionNames = [
 	"prompts",
 	"ui",
 	"experimental",
+	"societyAgent", // kilocode_change
 	"language",
 	"mcp",
 	"about",
@@ -700,6 +701,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 			{ id: "prompts", icon: MessageSquare },
 			// { id: "ui", icon: Glasses }, // kilocode_change: we have our own display section
 			{ id: "experimental", icon: FlaskConical },
+			{ id: "societyAgent", icon: Bot }, // kilocode_change
 			{ id: "language", icon: Globe },
 			{ id: "mcp", icon: Server },
 			{ id: "about", icon: Info },
@@ -1118,6 +1120,56 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 							currentProfileKilocodeToken={apiConfiguration.kilocodeToken}
 						/>
 					)}
+
+					{/* Society Agent Section */}
+					{/* kilocode_change start */}
+					{activeTab === "societyAgent" && (
+						<div className="flex flex-col gap-2">
+							<SectionHeader>
+								<div className="flex items-center gap-2">
+									<Bot className="w-4" />
+									<div>Society Agent</div>
+								</div>
+							</SectionHeader>
+
+							<Section>
+								<p className="text-xs text-vscode-descriptionForeground mb-3">
+									Configure the working directory for Society Agent multi-agent system via VS Code
+									settings:
+								</p>
+								<ol className="list-decimal list-inside text-xs text-vscode-descriptionForeground space-y-2 mb-3">
+									<li>
+										Press{" "}
+										<kbd className="px-1 py-0.5 bg-vscode-textCodeBlock-background">
+											Cmd/Ctrl + ,
+										</kbd>
+									</li>
+									<li>
+										Search:{" "}
+										<code className="px-1 py-0.5 bg-vscode-textCodeBlock-background">
+											society agent working
+										</code>
+									</li>
+									<li>
+										Enter path:{" "}
+										<code className="px-1 py-0.5 bg-vscode-textCodeBlock-background">
+											/root/kilocode-test-workspace
+										</code>
+									</li>
+									<li>
+										Reload window:{" "}
+										<kbd className="px-1 py-0.5 bg-vscode-textCodeBlock-background">
+											Cmd/Ctrl + R
+										</kbd>
+									</li>
+								</ol>
+								<p className="text-xs text-vscode-descriptionForeground">
+									Leave empty to use VS Code workspace root.
+								</p>
+							</Section>
+						</div>
+					)}
+					{/* kilocode_change end */}
 
 					{/* Language Section */}
 					{activeTab === "language" && (

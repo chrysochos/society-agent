@@ -94,6 +94,14 @@ Structured logging and learning
 - [Quick Start](./SOCIETY_AGENT_QUICKSTART.md) - Get started in 5 minutes
 - [System Overview](./AGENTS.md) - Architecture and design
 
+**Configuration:**
+
+- **Model & API Key**: Society Agent uses **KiloCode's current API configuration**
+    - Configure via KiloCode's settings panel (⚙️ icon in chat)
+    - Or VS Code Settings → Search "roo-cline" → Set API provider/model/key
+    - Supports: Anthropic (Claude), OpenAI (GPT-4), OpenRouter, Bedrock, Vertex, Gemini
+    - Same model/key as main KiloCode chat - no separate configuration needed
+
 **Technical Deep Dive:**
 
 - [Architecture Models](./SOCIETY_AGENT_ARCHITECTURE_MODELS.md)

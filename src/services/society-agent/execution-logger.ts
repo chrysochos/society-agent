@@ -92,6 +92,41 @@ export class ExecutionLogger {
 		// kilocode_change end
 	}
 
+	// kilocode_change start - Agent message logging
+	/**
+	 * Log agent-to-agent message
+	 */
+	logAgentMessage(purposeId: string, fromAgent: string, toAgent: string | undefined, message: string): void {
+		this.log("info", purposeId, "agent_message", {
+			fromAgent,
+			toAgent,
+			message,
+		})
+	}
+
+	/**
+	 * Log agent status change
+	 */
+	logAgentStatus(purposeId: string, agentId: string, status: string, task?: string): void {
+		this.log("info", purposeId, "agent_status", {
+			agentId,
+			status,
+			task,
+		})
+	}
+
+	/**
+	 * Log agent result
+	 */
+	logAgentResult(purposeId: string, agentId: string, result: string, success: boolean): void {
+		this.log(success ? "info" : "error", purposeId, "agent_result", {
+			agentId,
+			result,
+			success,
+		})
+	}
+	// kilocode_change end
+
 	/**
 	 * Write log entry
 	 */

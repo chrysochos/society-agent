@@ -277,6 +277,62 @@ const getCommandsMap = ({ context, outputChannel }: RegisterCommandOptions): Rec
 			outputChannel.appendLine(`Error handling external URI: ${uriString}, error: ${error}`)
 		}
 	},
+	// kilocode_change start - Launch Society Agent workspaces
+	launchSocietyAgents: async () => {
+		try {
+			const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri
+			if (!workspaceRoot) {
+				vscode.window.showErrorMessage("No workspace folder open")
+				return
+			}
+
+			// Check if .society-agent exists
+			const path = await import("path")
+			const fs = await import("fs/promises")
+			const sharedDir = path.join(workspaceRoot.fsPath, ".society-agent")
+
+			try {
+				await fs.stat(sharedDir)
+			} catch {
+				vscode.window.showErrorMessage("No .society-agent directory found. Run 'kilo society launch' first.")
+				return
+			}
+
+			outputChannel.appendLine("[Society Agent] Opening agent workspaces...")
+
+			// Open each workspace file (not just the folder)
+			const workspaces = [
+				{ file: "supervisor-workspace/supervisor.code-workspace", name: "Supervisor" },
+				{ file: "backend-worker/backend-dev.code-workspace", name: "Backend Developer" },
+				{ file: "frontend-worker/frontend-dev.code-workspace", name: "Frontend Developer" },
+			]
+
+			for (const ws of workspaces) {
+				const wsFileUri = vscode.Uri.joinPath(workspaceRoot, ws.file)
+
+				// Check if workspace file exists
+				try {
+					await fs.stat(wsFileUri.fsPath)
+				} catch {
+					outputChannel.appendLine(`[Society Agent] Workspace file not found: ${wsFileUri.fsPath}`)
+					continue
+				}
+
+				outputChannel.appendLine(`[Society Agent] Opening ${ws.name} from ${wsFileUri.fsPath}`)
+
+				// Open the workspace file in a new window
+				await vscode.commands.executeCommand("vscode.openFolder", wsFileUri, { forceNewWindow: true })
+
+				// Wait a bit between launches
+				await delay(1500)
+			}
+
+			vscode.window.showInformationMessage("Society Agent workspaces opened! Check for new VS Code windows.")
+		} catch (error) {
+			outputChannel.appendLine(`[Society Agent] Failed to launch: ${error}`)
+			vscode.window.showErrorMessage(`Failed to launch Society Agents: ${error}`)
+		}
+	},
 	// kilocode_change end
 	toggleAutoApprove: async () => {
 		const visibleProvider = getVisibleProviderOrLog(outputChannel)

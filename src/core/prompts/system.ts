@@ -34,6 +34,8 @@ import {
 	addCustomInstructions,
 	markdownFormattingSection,
 } from "./sections"
+import { getKnowledgeManagementSection } from "./sections/knowledge-management" // kilocode_change
+import { getSupervisorAgentSection } from "./sections/supervisor-agent" // kilocode_change
 import { type ClineProviderState } from "../webview/ClineProvider" // kilocode_change
 
 // Helper function to get prompt component, filtering out empty objects
@@ -105,6 +107,10 @@ async function generatePrompt(
 	const basePrompt = `${roleDefinition}
 
 ${markdownFormattingSection(toolUseStyle ?? "xml" /*kilocode_change*/)}
+
+${getKnowledgeManagementSection()} 
+
+${getSupervisorAgentSection()} 
 
 ${getSharedToolUseSection(toolUseStyle /*kilocode_change*/)}
 

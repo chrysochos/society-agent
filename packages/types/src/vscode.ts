@@ -69,6 +69,7 @@ export const commandIds = [
 	"exportSettings", // kilocode_change
 	"generateTerminalCommand", // kilocode_change
 	"handleExternalUri", // kilocode_change - for JetBrains plugin URL forwarding
+	"launchSocietyAgents", // kilocode_change - open society agent workspaces
 	"focusPanel",
 	"toggleAutoApprove",
 ] as const

@@ -27,5 +27,6 @@
 	"java.configuration.updateBuildConfiguration": "interactive",
 	// kilocode_change - Disable WSL integration for dev containers
 	"dev.containers.executeInWSL": false,
-	"dev.containers.dockerPath": "docker"
+	"dev.containers.dockerPath": "docker",
+	"kilo-code.societyAgent.agentId": "custom-3ll9uy"
 }

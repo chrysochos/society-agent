@@ -50,7 +50,7 @@ export class AgentTeam {
 	constructor(config: AgentTeamConfig) {
 		// kilocode_change start
 		this.config = config
-		
+
 		const supervisorIdentity: AgentIdentity = {
 			id: `supervisor-${Date.now()}`,
 			role: "supervisor",
@@ -154,22 +154,22 @@ export class AgentTeam {
 					createdAt: Date.now(),
 				}
 
-			const worker = new ConversationAgent({
-				identity: workerIdentity,
-				apiHandler: this.apiHandler,
-			workspacePath: this.config.workspacePath,
-			onMessage: (msg) => this.onMessage?.(workerId, msg.content),
-			onStatusChange: (status) => {
-				this.onStatusChange?.(workerId, status)
-				// Update supervisor when worker completes
-				if (status === "completed") {
-					this.state.supervisor.updateTaskStatus(workerId, "completed")
-				}
-			},
-		})
-		
-		this.state.workers.set(workerId, worker)
-		this.state.supervisor.registerWorker(workerId)
+				const worker = new ConversationAgent({
+					identity: workerIdentity,
+					apiHandler: this.apiHandler,
+					workspacePath: this.config.workspacePath,
+					onMessage: (msg) => this.onMessage?.(workerId, msg.content),
+					onStatusChange: (status) => {
+						this.onStatusChange?.(workerId, status)
+						// Update supervisor when worker completes
+						if (status === "completed") {
+							this.state.supervisor.updateTaskStatus(workerId, "completed")
+						}
+					},
+				})
+
+				this.state.workers.set(workerId, worker)
+				this.state.supervisor.registerWorker(workerId)
 			}
 		}
 		// kilocode_change end
@@ -196,14 +196,19 @@ export class AgentTeam {
 	/**
 	 * Assign task to worker (called by supervisor)
 	 */
-	private async assignTaskToWorker(assignment: { workerId: string; task: string; context: string }): Promise<void> {
+	private async assignTaskToWorker(assignment: {
+		workerId: string
+		task: string
+		context: string
+		outputDir?: string
+	}): Promise<void> {
 		// kilocode_change start
 		const worker = this.state.workers.get(assignment.workerId)
 		if (!worker) {
 			throw new Error(`Worker ${assignment.workerId} not found`)
 		}
 
-		await worker.assignTask(`${assignment.task}\n\nContext: ${assignment.context}`)
+		await worker.assignTask(`${assignment.task}\n\nContext: ${assignment.context}`, assignment.outputDir)
 		this.state.supervisor.updateTaskStatus(assignment.workerId, "in-progress")
 		// kilocode_change end
 	}

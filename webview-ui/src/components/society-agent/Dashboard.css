@@ -4,15 +4,17 @@
 	flex-direction: column;
 	height: 100vh;
 	padding: 20px;
-	gap: 20px;
+	gap: 15px;
+	overflow: hidden;
 }
 
 .dashboard-header {
 	display: flex;
 	justify-content: space-between;
 	align-items: flex-start;
-	padding-bottom: 20px;
+	padding-bottom: 15px;
 	border-bottom: 1px solid var(--vscode-panel-border);
+	flex-shrink: 0;
 }
 
 .header-content {
@@ -52,12 +54,54 @@
 	gap: 10px;
 }
 
+/* kilocode_change start - Agent Filter Tabs */
+.agent-filter-tabs {
+	display: flex;
+	gap: 5px;
+	padding: 10px 0;
+	border-bottom: 1px solid var(--vscode-panel-border);
+	overflow-x: auto;
+	flex-shrink: 0;
+}
+
+.filter-tab {
+	padding: 8px 16px;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 4px;
+	cursor: pointer;
+	font-size: 13px;
+	font-weight: 500;
+	white-space: nowrap;
+	transition: all 0.2s ease;
+}
+
+.filter-tab:hover {
+	background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.filter-tab.active {
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	border-color: var(--vscode-focusBorder);
+}
+
+/* Message Stream Container */
+.message-stream-container {
+	flex: 1;
+	min-height: 300px;
+	overflow: hidden;
+}
+/* kilocode_change end */
+
 .agent-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
 	gap: 20px;
 	overflow-y: auto;
-	flex: 1;
+	flex: 0 0 auto;
+	max-height: 250px;
 }
 
 .terminal-section {
