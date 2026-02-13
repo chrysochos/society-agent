@@ -233,10 +233,7 @@ export function registerSocietyCommands(program: Command): void {
 				const canonical = JSON.stringify(messageData, Object.keys(messageData).sort())
 				const hmac = crypto.createHmac("sha256", senderSecret)
 				hmac.update(canonical)
-				message.signature = hmac.digest("hex")
-				// kilocode_change end
-
-				// kilocode_change start - Also write to inbox for persistent queue
+				;(message as any).signature = hmac.digest("hex") // kilocode_change
 				const inboxDir = path.join(sharedDir, "inbox", agentId)
 				await fs.mkdir(inboxDir, { recursive: true })
 

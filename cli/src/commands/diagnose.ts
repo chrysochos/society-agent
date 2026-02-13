@@ -88,11 +88,12 @@ export function createDiagnoseCommand(): Command {
 				if (agents.size > 0) {
 					console.log(`  ✅ Found ${agents.size} registered agent(s):`)
 					for (const [agentId, agent] of agents) {
-						const status = agent.status || "unknown"
-						const lastSeen = agent.lastHeartbeat
-							? new Date(agent.lastHeartbeat).toLocaleTimeString()
+						const agentData = agent as any // kilocode_change
+						const status = agentData.status || "unknown"
+						const lastSeen = agentData.lastHeartbeat
+							? new Date(agentData.lastHeartbeat as string).toLocaleTimeString()
 							: "never"
-						console.log(`     - ${agentId} (${agent.role}) - ${status} - last seen: ${lastSeen}`)
+						console.log(`     - ${agentId} (${agentData.role}) - ${status} - last seen: ${lastSeen}`)
 					}
 				} else {
 					console.log("  ⚠️  No agents registered")
@@ -155,10 +156,8 @@ export function createDiagnoseCommand(): Command {
 				const keyFiles = await fs.readdir(keysDir)
 				if (keyFiles.length > 0) {
 					const testKeyFile = keyFiles[0]
+					if (!testKeyFile) throw new Error("No key file found") // kilocode_change
 					const keyPath = path.join(keysDir, testKeyFile)
-					const secret = await fs.readFile(keyPath, "utf-8")
-
-					// Test signing
 					const testMessage = {
 						id: "test-123",
 						from: "test",

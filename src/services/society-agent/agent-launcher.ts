@@ -200,10 +200,11 @@ export class AgentLauncher {
 
 		if (exists) return // Don't overwrite existing README
 
+		const capabilities = (agent as any).capabilities || [] // kilocode_change
 		const content = `# ${agent.agentId} Workspace
 
 **Role**: ${agent.role}  
-**Capabilities**: ${agent.capabilities.join(", ")}
+**Capabilities**: ${Array.isArray(capabilities) ? capabilities.join(", ") : "N/A"}
 
 ## About This Workspace
 
@@ -319,10 +320,9 @@ This workspace starts empty. You'll create files and folders as needed based on 
 
 		for (let i = 0; i < agentsToLaunch.length; i++) {
 			const agent = agentsToLaunch[i]
+			if (!agent) continue // kilocode_change - type safety
 
 			onProgress({
-				type: "progress",
-				current: i + 1,
 				total: agentsToLaunch.length,
 				agentId: agent.agentId,
 				message: `Launching ${agent.agentId}...`,
