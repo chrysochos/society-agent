@@ -256,18 +256,78 @@ export async function activate(context: vscode.ExtensionContext) {
 				const serverUrl = agentServer.getUrl()
 				outputChannel.appendLine(`[Society Agent] HTTP server started on ${serverUrl}`)
 
+				// kilocode_change start - Initialize identity system (Ed25519)
+				const { AgentIdentityManager } = await import("./services/society-agent/agent-identity")
+				const identityManager = new AgentIdentityManager(sharedDir)
+
+				// Try loading identity from env var (set by supervisor at launch)
+				const identityEnvPath = process.env.SOCIETY_AGENT_IDENTITY
+				if (identityEnvPath) {
+					try {
+						await identityManager.loadIdentity(identityEnvPath)
+						outputChannel.appendLine(
+							`[Society Agent] Identity loaded from env: ${identityManager.getAgentId()}`,
+						)
+					} catch (error) {
+						outputChannel.appendLine(`[Society Agent] Failed to load identity from env: ${error}`)
+					}
+				} else {
+					// Fallback: try loading from default path
+					const defaultIdentityPath = require("path").join(sharedDir, "agents", agentId, "identity.json")
+					try {
+						await identityManager.loadIdentity(defaultIdentityPath)
+						outputChannel.appendLine(`[Society Agent] Identity loaded from default path`)
+					} catch {
+						outputChannel.appendLine(
+							`[Society Agent] No identity file found — running without Ed25519 signing`,
+						)
+					}
+				}
+
+				// Load public keys for verification
+				await identityManager.loadPublicKeys()
+				await identityManager.loadAuthorizedAgents()
+				// kilocode_change end
+
+				// kilocode_change start - Initialize unified message handler
+				const { UnifiedMessageHandler } = await import("./services/society-agent/message-handler")
+				const messageHandler = new UnifiedMessageHandler({
+					sharedDir,
+					identityManager,
+					agentId,
+				})
+				// kilocode_change end
+
 				agentRegistry = new AgentRegistry(sharedDir, serverUrl)
 				await agentRegistry.initialize()
 				await agentRegistry.catchUp()
 
-				agentServer.on("message", (message: any) => {
-					outputChannel.appendLine(`[Society Agent] Received message from ${message.from}: ${message.type}`)
+				// kilocode_change start - Wire HTTP server to unified handler (instant delivery)
+				agentServer.on("message", async (message: any) => {
+					outputChannel.appendLine(`[Society Agent] HTTP message from ${message.from}: ${message.type}`)
+					// Feed to unified handler (same handler as inbox poller)
+					const result = await messageHandler.handleMessage(message)
+					if (!result.accepted) {
+						outputChannel.appendLine(`[Society Agent] HTTP message rejected: ${result.reason}`)
+					}
 				})
 
-				agentServer.on("task", (task: any) => {
-					outputChannel.appendLine(`[Society Agent] Received task from ${task.from}: ${task.taskId}`)
-					vscode.window.showInformationMessage(`New task: ${task.description}`)
+				agentServer.on("task", async (task: any) => {
+					outputChannel.appendLine(`[Society Agent] HTTP task from ${task.from}: ${task.taskId}`)
+					// Convert task to message format and feed to handler
+					const taskMessage = {
+						id: task.taskId || require("crypto").randomUUID(),
+						from: task.from || "unknown",
+						to: agentId!, // kilocode_change - agentId is guaranteed non-null here (inside if block)
+						timestamp: task.timestamp || new Date().toISOString(),
+						nonce: require("crypto").randomBytes(16).toString("hex"),
+						type: "task_assign" as const,
+						content: task.description || JSON.stringify(task),
+						signature: task.signature || "",
+					}
+					await messageHandler.handleMessage(taskMessage)
 				})
+				// kilocode_change end
 
 				context.subscriptions.push({
 					dispose: async () => {
@@ -279,16 +339,32 @@ export async function activate(context: vscode.ExtensionContext) {
 
 				outputChannel.appendLine(`[Society Agent] Connected: ${role} (${agentId}) on ${serverUrl}`)
 
-				// kilocode_change start - Start simple agent loop for basic functionality
-				const { SimpleAgentLoop } = await import("./services/society-agent/simple-agent-loop")
-				const agentLoop = new SimpleAgentLoop(agentRegistry, agentId, role, capabilities || [], sharedDir)
-				await agentLoop.start()
+				// kilocode_change start - Start inbox poller (replaces SimpleAgentLoop for message processing)
+				const { InboxPoller } = await import("./services/society-agent/inbox-poller")
+				const inboxPoller = new InboxPoller({
+					sharedDir,
+					agentId,
+					handler: messageHandler,
+					pollIntervalMs: 3000,
+				})
+				await inboxPoller.start()
 
 				context.subscriptions.push({
-					dispose: () => agentLoop.stop(),
+					dispose: () => inboxPoller.stop(),
 				})
+				// kilocode_change end
 
-				outputChannel.appendLine(`[Society Agent] Agent loop started for ${role}`)
+				// kilocode_change start - Initialize message sender for outgoing messages
+				const { MessageSender } = await import("./services/society-agent/message-sender")
+				const messageSender = new MessageSender(sharedDir, identityManager)
+
+				// Store sender in workspace state so other components can use it
+				await context.workspaceState.update("societyAgent.messageSender", "initialized")
+				// kilocode_change end
+
+				outputChannel.appendLine(
+					`[Society Agent] Unified message system started for ${role} (inbox poller + HTTP handler)`,
+				)
 
 				// kilocode_change start - Resume last task immediately to prevent "welcome message" showing
 				// Wait for provider to be available and resume last task if it exists

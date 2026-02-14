@@ -132,6 +132,7 @@ export class AgentRegistry {
 
 	/**
 	 * Register agent in shared registry
+	 * kilocode_change - now uses single JSON file instead of unbounded JSONL
 	 */
 	private async register(): Promise<void> {
 		const registration: AgentRegistration = {
@@ -146,25 +147,24 @@ export class AgentRegistry {
 			registered: new Date().toISOString(),
 		}
 
-		// Append to registry (JSONL format)
-		await this.appendJSONL(this.registryPath, registration)
+		// kilocode_change - Write to single JSON registry (replaces unbounded JSONL)
+		await this.updateRegistryJson(registration)
 	}
 
 	/**
 	 * Update agent status with heartbeat
+	 * kilocode_change - now updates single JSON registry instead of appending JSONL
 	 */
 	private async updateHeartbeat(status: "online" | "offline" | "idle" | "busy" = "idle"): Promise<void> {
-		// kilocode_change - added "offline"
-		const heartbeat = {
+		const update: Partial<AgentRegistration> = {
 			agentId: this.agentId,
-			url: this.serverUrl, // kilocode_change - include URL in heartbeat
-
+			url: this.serverUrl,
 			status: status,
 			lastHeartbeat: new Date().toISOString(),
 		}
 
-		// Append heartbeat to registry
-		await this.appendJSONL(this.registryPath, heartbeat)
+		// Update in-place in single JSON registry
+		await this.updateRegistryJson(update as AgentRegistration)
 	}
 
 	/**
@@ -274,7 +274,8 @@ export class AgentRegistry {
 
 	/**
 	 * Send message to another agent (or broadcast)
-	 * Uses hybrid communication: tries network first, fallback to file
+	 * Uses hybrid communication: always writes inbox file (reliable), also tries HTTP (fast)
+	 * kilocode_change - updated to always-inbox-first strategy
 	 */
 	async sendMessage(
 		to: string,
@@ -293,14 +294,30 @@ export class AgentRegistry {
 			delivered: false, // Will be marked true when recipient processes it
 		}
 
-		// kilocode_change start - hybrid communication
-		// Try network first if recipient is online and has URL
+		// kilocode_change start - Always write to inbox first (guaranteed delivery)
+		if (this.inboxManager && this.messageSecurity) {
+			try {
+				const signature = await this.messageSecurity.signMessage(message, this.agentId)
+				const signedMessage = { ...message, signature }
+				await this.inboxManager.queueMessage(to, signedMessage)
+				console.log(`[AgentRegistry] Queued signed message for ${to} in inbox:`, type)
+			} catch (error) {
+				console.error(`[AgentRegistry] Failed to queue inbox message:`, error)
+				// Fallback to messages.jsonl
+				await this.appendJSONL(this.messagesPath, message)
+			}
+		} else {
+			// No inbox manager - use legacy messages.jsonl
+			await this.appendJSONL(this.messagesPath, message)
+		}
+		// kilocode_change end
+
+		// kilocode_change start - Also try HTTP for instant delivery (best-effort)
 		const agents = await this.getAgents()
 		const recipient = agents.find((a) => a.agentId === to)
 
 		if (recipient && recipient.url && (await this.isAgentOnlineNetwork(recipient.url))) {
 			try {
-				// Send via network
 				if (attachments && attachments.length > 0) {
 					await AgentClient.sendMessageWithAttachments(
 						recipient.url,
@@ -320,57 +337,45 @@ export class AgentRegistry {
 						content,
 					})
 				}
-
-				console.log(`[AgentRegistry] Sent message to ${to} via network:`, type)
-				return // Success - no need for file fallback
+				console.log(`[AgentRegistry] Also sent to ${to} via HTTP (instant):`, type)
 			} catch (error) {
-				console.warn(`[AgentRegistry] Network send failed, using file fallback:`, error)
-				// Fall through to file-based delivery
+				console.log(`[AgentRegistry] HTTP send to ${to} failed (inbox file will be picked up):`, error)
 			}
-		}
-
-		// File-based fallback (for offline agents or network failures)
-		await this.appendJSONL(this.messagesPath, message)
-
-		// kilocode_change start - Also write to inbox with signature
-		if (this.inboxManager && this.messageSecurity) {
-			try {
-				// Sign the message
-				const signature = await this.messageSecurity.signMessage(message, this.agentId)
-				const signedMessage = { ...message, signature }
-
-				// Queue in inbox
-				await this.inboxManager.queueMessage(to, signedMessage)
-				console.log(`[AgentRegistry] Sent signed message to ${to} via inbox:`, type)
-			} catch (error) {
-				console.error(`[AgentRegistry] Failed to queue inbox message:`, error)
-			}
-		} else {
-			console.log(`[AgentRegistry] Sent message to ${to} via file (offline):`, type)
 		}
 		// kilocode_change end
 	}
 
 	/**
 	 * Get all registered agents
+	 * kilocode_change - reads from single JSON registry first, falls back to JSONL
 	 */
 	async getAgents(): Promise<AgentRegistration[]> {
+		// Try new single JSON registry first
+		const jsonRegistryPath = this.registryPath.replace(".jsonl", ".json")
+		try {
+			const content = await fs.readFile(jsonRegistryPath, "utf-8")
+			const registry = JSON.parse(content)
+			if (registry.agents && typeof registry.agents === "object") {
+				return Object.values(registry.agents) as AgentRegistration[]
+			}
+		} catch {
+			// Fall through to legacy JSONL
+		}
+
+		// Legacy: read from JSONL
 		try {
 			const content = await fs.readFile(this.registryPath, "utf-8")
 			const lines = content.split("\n").filter((line) => line.trim())
 
 			const agents = new Map<string, AgentRegistration>()
 
-			// Process all lines, later entries update earlier ones
 			for (const line of lines) {
 				try {
 					const entry = JSON.parse(line)
 					if (entry.agentId) {
 						if (agents.has(entry.agentId)) {
-							// Update existing entry (heartbeat or status update)
 							agents.set(entry.agentId, { ...agents.get(entry.agentId)!, ...entry })
 						} else {
-							// New registration
 							agents.set(entry.agentId, entry as AgentRegistration)
 						}
 					}
@@ -479,12 +484,46 @@ export class AgentRegistry {
 	}
 
 	/**
-	 * Append line to JSONL file
+	 * Append line to JSONL file (legacy — still used for messages.jsonl)
 	 */
 	private async appendJSONL(filePath: string, data: any): Promise<void> {
 		const line = JSON.stringify(data) + "\n"
 		await fs.appendFile(filePath, line, "utf-8")
 	}
+
+	// kilocode_change start - Single JSON registry (replaces unbounded JSONL)
+	/**
+	 * Update agent in single JSON registry file
+	 * File format: { agents: { [agentId]: AgentRegistration }, updatedAt: string }
+	 * Each agent is an entry — overwrites on heartbeat instead of appending
+	 */
+	private async updateRegistryJson(registration: AgentRegistration): Promise<void> {
+		const jsonPath = this.registryPath.replace(".jsonl", ".json")
+
+		// Read existing registry (or start fresh)
+		let registry: { agents: Record<string, AgentRegistration>; updatedAt: string }
+		try {
+			const content = await fs.readFile(jsonPath, "utf-8")
+			registry = JSON.parse(content)
+		} catch {
+			registry = { agents: {}, updatedAt: new Date().toISOString() }
+		}
+
+		// Merge: update existing entry or add new one
+		const existing = registry.agents[registration.agentId]
+		if (existing) {
+			registry.agents[registration.agentId] = { ...existing, ...registration }
+		} else {
+			registry.agents[registration.agentId] = registration
+		}
+		registry.updatedAt = new Date().toISOString()
+
+		// Write atomically (write to temp, then rename)
+		const tmpPath = jsonPath + ".tmp"
+		await fs.writeFile(tmpPath, JSON.stringify(registry, null, 2), "utf-8")
+		await fs.rename(tmpPath, jsonPath)
+	}
+	// kilocode_change end
 
 	// Getters
 	getAgentId(): string {
