@@ -40,8 +40,8 @@
 		"cli:run": "pnpm --filter @kilocode/cli run start",
 		"docs:start": "pnpm --filter kilocode-docs start",
 		"docs:build": "pnpm --filter kilocode-docs build",
-		"server": "node -r dotenv/config -r tsx/cjs src/api/society-server.ts",
-		"server:dev": "nodemon --watch src/api --watch src/services/society-agent --ext ts --exec 'node -r dotenv/config -r tsx/cjs src/api/society-server.ts'",
+		"server": "node -r dotenv/config -r tsx/cjs src/services/society-agent/society-server.ts",
+		"server:dev": "nodemon --watch src/services/society-agent --ext ts --exec 'node -r dotenv/config -r tsx/cjs src/services/society-agent/society-server.ts'",
 		"test:workspace": "node scripts/create-test-workspace.js",
 		"setup:multi-vscode": "node scripts/setup-multi-vscode.js"
 	},

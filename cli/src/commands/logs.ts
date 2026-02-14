@@ -6,8 +6,8 @@
 import fs from "fs/promises"
 import path from "path"
 import type { Command, CommandContext } from "./core/types.js"
-import type { AgentAction } from "../../../src/services/society-agent/types.js"
-import { formatAgentAction } from "../../../src/services/society-agent/logger.js"
+import type { AgentAction } from "../../../src/services/society-agent/types"
+import { formatAgentAction } from "../../../src/services/society-agent/logger"
 
 /**
  * Format a timestamp as a relative time string
