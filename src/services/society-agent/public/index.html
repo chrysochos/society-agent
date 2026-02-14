@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Society Agent</title>
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
 <style>
   :root {
     --bg: #0d1117; --surface: #161b22; --border: #30363d;
@@ -137,6 +140,23 @@
     border-radius: 8px; }
   .welcome .feature .title { font-size: 13px; color: var(--text); font-weight: 500; }
   .welcome .feature .desc { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  /* Tab bar */
+  .tab-bar { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .tab-bar .tab { padding: 8px 20px; font-size: 13px; cursor: pointer; color: var(--muted);
+    border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s; }
+  .tab-bar .tab:hover { color: var(--text); }
+  .tab-bar .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-content { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+  .tab-content.active { display: flex; }
+
+  /* Terminal pane */
+  .terminal-container { flex: 1; background: #000; padding: 4px; overflow: hidden; }
+  .terminal-container .xterm { height: 100%; }
+  .terminal-toolbar { display: flex; gap: 8px; padding: 8px 12px; background: var(--surface);
+    border-bottom: 1px solid var(--border); align-items: center; font-size: 12px; }
+  .terminal-toolbar select { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 8px; border-radius: 4px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -182,6 +202,12 @@
   </div>
 
   <div class="chat-area">
+    <div class="tab-bar">
+      <div class="tab active" onclick="switchTab('chat')" id="tabChat">&#128172; Chat</div>
+      <div class="tab" onclick="switchTab('terminal')" id="tabTerminal">&#9000; Terminal</div>
+    </div>
+
+    <div class="tab-content active" id="paneChat">
     <div class="messages" id="messages">
       <div class="welcome" id="welcome">
         <h2>Society Agent Server</h2>
@@ -216,6 +242,22 @@
     </div>
 
     <div class="log-panel" id="logPanel"></div>
+  </div><!-- /paneChat -->
+
+    <div class="tab-content" id="paneTerminal">
+      <div class="terminal-toolbar">
+        <span style="color:var(--muted)">Shell:</span>
+        <select id="termShell">
+          <option value="/bin/bash">bash</option>
+          <option value="/bin/sh">sh</option>
+        </select>
+        <span style="color:var(--muted);margin-left:8px">CWD:</span>
+        <span id="termCwd" style="color:var(--text)">/workspace</span>
+        <div style="flex:1"></div>
+        <button class="btn btn-secondary" onclick="reconnectTerminal()" style="font-size:11px;padding:3px 10px">&#8635; Reconnect</button>
+      </div>
+      <div class="terminal-container" id="terminalContainer"></div>
+    </div><!-- /paneTerminal -->
   </div>
 </div>
 
@@ -332,7 +374,9 @@ async function checkServerStatus() {
     document.getElementById('sysStatus').textContent = data.status === 'ok' ? 'Online' : 'Error';
     if (data.outputDir) {
       const el = document.getElementById('outputDir');
-      el.textContent = data.outputDir;
+      // Show short path, full path in tooltip
+      const short = data.outputDir.replace(/^\/workspace\//, '');
+      el.textContent = short;
       el.title = data.outputDir;
     }
     addLog('info', `Server: ${data.environment} | Output: ${data.outputDir || 'projects/'}`);
@@ -354,7 +398,7 @@ async function checkApiKey() {
     } else {
       el.textContent = 'Not set';
       el.style.color = 'var(--red)';
-      // Show modal if no key
+      // Only show modal if key is truly missing (not set in .env either)
       showApiKeyModal();
     }
   } catch (e) {
@@ -732,6 +776,105 @@ document.getElementById('input').addEventListener('keydown', (e) => {
 document.getElementById('input').addEventListener('input', function() {
   this.style.height = 'auto';
   this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+});
+
+// ============================================================================
+// Tab Switching
+// ============================================================================
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(p => p.classList.remove('active'));
+  if (tab === 'terminal') {
+    document.getElementById('tabTerminal').classList.add('active');
+    document.getElementById('paneTerminal').classList.add('active');
+    if (!term) initTerminal();
+    else fitAddon.fit();
+  } else {
+    document.getElementById('tabChat').classList.add('active');
+    document.getElementById('paneChat').classList.add('active');
+  }
+}
+
+// ============================================================================
+// Terminal (xterm.js + node-pty via WebSocket)
+// ============================================================================
+
+let term = null;
+let fitAddon = null;
+let termConnected = false;
+
+function initTerminal() {
+  const container = document.getElementById('terminalContainer');
+  container.innerHTML = '';
+
+  term = new Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: "'SF Mono', 'Cascadia Code', 'Consolas', monospace",
+    theme: {
+      background: '#0d1117',
+      foreground: '#e6edf3',
+      cursor: '#58a6ff',
+      selectionBackground: 'rgba(88,166,255,0.3)',
+      black: '#484f58', red: '#f85149', green: '#3fb950', yellow: '#d29922',
+      blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#b1bac4',
+    },
+  });
+
+  fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(container);
+
+  // Small delay for the container to be laid out before fitting
+  setTimeout(() => fitAddon.fit(), 100);
+
+  window.addEventListener('resize', () => { if (fitAddon) fitAddon.fit(); });
+
+  connectTerminal();
+
+  term.onData((data) => {
+    if (termConnected) {
+      socket.emit('terminal-input', data);
+    }
+  });
+
+  term.onResize(({ cols, rows }) => {
+    if (termConnected) {
+      socket.emit('terminal-resize', { cols, rows });
+    }
+  });
+}
+
+function connectTerminal() {
+  const shell = document.getElementById('termShell').value;
+  socket.emit('terminal-start', { shell, cols: term.cols, rows: term.rows });
+  term.clear();
+  term.writeln('\x1b[33mConnecting to terminal...\x1b[0m');
+}
+
+function reconnectTerminal() {
+  socket.emit('terminal-stop');
+  setTimeout(() => connectTerminal(), 200);
+}
+
+socket.on('terminal-output', (data) => {
+  if (term) term.write(data);
+  termConnected = true;
+});
+
+socket.on('terminal-ready', () => {
+  termConnected = true;
+  if (term) {
+    term.clear();
+    addLog('info', 'Terminal connected');
+  }
+});
+
+socket.on('terminal-exit', (data) => {
+  termConnected = false;
+  if (term) term.writeln(`\x1b[31m\r\nProcess exited (code ${data.code})\x1b[0m`);
+  addLog('warn', `Terminal exited (code ${data.code})`);
 });
 </script>
 </body>

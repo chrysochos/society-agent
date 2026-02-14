@@ -19,6 +19,9 @@ import { Anthropic } from "@anthropic-ai/sdk"
 import { ApiHandler } from "../../api/index"
 import { commandExecutor } from "./command-executor"
 import { getLog } from "./logger"
+// kilocode_change start - terminal support
+import * as pty from "node-pty"
+// kilocode_change end
 
 const app = express()
 const server = http.createServer(app)
@@ -998,6 +1001,71 @@ io.on("connection", (socket) => {
 
 	log.info(`Client connected: ${clientId}`)
 
+	// kilocode_change start - terminal (node-pty) per socket
+	let ptyProcess: pty.IPty | null = null
+
+	socket.on("terminal-start", (opts: { shell?: string; cols?: number; rows?: number }) => {
+		// Kill existing terminal for this socket
+		if (ptyProcess) {
+			try {
+				ptyProcess.kill()
+			} catch {}
+			ptyProcess = null
+		}
+
+		const shell = opts.shell || process.env.SHELL || "/bin/bash"
+		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		const cols = opts.cols || 80
+		const rows = opts.rows || 24
+
+		try {
+			ptyProcess = pty.spawn(shell, [], {
+				name: "xterm-256color",
+				cols,
+				rows,
+				cwd: workspacePath,
+				env: { ...process.env, TERM: "xterm-256color" } as Record<string, string>,
+			})
+
+			ptyProcess.onData((data: string) => {
+				socket.emit("terminal-output", data)
+			})
+
+			ptyProcess.onExit(({ exitCode, signal }) => {
+				socket.emit("terminal-exit", { code: exitCode, signal })
+				ptyProcess = null
+			})
+
+			socket.emit("terminal-ready")
+			log.info(`Terminal started for ${clientId}: ${shell} (${cols}x${rows})`)
+		} catch (err) {
+			log.error("Failed to spawn terminal:", err)
+			socket.emit("terminal-output", `\x1b[31mFailed to start terminal: ${err}\x1b[0m\r\n`)
+		}
+	})
+
+	socket.on("terminal-input", (data: string) => {
+		if (ptyProcess) ptyProcess.write(data)
+	})
+
+	socket.on("terminal-resize", ({ cols, rows }: { cols: number; rows: number }) => {
+		if (ptyProcess) {
+			try {
+				ptyProcess.resize(cols, rows)
+			} catch {}
+		}
+	})
+
+	socket.on("terminal-stop", () => {
+		if (ptyProcess) {
+			try {
+				ptyProcess.kill()
+			} catch {}
+			ptyProcess = null
+		}
+	})
+	// kilocode_change end
+
 	socket.on("subscribe-purpose", (purposeId: string) => {
 		log.info(`Client ${clientId} subscribed to purpose ${purposeId}`)
 		socket.join(`purpose:${purposeId}`)
@@ -1014,6 +1082,14 @@ io.on("connection", (socket) => {
 	})
 
 	socket.on("disconnect", () => {
+		// kilocode_change start - clean up terminal on disconnect
+		if (ptyProcess) {
+			try {
+				ptyProcess.kill()
+			} catch {}
+			ptyProcess = null
+		}
+		// kilocode_change end
 		connectedClients.delete(clientId)
 		log.info(`Client disconnected: ${clientId}`)
 	})
