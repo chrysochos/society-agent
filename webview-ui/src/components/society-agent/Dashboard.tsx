@@ -11,7 +11,7 @@ import { VSCodeButton, VSCodeProgressRing } from "@vscode/webview-ui-toolkit/rea
 import { vscode } from "../../utils/vscode"
 import { AgentCard } from "./AgentCard"
 import { InteractiveTerminal } from "./InteractiveTerminal"
-import { PurposeInput } from "./PurposeInput"
+import { AgentMonitor } from "./AgentMonitor" // kilocode_change - replaces PurposeInput as default view
 import { TerminalPane } from "./TerminalPane"
 import { MessageDialog } from "./MessageDialog"
 import { MessageStream, type AgentMessage } from "./MessageStream"
@@ -263,9 +263,9 @@ export const Dashboard: React.FC = () => {
 		}
 	}
 
-	// Show purpose input if no active purpose
+	// Show agent monitor when no active purpose
 	if (showPurposeInput || !state.purpose) {
-		return <PurposeInput onSubmit={handlePurposeSubmit} />
+		return <AgentMonitor /> // kilocode_change - replaced PurposeInput with AgentMonitor
 	}
 
 	return (
@@ -366,7 +366,7 @@ export const Dashboard: React.FC = () => {
 					<InteractiveTerminal
 						cwd="/workspace"
 						onCommandExecute={(cmd) => console.log("Executed:", cmd)}
-						onClose={() => setState((prev) => ({ ...prev, showInteractiveTerminal: false }))}
+						_onClose={() => setState((prev) => ({ ...prev, showInteractiveTerminal: false }))}
 					/>
 				</div>
 			)}
