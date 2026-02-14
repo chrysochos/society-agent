@@ -8,6 +8,7 @@
 
 import { ConversationAgent, AgentIdentity } from "./conversation-agent"
 import { ApiHandler } from "../../api"
+import { getLog } from "./logger"
 
 // kilocode_change start
 export interface Purpose {
@@ -77,6 +78,7 @@ export class SupervisorAgent extends ConversationAgent {
 	private onTaskAssigned?: (assignment: TaskAssignment) => void
 	private onEscalation?: (escalation: EscalationRequest) => void
 	private onProgressUpdate?: (progress: number) => void
+	private escalationResolvers: Map<string, (response: string) => void> = new Map() // kilocode_change
 	// kilocode_change end
 
 	constructor(config: SupervisorAgentConfig) {
@@ -153,7 +155,7 @@ For simple tasks, just use ONE worker of the appropriate type.
 Respond with the JSON now:`
 
 		const response = await this.sendMessage(analysisPrompt)
-		console.log("🤖 Supervisor LLM response:", response)
+		getLog().info("Supervisor LLM response:", response)
 
 		try {
 			// Extract JSON from response (handle markdown code blocks)
@@ -173,18 +175,18 @@ Respond with the JSON now:`
 				jsonText = jsonMatch[0]
 			}
 
-			console.log("📋 Extracted JSON:", jsonText)
+			getLog().info("Extracted JSON:", jsonText)
 
 			const parsed = JSON.parse(jsonText)
 			this.supervisorState.teamSpec = parsed.workers || []
 
-			console.log("✅ Team spec parsed:", this.supervisorState.teamSpec)
+			getLog().info("Team spec parsed:", this.supervisorState.teamSpec)
 
 			this.onTeamCreated?.(this.supervisorState.teamSpec)
 			return this.supervisorState.teamSpec
 		} catch (error) {
-			console.error("❌ Failed to parse team specification:", error)
-			console.error("Raw response was:", response)
+			getLog().error("Failed to parse team specification:", error)
+			getLog().error("Raw response was:", response)
 
 			// Fallback: create a default team
 			const defaultTeam: WorkerSpec[] = [
@@ -192,7 +194,7 @@ Respond with the JSON now:`
 				{ workerType: "frontend", count: 1, reason: "Default frontend worker" },
 			]
 
-			console.log("⚠️ Using default team:", defaultTeam)
+			getLog().warn("Using default team:", defaultTeam)
 			this.supervisorState.teamSpec = defaultTeam
 			this.onTeamCreated?.(defaultTeam)
 			return defaultTeam
@@ -225,9 +227,9 @@ Respond with the JSON now:`
 
 		this.supervisorState.taskAssignments.push(assignment)
 
-		console.log(`📨 Delegating task to ${workerId}:`, task)
+		getLog().info(`Delegating task to ${workerId}:`, task)
 		if (outputDir) {
-			console.log(`📁 Output directory: ${outputDir}`)
+			getLog().info(`Output directory: ${outputDir}`)
 		}
 
 		// Trigger callback so the team can assign the task
@@ -323,13 +325,16 @@ Otherwise, provide direct guidance to the worker.`
 		this.supervisorState.escalations.push(escalation)
 		this.onEscalation?.(escalation)
 
-		// In real implementation, this would wait for human response
-		// For now, return placeholder
-		return new Promise((resolve) => {
-			// TODO: Implement actual escalation waiting mechanism
+		// kilocode_change start - Wait for human response via respondToEscalation()
+		return new Promise<string>((resolve) => {
+			this.escalationResolvers.set(escalation.id, resolve)
+			// Auto-timeout after 5 minutes with a default response
 			setTimeout(() => {
-				resolve("Awaiting human decision...")
-			}, 100)
+				if (this.escalationResolvers.has(escalation.id)) {
+					this.escalationResolvers.delete(escalation.id)
+					resolve("No human response within timeout — proceeding with default.")
+				}
+			}, 5 * 60 * 1000)
 		})
 		// kilocode_change end
 	}
@@ -344,6 +349,12 @@ Otherwise, provide direct guidance to the worker.`
 			escalation.response = response
 			escalation.respondedAt = Date.now()
 		}
+		// Resolve the pending promise so escalateToHuman() returns
+		const resolver = this.escalationResolvers.get(escalationId)
+		if (resolver) {
+			this.escalationResolvers.delete(escalationId)
+			resolver(response)
+		}
 		// kilocode_change end
 	}
 
@@ -354,7 +365,7 @@ Otherwise, provide direct guidance to the worker.`
 		// kilocode_change start
 		this.supervisorState.currentPhase = "planning"
 
-		console.log("📋 Supervisor creating work plan...")
+		getLog().info("Supervisor creating work plan...")
 
 		const planningPrompt = `You are supervising a team to complete this purpose:
 
@@ -390,7 +401,7 @@ Respond with the JSON now:`
 
 		try {
 			const response = await this.sendMessage(planningPrompt)
-			console.log("🤖 Work plan response:", response)
+			getLog().info("Work plan response:", response)
 
 			// Parse JSON (handle markdown)
 			let jsonText = response.trim()
@@ -404,13 +415,13 @@ Respond with the JSON now:`
 			const parsed = JSON.parse(jsonText)
 			const tasks = parsed.tasks || []
 
-			console.log("✅ Parsed tasks:", JSON.stringify(tasks, null, 2))
+			getLog().info("Parsed tasks:", JSON.stringify(tasks, null, 2))
 
 			// Validate: ensure all workers have tasks
 			const assignedWorkers = new Set(tasks.map((t: any) => t.workerId)) // kilocode_change - explicit type
 			const missingWorkers = this.supervisorState.workerIds.filter((id) => !assignedWorkers.has(id))
 			if (missingWorkers.length > 0) {
-				console.warn(`⚠️ Warning: ${missingWorkers.length} workers not assigned tasks:`, missingWorkers)
+				getLog().warn(`Warning: ${missingWorkers.length} workers not assigned tasks:`, missingWorkers)
 			}
 
 			// Delegate tasks to workers
@@ -457,14 +468,14 @@ Respond with JSON now:`
 			const folderDecision = JSON.parse(folderJson)
 			const baseFolder = `projects/${this.supervisorState.purpose.description.toLowerCase().replace(/\s+/g, "-").substring(0, 30)}`
 
-			console.log(`📁 Folder strategy: ${folderDecision.strategy}`)
-			console.log(`💭 Reasoning: ${folderDecision.reasoning}`)
+			getLog().info(`Folder strategy: ${folderDecision.strategy}`)
+			getLog().info(`Reasoning: ${folderDecision.reasoning}`)
 
 			// Assign folders to tasks
 			tasks.forEach((task: any, index: number) => {
 				const subfolder = folderDecision.folders?.[index] || ""
 				task.outputDir = subfolder ? `${baseFolder}/${subfolder}` : baseFolder
-				console.log(`  → ${task.workerId}: ${task.outputDir}`)
+				getLog().info(`  -> ${task.workerId}: ${task.outputDir}`)
 			})
 			// kilocode_change end
 
@@ -473,12 +484,12 @@ Respond with JSON now:`
 
 			this.supervisorState.currentPhase = "executing"
 			this.onProgressUpdate?.(50) // Tasks delegated, work started
-			console.log("🚀 Work delegation complete, execution started")
+			getLog().info("Work delegation complete, execution started")
 		} catch (error) {
-			console.error("❌ Failed to create work plan:", error)
-			console.error("Error details:", error instanceof Error ? error.message : String(error))
+			getLog().error("Failed to create work plan:", error)
+			getLog().error("Error details:", error instanceof Error ? error.message : String(error))
 			// Fallback: assign simple tasks in parallel
-			console.log("⚠️ Using fallback task assignment (parallel)")
+			getLog().warn("Using fallback task assignment (parallel)")
 			const fallbackTasks = this.supervisorState.workerIds.map((workerId) => ({
 				workerId,
 				task: `Work on: ${this.supervisorState.purpose.description}`,
@@ -520,8 +531,8 @@ Respond with JSON now:`
 				break
 			}
 
-			console.log(
-				`🔄 Starting ${readyTasks.length} task(s) in parallel: ${readyTasks.map((t) => t.workerId).join(", ")}`,
+			getLog().info(
+				`Starting ${readyTasks.length} task(s) in parallel: ${readyTasks.map((t) => t.workerId).join(", ")}`,
 			)
 
 			// Start all ready tasks in parallel
@@ -533,8 +544,8 @@ Respond with JSON now:`
 						const duration = ((Date.now() - taskStartTime) / 1000).toFixed(1)
 						completed.add(task.workerId)
 						inProgress.delete(task.workerId)
-						console.log(
-							`✅ Task completed: ${task.workerId} in ${duration}s (${completed.size}/${tasks.length})`,
+						getLog().info(
+							`Task completed: ${task.workerId} in ${duration}s (${completed.size}/${tasks.length})`,
 						)
 					},
 				)
@@ -543,14 +554,14 @@ Respond with JSON now:`
 
 			// If multiple tasks started, this proves they're running in parallel
 			if (readyTasks.length > 1) {
-				console.log(
-					`⚡ ${readyTasks.length} tasks started in ${Date.now() - startTime}ms (parallel execution initiated)`,
+				getLog().info(
+					`${readyTasks.length} tasks started in ${Date.now() - startTime}ms (parallel execution initiated)`,
 				)
 			} // Wait for all tasks in this wave to complete before starting next wave
 			await Promise.all(Array.from(inProgress.values()))
 		}
 
-		console.log(`✅ All ${tasks.length} tasks delegated (${completed.size} completed)`)
+		getLog().info(`All ${tasks.length} tasks delegated (${completed.size} completed)`)
 		// kilocode_change end
 	}
 

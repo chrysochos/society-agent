@@ -10,6 +10,7 @@ import { getUri } from "./getUri"
 import { getNonce } from "./getNonce"
 import { SocietyManager, SocietyManagerConfig } from "../../services/society-agent/society-manager"
 import { PurposeContext } from "../../services/society-agent/purpose-analyzer"
+import { getLog } from "../../services/society-agent/logger"
 
 // kilocode_change start - Monitor data source interface
 export interface MonitorDataSource {
@@ -49,6 +50,14 @@ export interface MonitorDataSource {
 }
 // kilocode_change end
 
+// kilocode_change start - Narrow interface for ClineProvider dependency
+interface ClineProviderLike {
+	contextProxy: {
+		getProviderSettings(): Record<string, unknown>
+	}
+}
+// kilocode_change end
+
 export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = "kilocode.societyAgentView"
 
@@ -60,35 +69,35 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 	constructor(
 		private readonly _extensionUri: vscode.Uri,
 		private readonly context: vscode.ExtensionContext,
-		private readonly clineProvider: any, // kilocode_change - ClineProvider reference for API access
+		private readonly clineProvider: ClineProviderLike, // kilocode_change
 	) {
 		// Society Manager will be initialized when webview resolves
-		console.log("🏗️ SocietyAgentProvider constructed")
-		console.log("🏗️ Extension URI:", _extensionUri.toString())
-		console.log("🏗️ ClineProvider available:", !!clineProvider)
+		getLog().info("SocietyAgentProvider constructed")
+		getLog().info("Extension URI:", _extensionUri.toString())
+		getLog().info("ClineProvider available:", !!clineProvider)
 	}
 
 	// kilocode_change start - Real backend initialization
 	private async initializeSocietyManager() {
 		try {
-			console.log("🔧 Initializing Society Manager...")
+			getLog().info("Initializing Society Manager...")
 			
 			// Get API handler from current provider settings
 			const { buildApiHandler } = require("../../api")
 			const providerSettings = this.clineProvider.contextProxy.getProviderSettings()
 			
-			console.log("📡 Provider settings loaded:", {
+			getLog().info("Provider settings loaded:", {
 				provider: providerSettings.apiProvider,
 				model: providerSettings.apiModelId,
 			})
 			
 		const apiHandler = buildApiHandler(providerSettings)
-		console.log("✅ API handler created successfully")
+		getLog().info("API handler created successfully")
 
 		// Get workspace folder path
 		const workspaceFolders = vscode.workspace.workspaceFolders
 		const workspacePath = workspaceFolders?.[0]?.uri.fsPath
-		console.log("📁 Workspace path:", workspacePath || "No workspace folder open")
+		getLog().info("Workspace path:", workspacePath || "No workspace folder open")
 
 		// Initialize Society Manager with callbacks
 		// kilocode_change start - Derive sharedDir and enable multiWindow from config
@@ -104,7 +113,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 			sharedDir, // kilocode_change
 			multiWindow, // kilocode_change
 				onPurposeStarted: (purpose) => {
-					console.log("🎯 Purpose started:", purpose.id)
+					getLog().info("Purpose started:", purpose.id)
 					this._sendToWebview({
 						type: "purpose-started",
 						purpose: {
@@ -117,7 +126,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 					})
 				},
 				onTeamFormed: (purposeId, teamSize) => {
-					console.log("👥 Team formed:", teamSize, "agents")
+					getLog().info("Team formed:", teamSize, "agents")
 					const activePurpose = this.societyManager?.getState().activePurposes.get(purposeId)
 					if (activePurpose) {
 						const agents = activePurpose.team.getAllMembers().map((member) => ({
@@ -144,7 +153,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 					}
 				},
 				onProgressUpdate: (purposeId, progress) => {
-					console.log(`📊 Progress update: ${progress}%`)
+					getLog().info(`Progress update: ${progress}%`)
 					this._sendToWebview({
 						type: "progress-update",
 						purposeId,
@@ -153,7 +162,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 					})
 				},
 				onPurposeCompleted: (purpose, summary) => {
-					console.log("✅ Purpose completed:", purpose.id)
+					getLog().info("Purpose completed:", purpose.id)
 					this._sendToWebview({
 						type: "purpose-completed",
 						purposeId: purpose.id,
@@ -168,7 +177,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 					})
 				},
 				onStatusChange: (purposeId, agentId, status, task) => {
-					console.log(`🔄 Agent ${agentId} status: ${status}, task: ${task || "none"}`)
+					getLog().info(`Agent ${agentId} status: ${status}, task: ${task || "none"}`)
 					this._sendToWebview({
 						type: "agent-status-update",
 						agentId,
@@ -178,10 +187,10 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 				},
 			})
 
-			console.log("✅ Society Manager initialized with real backend")
+			getLog().info("Society Manager initialized with real backend")
 		} catch (error) {
-			console.error("❌ Failed to initialize Society Manager:", error)
-			console.error("Error details:", error instanceof Error ? error.stack : String(error))
+			getLog().error("Failed to initialize Society Manager:", error)
+			getLog().error("Error details:", error instanceof Error ? error.stack : String(error))
 			
 			// Show error notification
 			vscode.window.showErrorMessage(
@@ -196,7 +205,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 		_context: vscode.WebviewViewResolveContext,
 		_token: vscode.CancellationToken,
 	) {
-		console.log("🎬 Society Agent webview resolving...")
+		getLog().info("Society Agent webview resolving...")
 		this._view = webviewView
 
 		webviewView.webview.options = {
@@ -208,14 +217,14 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 
 	// Handle messages from webview
 	webviewView.webview.onDidReceiveMessage(async (data) => {
-		console.log("📨 Received message from webview:", data.type, data)
+		getLog().info("Received message from webview:", data.type, data)
 		await this._handleMessage(data)
 	})		// Initialize Society Manager now that webview is ready
-		console.log("🔧 Initializing Society Manager...")
+		getLog().info("Initializing Society Manager...")
 		await this.initializeSocietyManager()
 		
 		// Send initial status
-		console.log("📡 Sending status to webview:", this.societyManager ? "initialized" : "failed")
+		getLog().info("Sending status to webview:", this.societyManager ? "initialized" : "failed")
 		this._sendToWebview({
 			type: "status",
 			initialized: !!this.societyManager,
@@ -226,7 +235,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 		try {
 			switch (data.type) {
 				case "webview-ready": {
-					console.log("📡 Webview ready, Society Manager:", this.societyManager ? "initialized" : "not initialized")
+					getLog().info("Webview ready, Society Manager:", this.societyManager ? "initialized" : "not initialized")
 					this._sendToWebview({
 						type: "status",
 						initialized: !!this.societyManager,
@@ -236,10 +245,10 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 				
 				case "start-purpose": {
 					// kilocode_change start - Real backend implementation
-					console.log("🚀 Purpose start requested:", data.description)
+					getLog().info("Purpose start requested:", data.description)
 
 					if (!this.societyManager) {
-						console.error("❌ Society Manager not initialized")
+						getLog().error("Society Manager not initialized")
 						this._sendToWebview({
 							type: "error",
 							message: "Society Agent system not initialized",
@@ -256,17 +265,17 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 							attachments: data.attachments || [],
 						}
 
-						console.log("🚀 Starting purpose with Society Manager...")
-						console.log("📝 Purpose:", data.description)
+						getLog().info("Starting purpose with Society Manager...")
+						getLog().info("Purpose:", data.description)
 
 						// Start the purpose - this will trigger callbacks
 						const purposeId = await this.societyManager.startPurpose(purposeContext)
 						this.currentPurposeId = purposeId
 
-						console.log("✅ Purpose started successfully with ID:", purposeId)
+						getLog().info("Purpose started successfully with ID:", purposeId)
 					} catch (error) {
-						console.error("❌ Failed to start purpose:", error)
-						console.error("Error details:", error instanceof Error ? error.stack : String(error))
+						getLog().error("Failed to start purpose:", error)
+						getLog().error("Error details:", error instanceof Error ? error.stack : String(error))
 						
 						this._sendToWebview({
 							type: "error",
@@ -283,7 +292,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 
 				case "pause-agent": {
 					// kilocode_change start - Real pause agent implementation
-					console.log("⏸️  Pause agent:", data.agentId)
+					getLog().info("Pause agent:", data.agentId)
 					if (this.societyManager && this.currentPurposeId) {
 						try {
 							const activePurpose = this.societyManager.getState().activePurposes.get(this.currentPurposeId)
@@ -299,7 +308,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 								}
 							}
 						} catch (error) {
-							console.error("❌ Failed to pause agent:", error)
+							getLog().error("Failed to pause agent:", error)
 						}
 					}
 					break
@@ -308,7 +317,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 
 				case "pause-all": {
 					// kilocode_change start - Real pause all implementation
-					console.log("⏸️  Pause all agents")
+					getLog().info("Pause all agents")
 					if (this.societyManager && this.currentPurposeId) {
 						try {
 							this.societyManager.pausePurpose(this.currentPurposeId)
@@ -324,7 +333,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 								}
 							}
 						} catch (error) {
-							console.error("❌ Failed to pause all:", error)
+							getLog().error("Failed to pause all:", error)
 						}
 					}
 					break
@@ -333,7 +342,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 
 				case "resume-all": {
 					// kilocode_change start - Real resume all implementation
-					console.log("▶️  Resume all agents")
+					getLog().info("Resume all agents")
 					if (this.societyManager && this.currentPurposeId) {
 						try {
 							this.societyManager.resumePurpose(this.currentPurposeId)
@@ -349,7 +358,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 								}
 							}
 						} catch (error) {
-							console.error("❌ Failed to resume all:", error)
+							getLog().error("Failed to resume all:", error)
 						}
 					}
 					break
@@ -358,13 +367,13 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 
 				case "stop-purpose": {
 					// kilocode_change start - Real stop implementation
-					console.log("🛑 Stop purpose")
+					getLog().info("Stop purpose")
 					if (this.societyManager && this.currentPurposeId) {
 						try {
 							this.societyManager.stopPurpose(this.currentPurposeId, "User requested stop")
 							this.currentPurposeId = undefined
 						} catch (error) {
-							console.error("❌ Failed to stop purpose:", error)
+							getLog().error("Failed to stop purpose:", error)
 						}
 					}
 					break
@@ -373,7 +382,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 
 				case "send-message-to-agent": {
 					// kilocode_change start - Real send message implementation
-					console.log("💬 Send message to agent:", data.agentId, data.message)
+					getLog().info("Send message to agent:", data.agentId, data.message)
 					if (this.societyManager && this.currentPurposeId) {
 						try {
 							const response = await this.societyManager.sendMessageToAgent(
@@ -390,7 +399,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 								timestamp: Date.now(),
 							})
 						} catch (error) {
-							console.error("❌ Failed to send message:", error)
+							getLog().error("Failed to send message:", error)
 							this._sendToWebview({
 								type: "error",
 								message: `Failed to send message to ${data.agentId}: ${error instanceof Error ? error.message : "Unknown error"}`,
@@ -408,7 +417,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 
 				case "terminal-input": {
 					// kilocode_change start - Real terminal input handling
-					console.log("⌨️  Terminal input:", data.agentId, data.input)
+					getLog().info("Terminal input:", data.agentId, data.input)
 
 					if (!this.societyManager || !this.currentPurposeId) {
 						break
@@ -430,7 +439,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 							}
 						}
 					} catch (error) {
-						console.error("❌ Failed to send terminal input:", error)
+						getLog().error("Failed to send terminal input:", error)
 					}
 					break
 					// kilocode_change end
@@ -438,7 +447,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 
 				case "get-agent-status": {
 					// kilocode_change start - Real get-agent-status implementation
-					console.log("📊 Get agent status")
+					getLog().info("Get agent status")
 					if (this.societyManager && this.currentPurposeId) {
 						const activePurpose = this.societyManager.getState().activePurposes.get(this.currentPurposeId)
 						if (activePurpose) {
@@ -473,10 +482,10 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 				// kilocode_change end
 
 				default:
-					console.warn("Unknown message type:", data.type)
+					getLog().warn("Unknown message type:", data.type)
 			}
 		} catch (error) {
-			console.error("Error handling message:", error)
+			getLog().error("Error handling message:", error)
 			this._sendToWebview({
 				type: "error",
 				message: error instanceof Error ? error.message : "Unknown error",
@@ -489,6 +498,35 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 			this._view.webview.postMessage(message)
 		}
 	}
+
+	// kilocode_change start - Push a new message event to the monitor in real time
+	/**
+	 * Push a real-time "agent-monitor-message" event to the webview.
+	 * Called from extension.ts whenever a new message arrives.
+	 */
+	public pushMonitorMessage(message: {
+		id: string
+		from: string
+		to?: string
+		type: string
+		content: string
+		timestamp: number
+	}): void {
+		this._sendToWebview({
+			type: "agent-monitor-message",
+			message,
+			queueDepth: this.monitorDataSource?.getQueueDepth() ?? 0,
+		})
+	}
+
+	/**
+	 * Push a full monitor data refresh to the webview.
+	 */
+	public pushMonitorRefresh(): void {
+		const data = this.gatherMonitorData()
+		this._sendToWebview({ type: "agent-monitor-data", data })
+	}
+	// kilocode_change end
 
 	// kilocode_change start - Gather monitor data from all sources
 	private gatherMonitorData() {
@@ -540,7 +578,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 	// kilocode_change start - Set monitor data source (called from extension.ts after backend init)
 	public setMonitorDataSource(source: MonitorDataSource): void {
 		this.monitorDataSource = source
-		console.log("📊 Monitor data source connected to SocietyAgentProvider")
+		getLog().info("Monitor data source connected to SocietyAgentProvider")
 	}
 	// kilocode_change end
 

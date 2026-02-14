@@ -11,6 +11,7 @@ import { Purpose } from "./supervisor-agent"
 import { PurposeAnalyzer, PurposeContext } from "./purpose-analyzer"
 import { ApiHandler } from "../../api"
 import { ExecutionLogger } from "./execution-logger"
+import { getLog } from "./logger"
 
 // kilocode_change start
 export interface ActivePurpose {
@@ -101,11 +102,11 @@ export class SocietyManager {
 		const complexityCheck = await this.checkComplexity(purpose)
 
 		if (complexityCheck.isSimple) {
-			console.log("🎯 Simple task detected - using direct execution (no multi-agent overhead)")
+			getLog().info("Simple task detected - using direct execution (no multi-agent overhead)")
 			return await this.executeSimpleTask(purpose, complexityCheck.workerType)
 		}
 
-		console.log("🏢 Complex task - forming multi-agent team")
+		getLog().info("Complex task - forming multi-agent team")
 
 		// Analyze purpose
 		const analysis = PurposeAnalyzer.analyze(purposeContext)
@@ -345,10 +346,10 @@ Respond with ONLY the JSON:`
 			}
 
 			const result = JSON.parse(jsonText)
-			console.log(`🤔 Complexity: ${result.isSimple ? "SIMPLE" : "COMPLEX"} - ${result.reasoning}`)
+			getLog().info(`Complexity: ${result.isSimple ? "SIMPLE" : "COMPLEX"} - ${result.reasoning}`)
 			return { isSimple: result.isSimple, workerType: result.workerType || "backend" }
 		} catch (error) {
-			console.warn("⚠️ Complexity check failed, defaulting to complex:", error)
+			getLog().warn("Complexity check failed, defaulting to complex:", error)
 			return { isSimple: false, workerType: "backend" }
 		}
 	}

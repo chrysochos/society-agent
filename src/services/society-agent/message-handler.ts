@@ -27,6 +27,7 @@ import {
 	getMessagePriority,
 	isReplayAttack,
 } from "./agent-identity"
+import { getLog } from "./logger"
 
 export interface MessageHandlerOptions {
 	/** Shared .society-agent directory */
@@ -73,6 +74,10 @@ export class UnifiedMessageHandler {
 	}> = []
 	// kilocode_change end
 
+	// kilocode_change start - Shutdown callback
+	private onShutdownCallback?: () => void
+	// kilocode_change end
+
 	constructor(options: MessageHandlerOptions) {
 		this.options = options
 	}
@@ -99,14 +104,14 @@ export class UnifiedMessageHandler {
 
 		// 1. Deduplication
 		if (this.processedIds.has(message.id)) {
-			console.log(`[MessageHandler] Dedup: already processed ${message.id}`)
+			getLog().info(`Dedup: already processed ${message.id}`)
 			return { accepted: false, reason: "Already processed" }
 		}
 
 		// 2. Validate (signature + replay + authorization)
 		const validation = identityManager.validateMessage(message)
 		if (!validation.valid) {
-			console.warn(`[MessageHandler] REJECTED message ${message.id}: ${validation.reason}`)
+			getLog().warn(`REJECTED message ${message.id}: ${validation.reason}`)
 			await this.quarantineMessage(message, validation.reason!)
 			return { accepted: false, reason: validation.reason }
 		}
@@ -115,7 +120,7 @@ export class UnifiedMessageHandler {
 		if (message.attachments && message.attachments.length > 0) {
 			const attachmentValid = await this.verifyAttachments(message)
 			if (!attachmentValid) {
-				console.warn(`[MessageHandler] REJECTED message ${message.id}: attachment hash mismatch`)
+				getLog().warn(`REJECTED message ${message.id}: attachment hash mismatch`)
 				await this.quarantineMessage(message, "Attachment hash mismatch")
 				return { accepted: false, reason: "Attachment integrity check failed" }
 			}
@@ -141,7 +146,7 @@ export class UnifiedMessageHandler {
 
 		// 5. Route by priority
 		const priority = getMessagePriority(message.type)
-		console.log(`[MessageHandler] Processing ${message.type} from ${message.from} (priority: ${priority})`)
+		getLog().info(`Processing ${message.type} from ${message.from} (priority: ${priority})`)
 
 		switch (priority) {
 			case "interrupt":
@@ -169,9 +174,13 @@ export class UnifiedMessageHandler {
 	private async handleInterrupt(message: SignedMessage): Promise<void> {
 		// Shutdown is special
 		if (message.type === "shutdown") {
-			console.log(`[MessageHandler] Shutdown requested by ${message.from}`)
+			getLog().info(`Shutdown requested by ${message.from}`)
 			vscode.window.showWarningMessage(`🛑 Shutdown requested by ${message.from}: ${message.content}`)
-			// TODO: graceful shutdown sequence
+			// kilocode_change start - graceful shutdown sequence
+			this.taskQueue.length = 0
+			this.currentTask = null
+			this.onShutdownCallback?.()
+			// kilocode_change end
 			return
 		}
 
@@ -186,7 +195,7 @@ export class UnifiedMessageHandler {
 			try {
 				// Try direct injection first
 				await currentTask.handleWebviewAskResponse("messageResponse", formatted, undefined)
-				console.log(`[MessageHandler] Injected ${message.type} from ${message.from} into active task`)
+				getLog().info(`Injected ${message.type} from ${message.from} into active task`)
 			} catch {
 				// Fallback: add to conversation history
 				try {
@@ -194,9 +203,9 @@ export class UnifiedMessageHandler {
 						role: "user",
 						content: formatted,
 					} as any)
-					console.log(`[MessageHandler] Added ${message.type} from ${message.from} to conversation history`)
+					getLog().info(`Added ${message.type} from ${message.from} to conversation history`)
 				} catch (error) {
-					console.error(`[MessageHandler] Failed to inject message:`, error)
+					getLog().error(`Failed to inject message:`, error)
 					vscode.window.showInformationMessage(
 						`📨 ${message.from}: ${message.content.substring(0, 100)}`,
 					)
@@ -209,7 +218,7 @@ export class UnifiedMessageHandler {
 				this.responseContext = { lastSender: message.from, messageId: message.id }
 				const formatted = this.formatForNewTask(message)
 				await provider.createTask(formatted)
-				console.log(`[MessageHandler] Created task for ${message.type} from ${message.from}`)
+				getLog().info(`Created task for ${message.type} from ${message.from}`)
 			} else {
 				vscode.window.showInformationMessage(
 					`📨 ${message.from}: ${message.content.substring(0, 100)}`,
@@ -234,12 +243,12 @@ export class UnifiedMessageHandler {
 				this.responseContext = { lastSender: message.from, messageId: message.id }
 				const formatted = this.formatForNewTask(message)
 				await provider.createTask(formatted)
-				console.log(`[MessageHandler] Started queued task from ${message.from}`)
+				getLog().info(`Started queued task from ${message.from}`)
 			}
 		} else {
 			// Agent is busy — queue it
 			this.taskQueue.push(message)
-			console.log(`[MessageHandler] Queued ${message.type} from ${message.from} (queue size: ${this.taskQueue.length})`)
+			getLog().info(`Queued ${message.type} from ${message.from} (queue size: ${this.taskQueue.length})`)
 			vscode.window.showInformationMessage(
 				`📋 Task from ${message.from} queued (position ${this.taskQueue.length})`,
 			)
@@ -250,7 +259,7 @@ export class UnifiedMessageHandler {
 	 * LOG: Just log and optionally notify, don't disturb the agent
 	 */
 	private async handleLog(message: SignedMessage): Promise<void> {
-		console.log(`[MessageHandler] ${message.type} from ${message.from}: ${message.content.substring(0, 100)}`)
+		getLog().info(`${message.type} from ${message.from}: ${message.content.substring(0, 100)}`)
 
 		// Show subtle notification for status updates
 		if (message.type === "task_complete") {
@@ -282,7 +291,7 @@ export class UnifiedMessageHandler {
 						responseText,
 						this.responseContext.messageId,
 					)
-					console.log(`[MessageHandler] Auto-routed response to ${this.responseContext.lastSender}`)
+					getLog().info(`Auto-routed response to ${this.responseContext.lastSender}`)
 				} else {
 					// Has @mentions — send to each mentioned agent
 					for (const mention of mentions) {
@@ -292,10 +301,10 @@ export class UnifiedMessageHandler {
 							await sender.send(mention, "message", responseText, this.responseContext.messageId)
 						}
 					}
-					console.log(`[MessageHandler] Routed response to @mentions: ${mentions.join(", ")}`)
+					getLog().info(`Routed response to @mentions: ${mentions.join(", ")}`)
 				}
 			} catch (error) {
-				console.error(`[MessageHandler] Failed to auto-route response:`, error)
+				getLog().error(`Failed to auto-route response:`, error)
 			}
 		}
 
@@ -303,7 +312,7 @@ export class UnifiedMessageHandler {
 		this.responseContext = null
 
 		if (this.taskQueue.length === 0) {
-			console.log(`[MessageHandler] Task queue empty — agent idle`)
+			getLog().info(`Task queue empty — agent idle`)
 			return
 		}
 
@@ -312,7 +321,7 @@ export class UnifiedMessageHandler {
 		// Track sender for next task's response routing
 		this.responseContext = { lastSender: next.from, messageId: next.id }
 
-		console.log(`[MessageHandler] Starting next queued task from ${next.from} (${this.taskQueue.length} remaining)`)
+		getLog().info(`Starting next queued task from ${next.from} (${this.taskQueue.length} remaining)`)
 
 		const { ClineProvider } = await import("../../core/webview/ClineProvider")
 		const provider = ClineProvider.getVisibleInstance()
@@ -424,13 +433,13 @@ export class UnifiedMessageHandler {
 				const hash = "sha256:" + crypto.createHash("sha256").update(fileData).digest("hex")
 
 				if (hash !== attachment.hash) {
-					console.warn(
-						`[MessageHandler] Attachment ${attachment.name} hash mismatch: expected ${attachment.hash}, got ${hash}`,
+					getLog().warn(
+						`Attachment ${attachment.name} hash mismatch: expected ${attachment.hash}, got ${hash}`,
 					)
 					return false
 				}
 			} catch (error) {
-				console.warn(`[MessageHandler] Attachment ${attachment.name} not found at ${fullPath}`)
+				getLog().warn(`Attachment ${attachment.name} not found at ${fullPath}`)
 				return false
 			}
 		}
@@ -529,6 +538,14 @@ export class UnifiedMessageHandler {
 		timestamp: number
 	}> {
 		return [...this.recentMessages]
+	}
+
+	// kilocode_change start - Shutdown registration
+	/**
+	 * Register a callback that fires when a shutdown message arrives.
+	 */
+	onShutdown(callback: () => void): void {
+		this.onShutdownCallback = callback
 	}
 	// kilocode_change end
 }

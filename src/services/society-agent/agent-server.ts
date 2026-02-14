@@ -4,6 +4,7 @@ import * as path from "path"
 import * as fs from "fs/promises"
 import { EventEmitter } from "events"
 import * as vscode from "vscode"
+import { getLog } from "./logger"
 
 /**
  * Agent Server - HTTP server for receiving messages from other agents
@@ -60,7 +61,7 @@ export class AgentServer extends EventEmitter {
 		// Start listening
 		await new Promise<void>((resolve, reject) => {
 			this.server!.listen(this.port, "127.0.0.1", () => {
-				console.log(`[AgentServer] Listening on http://127.0.0.1:${this.port}`)
+				getLog().info(`Listening on http://127.0.0.1:${this.port}`)
 				resolve()
 			})
 
@@ -75,7 +76,7 @@ export class AgentServer extends EventEmitter {
 		if (this.server) {
 			await new Promise<void>((resolve) => {
 				this.server!.close(() => {
-					console.log(`[AgentServer] Stopped`)
+					getLog().info(`Stopped`)
 					resolve()
 				})
 			})
@@ -122,7 +123,7 @@ export class AgentServer extends EventEmitter {
 				res.end(JSON.stringify({ error: "Not found" }))
 			}
 		} catch (error) {
-			console.error("[AgentServer] Error handling request:", error)
+			getLog().error("Error handling request:", error)
 			res.writeHead(500, { "Content-Type": "application/json" })
 			res.end(JSON.stringify({ error: error instanceof Error ? error.message : "Internal server error" }))
 		}
@@ -135,7 +136,7 @@ export class AgentServer extends EventEmitter {
 		const body = await this.readBody(req)
 		const message: IncomingMessage = JSON.parse(body)
 
-		console.log(`[AgentServer] Received message from ${message.from}:`, message.type)
+		getLog().info(`Received message from ${message.from}:`, message.type)
 
 		// Emit event for other components
 		this.emit("message", message)
@@ -176,7 +177,7 @@ export class AgentServer extends EventEmitter {
 			timestamp: fields.timestamp || new Date().toISOString(),
 		}
 
-		console.log(`[AgentServer] Received message with ${files.length} attachments from ${message.from}`)
+		getLog().info(`Received message with ${files.length} attachments from ${message.from}`)
 
 		// Save attachments
 		const attachments: IncomingAttachment[] = []
@@ -216,7 +217,7 @@ export class AgentServer extends EventEmitter {
 		const body = await this.readBody(req)
 		const task = JSON.parse(body)
 
-		console.log(`[AgentServer] Received task from ${task.from}:`, task.taskId)
+		getLog().info(`Received task from ${task.from}:`, task.taskId)
 
 		// Emit event
 		this.emit("task", task)

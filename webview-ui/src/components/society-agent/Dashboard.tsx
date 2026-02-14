@@ -59,7 +59,7 @@ export const Dashboard: React.FC = () => {
 		showInteractiveTerminal: false,
 	})
 
-	const [showMonitor, setShowMonitor] = useState(true) // kilocode_change - renamed from showPurposeInput
+	const [showMonitor, setShowMonitor] = useState(true) // kilocode_change
 	const messageStreamRef = useRef<HTMLDivElement>(null)
 
 	// Handle messages from extension
@@ -264,8 +264,8 @@ export const Dashboard: React.FC = () => {
 	}
 
 	// Show agent monitor when no active purpose
-	if (showMonitor || !state.purpose) { // kilocode_change - renamed from showPurposeInput
-		return <AgentMonitor /> // kilocode_change - replaced PurposeInput with AgentMonitor
+	if (showMonitor || !state.purpose) { // kilocode_change
+		return <AgentMonitor /> // kilocode_change
 	}
 
 	return (

@@ -4,6 +4,7 @@ import * as path from "path"
 import * as fs from "fs/promises"
 import { promisify } from "util"
 import { AgentIdentityManager } from "./agent-identity"
+import { getLog } from "./logger"
 
 const exec = promisify(child_process.exec)
 
@@ -62,7 +63,7 @@ export class AgentLauncher {
 		// Phase 1: Create all folders + identities before launching anything
 		for (const agent of plan.agents) {
 			if (!agent.autoLaunch) {
-				console.log(`[AgentLauncher] Skipping ${agent.agentId} (autoLaunch: false)`)
+				getLog().info(`Skipping ${agent.agentId} (autoLaunch: false)`)
 				continue
 			}
 
@@ -100,7 +101,7 @@ export class AgentLauncher {
 			await fs.mkdir(dir, { recursive: true })
 		}
 
-		console.log(`[AgentLauncher] Directory structure ready at ${sharedDir}`)
+		getLog().info(`Directory structure ready at ${sharedDir}`)
 	}
 
 	/**
@@ -116,7 +117,7 @@ export class AgentLauncher {
 
 		// Create workspace folder (no longer fails if missing!)
 		await fs.mkdir(workspacePath, { recursive: true })
-		console.log(`[AgentLauncher] Created workspace: ${workspacePath}`)
+		getLog().info(`Created workspace: ${workspacePath}`)
 
 		// Create inbox directory for this agent
 		const inboxDir = path.join(sharedDir, "inbox", agent.agentId)
@@ -136,7 +137,7 @@ export class AgentLauncher {
 			// Register public key so other agents can verify
 			await this.identityManager.registerPublicKey(agent.agentId, publicKeyPem)
 
-			console.log(`[AgentLauncher] Identity created for ${agent.agentId} (Ed25519)`)
+			getLog().info(`Identity created for ${agent.agentId} (Ed25519)`)
 		}
 
 		// Create README with agent context
@@ -150,7 +151,7 @@ export class AgentLauncher {
 	async launchAgent(projectRoot: string, agent: LaunchConfig, sharedDir?: string): Promise<LaunchResult> {
 		const workspacePath = path.join(projectRoot, agent.workspace)
 
-		console.log(`[AgentLauncher] Launching ${agent.agentId} in ${workspacePath}`)
+		getLog().info(`Launching ${agent.agentId} in ${workspacePath}`)
 
 		try {
 			// Verify workspace exists
@@ -178,7 +179,7 @@ export class AgentLauncher {
 				.catch(() => false)
 
 			if (!identityExists) {
-				console.warn(`[AgentLauncher] No identity file for ${agent.agentId} — launching without identity`)
+				getLog().warn(`No identity file for ${agent.agentId} — launching without identity`)
 			}
 
 			// kilocode_change start - Launch with extension dev mode if in development
@@ -237,7 +238,7 @@ export class AgentLauncher {
 		const resolvedSharedDir = sharedDir || path.join(projectRoot, ".society-agent")
 		const identityPath = path.join(resolvedSharedDir, "agents", agent.agentId, "identity.json")
 
-		console.log(`[AgentLauncher] Launching ${agent.agentId} with custom VS Code: ${vscodePath}`)
+		getLog().info(`Launching ${agent.agentId} with custom VS Code: ${vscodePath}`)
 
 		try {
 			const command = `"${vscodePath}" "${workspacePath}"`
@@ -281,7 +282,7 @@ export class AgentLauncher {
 		const resolvedSharedDir = sharedDir || path.join(projectRoot, ".society-agent")
 		const identityPath = path.join(resolvedSharedDir, "agents", agent.agentId, "identity.json")
 
-		console.log(`[AgentLauncher] Launching ${agent.agentId} in new window`)
+		getLog().info(`Launching ${agent.agentId} in new window`)
 
 		try {
 			const identityExists = await fs
@@ -361,7 +362,7 @@ This workspace starts empty. You'll create files and folders as needed based on 
 `
 
 		await fs.writeFile(readmePath, content, "utf-8")
-		console.log(`[AgentLauncher] Created README.md in ${workspacePath}`)
+		getLog().info(`Created README.md in ${workspacePath}`)
 	}
 
 	/**
@@ -531,9 +532,9 @@ This workspace starts empty. You'll create files and folders as needed based on 
 			try {
 				await fs.rm(workspacePath, { recursive: true, force: true })
 				cleaned.push(agent.agentId)
-				console.log(`[AgentLauncher] Cleaned up ephemeral workspace for ${agent.agentId}`)
+				getLog().info(`Cleaned up ephemeral workspace for ${agent.agentId}`)
 			} catch (error) {
-				console.warn(`[AgentLauncher] Failed to clean up ${agent.agentId}: ${error}`)
+				getLog().warn(`Failed to clean up ${agent.agentId}: ${error}`)
 			}
 		}
 

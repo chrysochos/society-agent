@@ -86,11 +86,12 @@ export class ProjectAnalyzer {
 
 		// Backend detection
 		if (await this.hasBackend(projectRoot, packageJson)) {
+			const backendFiles = await this.findBackendFiles(projectRoot) // kilocode_change
 			components.push({
 				type: "backend",
 				location: this.findBackendLocation(entries),
-				files: await this.findBackendFiles(projectRoot),
-				lineCount: 0, // TODO: Calculate
+				files: backendFiles,
+				lineCount: await this.countLines(backendFiles), // kilocode_change
 				technologies: this.detectBackendTech(packageJson),
 				confidence: 0.9,
 			})
@@ -98,11 +99,12 @@ export class ProjectAnalyzer {
 
 		// Frontend detection
 		if (await this.hasFrontend(projectRoot, packageJson)) {
+			const frontendFiles = await this.findFrontendFiles(projectRoot) // kilocode_change
 			components.push({
 				type: "frontend",
 				location: this.findFrontendLocation(entries),
-				files: await this.findFrontendFiles(projectRoot),
-				lineCount: 0,
+				files: frontendFiles,
+				lineCount: await this.countLines(frontendFiles), // kilocode_change
 				technologies: this.detectFrontendTech(packageJson),
 				confidence: 0.9,
 			})
@@ -110,11 +112,12 @@ export class ProjectAnalyzer {
 
 		// Tests detection
 		if (await this.hasTests(projectRoot, entries)) {
+			const testFiles = await this.findTestFiles(projectRoot) // kilocode_change
 			components.push({
 				type: "tests",
 				location: "tests/",
-				files: await this.findTestFiles(projectRoot),
-				lineCount: 0,
+				files: testFiles,
+				lineCount: await this.countLines(testFiles), // kilocode_change
 				technologies: this.detectTestTech(packageJson),
 				confidence: 0.95,
 			})
@@ -352,6 +355,21 @@ export class ProjectAnalyzer {
 	private async findTestFiles(projectRoot: string): Promise<string[]> {
 		return []
 	}
+
+	// kilocode_change start - Calculate total line count for a list of files
+	private async countLines(files: string[]): Promise<number> {
+		let total = 0
+		for (const file of files) {
+			try {
+				const content = await fs.readFile(file, "utf-8")
+				total += content.split("\n").length
+			} catch {
+				// Skip unreadable files
+			}
+		}
+		return total
+	}
+	// kilocode_change end
 
 	private detectBackendTech(packageJson: any): string[] {
 		const techs: string[] = []

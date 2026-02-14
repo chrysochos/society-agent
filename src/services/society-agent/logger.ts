@@ -146,3 +146,65 @@ export function formatAgentAction(action: AgentAction): string {
 
 	return `[${timestamp}] ${status} ${action.agentId}: ${action.action}${approval}`
 }
+
+// kilocode_change start - OutputChannel-based logging for replacing console.log
+/**
+ * Simple log interface for society-agent services.
+ * Replaces direct console.log/warn/error calls.
+ */
+export interface SocietyLog {
+	info(message: string, ...args: unknown[]): void
+	warn(message: string, ...args: unknown[]): void
+	error(message: string, ...args: unknown[]): void
+	debug(message: string, ...args: unknown[]): void
+}
+
+const noopLog: SocietyLog = {
+	info() {},
+	warn() {},
+	error() {},
+	debug() {},
+}
+
+let _globalLog: SocietyLog = noopLog
+
+/** Set the global society-agent log (call once from extension.ts). */
+export function setSocietyLog(log: SocietyLog): void {
+	_globalLog = log
+}
+
+/** Get the global society-agent log. */
+export function getLog(): SocietyLog {
+	return _globalLog
+}
+
+/**
+ * Create a SocietyLog backed by a VS Code OutputChannel.
+ * @param channel - anything with appendLine (OutputChannel compatible)
+ * @param prefix - log line prefix
+ */
+export function createChannelLog(
+	channel: { appendLine(value: string): void },
+	prefix = "[SocietyAgent]",
+): SocietyLog {
+	const fmt = (level: string, message: string, args: unknown[]): string => {
+		const extra = args.length > 0
+			? " " + args.map(a => {
+				if (a instanceof Error) return `${a.message}\n${a.stack || ""}`
+				if (typeof a === "object" && a !== null) {
+					try { return JSON.stringify(a) } catch { return String(a) }
+				}
+				return String(a)
+			}).join(" ")
+			: ""
+		return `${prefix} [${level}] ${message}${extra}`
+	}
+
+	return {
+		info(message, ...args) { channel.appendLine(fmt("INFO", message, args)) },
+		warn(message, ...args) { channel.appendLine(fmt("WARN", message, args)) },
+		error(message, ...args) { channel.appendLine(fmt("ERROR", message, args)) },
+		debug(message, ...args) { channel.appendLine(fmt("DEBUG", message, args)) },
+	}
+}
+// kilocode_change end

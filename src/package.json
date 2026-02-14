@@ -653,6 +653,11 @@
 					},
 					"default": [],
 					"description": "Additional capabilities for this agent (e.g., 'database', 'api-design', 'testing'). Used for task routing."
+				},
+				"kilo-code.societyAgent.multiWindow": {
+					"type": "boolean",
+					"default": false,
+					"description": "Launch worker agents as separate VS Code windows (multi-window mode). When enabled, each worker runs in its own VS Code instance for full tool isolation."
 				}
 			}
 		},

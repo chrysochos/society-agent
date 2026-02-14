@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from "uuid"
 import { AgentClient, AttachmentData } from "./agent-client"
 import { InboxManager } from "./inbox-manager" // kilocode_change
 import { MessageSecurity } from "./message-security" // kilocode_change
+import { getLog } from "./logger"
 
 /**
  * Agent Registry - Manages agent discovery and lifecycle in multi-VS Code setup
@@ -67,6 +68,9 @@ export class AgentRegistry {
 	// kilocode_change start - Cached agents for synchronous monitor access
 	private cachedAgents: AgentRegistration[] = []
 	private cacheRefreshInterval: NodeJS.Timeout | undefined
+	// kilocode_change end
+	// kilocode_change start - External message handler callback
+	private onMessageCallback?: (message: AgentMessage) => Promise<void>
 	// kilocode_change end
 
 	constructor(sharedDir: string, serverUrl?: string) {
@@ -131,7 +135,7 @@ export class AgentRegistry {
 		}
 		// kilocode_change end
 
-		console.log(`[AgentRegistry] Agent ${this.agentId} initialized`)
+		getLog().info(`Agent ${this.agentId} initialized`)
 	}
 
 	/**
@@ -234,14 +238,14 @@ export class AgentRegistry {
 						await this.handleMessage(message)
 					}
 				} catch (err) {
-					console.error("[AgentRegistry] Failed to parse message:", err)
+					getLog().error("Failed to parse message:", err)
 				}
 			}
 
 			// Update position
 			this.lastMessagePosition = currentSize
 		} catch (err) {
-			console.error("[AgentRegistry] Failed to process messages:", err)
+			getLog().error("Failed to process messages:", err)
 		}
 	}
 
@@ -249,17 +253,30 @@ export class AgentRegistry {
 	 * Handle incoming message
 	 */
 	private async handleMessage(message: AgentMessage): Promise<void> {
-		console.log(`[AgentRegistry] Received message from ${message.from}:`, message.type)
+		getLog().info(`Received message from ${message.from}:`, message.type)
 
 		// Mark message as delivered if it wasn't already
 		if (!message.delivered) {
 			await this.markMessageDelivered(message.id)
 		}
 
-		// Emit event for other parts of the system to handle
-		// TODO: Integrate with ConversationAgent or SocietyManager
-		vscode.window.showInformationMessage(`Message from ${message.from}: ${message.type}`)
+		// kilocode_change start - Route through external handler if registered
+		if (this.onMessageCallback) {
+			await this.onMessageCallback(message)
+		} else {
+			vscode.window.showInformationMessage(`Message from ${message.from}: ${message.type}`)
+		}
+		// kilocode_change end
 	}
+
+	// kilocode_change start - Register an external message handler
+	/**
+	 * Set a callback for incoming messages (e.g. to route through UnifiedMessageHandler).
+	 */
+	setMessageHandler(handler: (message: AgentMessage) => Promise<void>): void {
+		this.onMessageCallback = handler
+	}
+	// kilocode_change end
 
 	/**
 	 * Mark message as delivered (for offline delivery tracking)
@@ -304,9 +321,9 @@ export class AgentRegistry {
 				const signature = await this.messageSecurity.signMessage(message, this.agentId)
 				const signedMessage = { ...message, signature }
 				await this.inboxManager.queueMessage(to, signedMessage)
-				console.log(`[AgentRegistry] Queued signed message for ${to} in inbox:`, type)
+				getLog().info(`Queued signed message for ${to} in inbox:`, type)
 			} catch (error) {
-				console.error(`[AgentRegistry] Failed to queue inbox message:`, error)
+				getLog().error(`Failed to queue inbox message:`, error)
 				// Fallback to messages.jsonl
 				await this.appendJSONL(this.messagesPath, message)
 			}
@@ -341,9 +358,9 @@ export class AgentRegistry {
 						content,
 					})
 				}
-				console.log(`[AgentRegistry] Also sent to ${to} via HTTP (instant):`, type)
+				getLog().info(`Also sent to ${to} via HTTP (instant):`, type)
 			} catch (error) {
-				console.log(`[AgentRegistry] HTTP send to ${to} failed (inbox file will be picked up):`, error)
+				getLog().info(`HTTP send to ${to} failed (inbox file will be picked up):`, error)
 			}
 		}
 		// kilocode_change end
@@ -455,16 +472,16 @@ export class AgentRegistry {
 	 * "Wake up and catch up" - Process all missed messages since agent was offline
 	 */
 	async catchUp(): Promise<void> {
-		console.log(`[AgentRegistry] Agent ${this.agentId} catching up on missed messages...`)
+		getLog().info(`Agent ${this.agentId} catching up on missed messages...`)
 
 		const undelivered = await this.getUndeliveredMessages()
-		console.log(`[AgentRegistry] Found ${undelivered.length} undelivered messages`)
+		getLog().info(`Found ${undelivered.length} undelivered messages`)
 
 		for (const message of undelivered) {
 			await this.handleMessage(message)
 		}
 
-		console.log(`[AgentRegistry] Catch-up complete`)
+		getLog().info(`Catch-up complete`)
 	}
 
 	/**
@@ -484,7 +501,7 @@ export class AgentRegistry {
 		// Mark as offline
 		await this.updateHeartbeat("offline")
 
-		console.log(`[AgentRegistry] Agent ${this.agentId} disposed`)
+		getLog().info(`Agent ${this.agentId} disposed`)
 	}
 
 	/**
@@ -624,7 +641,7 @@ export class AgentRegistry {
 			}
 			await fs.appendFile(deliveryPath, JSON.stringify(delivery) + "\n", "utf-8")
 		} catch (error) {
-			console.error("[AgentRegistry] Error marking message as delivered:", error)
+			getLog().error("Error marking message as delivered:", error)
 		}
 	}
 	// kilocode_change end

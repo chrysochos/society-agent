@@ -13,6 +13,7 @@ import { SupervisorAgent, Purpose, WorkerSpec } from "./supervisor-agent"
 import { ApiHandler } from "../../api"
 import { AgentIdentityManager } from "./agent-identity"
 import { AgentLauncher, LaunchConfig } from "./agent-launcher"
+import { getLog } from "./logger"
 
 // kilocode_change start
 export interface TeamMember {
@@ -161,9 +162,9 @@ export class AgentTeam {
 					this.teamId,
 				)
 				await this.identityManager.registerPublicKey(supervisorId, publicKeyPem)
-				console.log(`[AgentTeam] Ed25519 identity created for supervisor ${supervisorId}`)
+				getLog().info(`Ed25519 identity created for supervisor ${supervisorId}`)
 			} catch (err) {
-				console.warn(`[AgentTeam] Failed to create supervisor identity:`, err)
+				getLog().warn(`Failed to create supervisor identity:`, err)
 			}
 		}
 
@@ -206,9 +207,9 @@ export class AgentTeam {
 
 			const result = await this.launcher.launchAgent(projectRoot, launchConfig, sharedDir)
 			if (result.success) {
-				console.log(`[AgentTeam] Launched VS Code window for ${workerId}`)
+				getLog().info(`Launched VS Code window for ${workerId}`)
 			} else {
-				console.warn(`[AgentTeam] Failed to launch ${workerId}: ${result.error}`)
+				getLog().warn(`Failed to launch ${workerId}: ${result.error}`)
 			}
 
 			// Delay between launches
@@ -244,8 +245,8 @@ export class AgentTeam {
 					this.identityManager
 						.createAgentIdentity(workerId, spec.workerType, capabilities, this.teamId, undefined, spec.workerType)
 						.then(({ publicKeyPem }) => this.identityManager!.registerPublicKey(workerId, publicKeyPem))
-						.then(() => console.log(`[AgentTeam] Ed25519 identity created for ${workerId}`))
-						.catch((err) => console.warn(`[AgentTeam] Failed to create identity for ${workerId}:`, err))
+						.then(() => getLog().info(`Ed25519 identity created for ${workerId}`))
+						.catch((err) => getLog().warn(`Failed to create identity for ${workerId}:`, err))
 				}
 
 				const worker = new ConversationAgent({
@@ -314,8 +315,8 @@ export class AgentTeam {
 		// kilocode_change start
 		// In real implementation, this would show in web dashboard
 		// For now, log to console
-		console.log(`🔔 ESCALATION [${escalation.priority}]:`, escalation.question)
-		console.log(`Context: ${escalation.context}`)
+		getLog().info(`ESCALATION [${escalation.priority}]:`, escalation.question)
+		getLog().info(`Context: ${escalation.context}`)
 		// kilocode_change end
 	}
 
@@ -324,7 +325,7 @@ export class AgentTeam {
 	 */
 	private updateProgress(progress: number): void {
 		// kilocode_change start
-		console.log(`📊 Progress update: ${progress}%`)
+		getLog().info(`Progress update: ${progress}%`)
 		this.onProgressUpdate?.(progress)
 		// kilocode_change end
 	}

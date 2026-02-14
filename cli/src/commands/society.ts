@@ -26,51 +26,203 @@ export function registerSocietyCommands(program: Command): void {
 		.option("-a, --attach <files...>", "Attach files (images, docs, URLs)")
 		.option("--constraint <constraints...>", "Constraints (e.g., 'TypeScript', 'Budget: 1 hour')")
 		.option("--success <criteria...>", "Success criteria")
+		.option("-p, --project <path>", "Project root directory", process.cwd())
 		.action(async (purpose, options) => {
-			console.log("🚀 Starting purpose:", purpose)
+			// kilocode_change start - Write purpose request to .society-agent/
+			try {
+				const fs = await import("fs/promises")
+				const path = await import("path")
 
-			if (options.context) {
-				console.log("Context:", options.context)
+				const projectRoot = options.project
+				const sharedDir = path.join(projectRoot, ".society-agent")
+				await fs.mkdir(sharedDir, { recursive: true })
+
+				const purposeId = `purpose-${Date.now()}`
+				const purposeRequest = {
+					id: purposeId,
+					description: purpose,
+					context: options.context || null,
+					attachments: options.attach || [],
+					constraints: options.constraint || [],
+					successCriteria: options.success || [],
+					requestedAt: new Date().toISOString(),
+					status: "pending",
+				}
+
+				const purposesDir = path.join(sharedDir, "purposes")
+				await fs.mkdir(purposesDir, { recursive: true })
+				await fs.writeFile(
+					path.join(purposesDir, `${purposeId}.json`),
+					JSON.stringify(purposeRequest, null, 2),
+					"utf-8",
+				)
+
+				console.log(`✅ Purpose created: ${purposeId}`)
+				console.log(`Description: ${purpose}`)
+				if (options.context) console.log(`Context: ${options.context}`)
+				if (options.constraint?.length) console.log(`Constraints: ${options.constraint.join(", ")}`)
+				if (options.success?.length) console.log(`Success criteria: ${options.success.join(", ")}`)
+				console.log(`\nPurpose file: ${path.join(purposesDir, `${purposeId}.json`)}`)
+				console.log("Open the Society Agent sidebar in VS Code to monitor execution.")
+			} catch (error) {
+				console.error("❌ Failed to start purpose:", error)
+				process.exit(1)
 			}
-
-			if (options.attach) {
-				console.log("Attachments:", options.attach)
-			}
-
-			if (options.constraint) {
-				console.log("Constraints:", options.constraint)
-			}
-
-			if (options.success) {
-				console.log("Success criteria:", options.success)
-			}
-
-			// TODO: Implement actual Society Agent integration
-			console.log("\n⚠️  Society Agent implementation in progress...")
-			console.log("This will create a supervisor agent and worker team to achieve your purpose.")
-			console.log("\nFor now, use the standard KiloCode interface.")
+			// kilocode_change end
 		})
 
 	// List active purposes
 	society
 		.command("list")
 		.description("List active purposes and agents")
-		.action(async () => {
-			console.log("📋 Active Purposes:")
+		.option("-p, --project <path>", "Project root directory", process.cwd())
+		.action(async (options) => {
+			// kilocode_change start - Read from .society-agent/ directory
+			try {
+				const fs = await import("fs/promises")
+				const path = await import("path")
 
-			// TODO: Implement actual listing
-			console.log("\n⚠️  No active purposes (Society Agent in development)")
+				const projectRoot = options.project
+				const sharedDir = path.join(projectRoot, ".society-agent")
+
+				// List registered agents
+				const registryPath = path.join(sharedDir, "registry.jsonl")
+				try {
+					const content = await fs.readFile(registryPath, "utf-8")
+					const agents = content.trim().split("\n").filter(Boolean).map((l: string) => JSON.parse(l))
+
+					// Deduplicate by agentId (keep latest)
+					const latest = new Map<string, any>()
+					for (const a of agents) {
+						latest.set(a.agentId, a)
+					}
+
+					console.log("📋 Registered Agents:")
+					for (const [, agent] of latest) {
+						const ago = Math.round((Date.now() - new Date(agent.lastSeen || agent.registeredAt).getTime()) / 1000)
+						const status = ago < 60 ? "🟢 active" : ago < 300 ? "🟡 stale" : "🔴 offline"
+						console.log(`  ${agent.agentId} (${agent.role}) ${status} — last seen ${ago}s ago`)
+					}
+				} catch {
+					console.log("📋 No registered agents.")
+				}
+
+				// List purposes
+				const purposesDir = path.join(sharedDir, "purposes")
+				try {
+					const files = await fs.readdir(purposesDir)
+					const jsonFiles = files.filter((f: string) => f.endsWith(".json"))
+					if (jsonFiles.length > 0) {
+						console.log("\n📎 Purposes:")
+						for (const file of jsonFiles) {
+							const p = JSON.parse(await fs.readFile(path.join(purposesDir, file), "utf-8"))
+							console.log(`  ${p.id} [${p.status}] — ${p.description}`)
+						}
+					}
+				} catch {
+					// No purposes directory
+				}
+			} catch (error) {
+				console.error("❌ Failed to list:", error)
+				process.exit(1)
+			}
+			// kilocode_change end
 		})
 
 	// Attach to agent terminal
 	society
 		.command("attach <agent-id>")
-		.description("Attach to agent terminal")
-		.action(async (agentId) => {
-			console.log(`🔗 Attaching to agent: ${agentId}`)
+		.description("Attach to agent terminal (view agent logs)")
+		.option("-p, --project <path>", "Project root directory", process.cwd())
+		.action(async (agentId, options) => {
+			// kilocode_change start - Tail agent logs from .society-agent/logs/
+			try {
+				const fs = await import("fs/promises")
+				const path = await import("path")
 
-			// TODO: Implement terminal attachment
-			console.log("\n⚠️  Terminal attachment not yet implemented")
+				const projectRoot = options.project
+				const sharedDir = path.join(projectRoot, ".society-agent")
+				const logsDir = path.join(sharedDir, "logs")
+
+				// Find log files matching agentId
+				let logFiles: string[] = []
+				try {
+					const allFiles = await fs.readdir(logsDir)
+					logFiles = allFiles.filter((f: string) => f.includes(agentId) && f.endsWith(".jsonl"))
+				} catch {
+					// fall through
+				}
+
+				if (logFiles.length === 0) {
+					console.error(`❌ No logs found for agent: ${agentId}`)
+					console.log(`Looked in: ${logsDir}`)
+					process.exit(1)
+				}
+
+				const logFile = path.join(logsDir, logFiles[logFiles.length - 1])
+				console.log(`📡 Attaching to agent ${agentId} — tailing ${logFile}\n`)
+
+				// Print existing content
+				try {
+					const content = await fs.readFile(logFile, "utf-8")
+					const lines = content.trim().split("\n").filter(Boolean)
+					const recent = lines.slice(-20) // Last 20 entries
+					for (const line of recent) {
+						try {
+							const entry = JSON.parse(line)
+							const ts = new Date(entry.timestamp).toLocaleTimeString()
+							console.log(`[${ts}] [${entry.level || "info"}] ${entry.event || entry.action || JSON.stringify(entry)}`)
+						} catch {
+							console.log(line)
+						}
+					}
+				} catch {
+					// empty log
+				}
+
+				// Watch for new content
+				console.log("\n--- watching for new entries (Ctrl+C to exit) ---\n")
+				const { watch } = await import("fs")
+				let lastSize = 0
+				try {
+					const stat = await fs.stat(logFile)
+					lastSize = stat.size
+				} catch {
+					// file may not exist yet
+				}
+
+				watch(logFile, async () => {
+					try {
+						const stat = await fs.stat(logFile)
+						if (stat.size > lastSize) {
+							const content = await fs.readFile(logFile, "utf-8")
+							const allBytes = Buffer.from(content, "utf-8")
+							const newContent = allBytes.subarray(lastSize).toString("utf-8")
+							lastSize = stat.size
+
+							const lines = newContent.trim().split("\n").filter(Boolean)
+							for (const line of lines) {
+								try {
+									const entry = JSON.parse(line)
+									const ts = new Date(entry.timestamp).toLocaleTimeString()
+									console.log(`[${ts}] [${entry.level || "info"}] ${entry.event || entry.action || JSON.stringify(entry)}`)
+								} catch {
+									console.log(line)
+								}
+							}
+						}
+					} catch {
+						// ignore read errors
+					}
+				})
+
+				// Keep process running
+				await new Promise(() => {})
+			} catch (error) {
+				console.error("❌ Failed to attach:", error)
+				process.exit(1)
+			}
+			// kilocode_change end
 		})
 
 	// Stop purpose execution
@@ -78,18 +230,81 @@ export function registerSocietyCommands(program: Command): void {
 		.command("stop [purpose-id]")
 		.description("Stop purpose execution")
 		.option("-a, --all", "Stop all active purposes")
+		.option("-p, --project <path>", "Project root directory", process.cwd())
 		.action(async (purposeId, options) => {
-			if (options.all) {
-				console.log("⏹️  Stopping all purposes...")
-			} else if (purposeId) {
-				console.log(`⏹️  Stopping purpose: ${purposeId}`)
-			} else {
-				console.error("Error: Provide purpose-id or use --all")
+			// kilocode_change start - Broadcast shutdown via inbox files
+			try {
+				const fs = await import("fs/promises")
+				const path = await import("path")
+
+				const projectRoot = options.project
+				const sharedDir = path.join(projectRoot, ".society-agent")
+
+				if (!purposeId && !options.all) {
+					console.error("Error: Provide purpose-id or use --all")
+					process.exit(1)
+				}
+
+				// Read registry to find active agents
+				const registryPath = path.join(sharedDir, "registry.jsonl")
+				let agents: any[] = []
+				try {
+					const content = await fs.readFile(registryPath, "utf-8")
+					const entries = content.trim().split("\n").filter(Boolean).map((l: string) => JSON.parse(l))
+					const latest = new Map<string, any>()
+					for (const a of entries) {
+						latest.set(a.agentId, a)
+					}
+					agents = Array.from(latest.values())
+				} catch {
+					console.log("No agents registered.")
+					return
+				}
+
+				// Send shutdown to each agent's inbox
+				let count = 0
+				for (const agent of agents) {
+					const inboxDir = path.join(sharedDir, "inbox", agent.agentId)
+					await fs.mkdir(inboxDir, { recursive: true })
+
+					const shutdownMsg = {
+						id: `shutdown-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+						from: "user",
+						to: agent.agentId,
+						type: "shutdown",
+						content: purposeId ? `Stop purpose: ${purposeId}` : "Stop all purposes",
+						timestamp: new Date().toISOString(),
+						queuedAt: new Date().toISOString(),
+						attempts: 0,
+					}
+
+					await fs.writeFile(
+						path.join(inboxDir, `${shutdownMsg.id}.json`),
+						JSON.stringify(shutdownMsg, null, 2),
+						"utf-8",
+					)
+					count++
+				}
+
+				// Update purpose status if specified
+				if (purposeId) {
+					const purposePath = path.join(sharedDir, "purposes", `${purposeId}.json`)
+					try {
+						const p = JSON.parse(await fs.readFile(purposePath, "utf-8"))
+						p.status = "stopped"
+						p.stoppedAt = new Date().toISOString()
+						await fs.writeFile(purposePath, JSON.stringify(p, null, 2), "utf-8")
+					} catch {
+						// Purpose file may not exist
+					}
+				}
+
+				console.log(`✅ Shutdown sent to ${count} agent(s)`)
+			} catch (error) {
+				console.error("❌ Failed to stop:", error)
 				process.exit(1)
 			}
-
-			// TODO: Implement stop functionality
-			console.log("\n⚠️  Stop not yet implemented")
+			// kilocode_change end
 		})
 
 	// Society Agent status

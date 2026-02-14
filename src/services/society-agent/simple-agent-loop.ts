@@ -11,6 +11,7 @@ import { AgentRegistry, AgentMessage } from "./agent-registry"
 import { ResponseHandler } from "./response-handler"
 import { KnowledgeManager } from "./knowledge-manager"
 import { InboxManager, InboxMessage } from "./inbox-manager"
+import { getLog } from "./logger"
 
 export class SimpleAgentLoop {
 	private registry: AgentRegistry
@@ -42,14 +43,14 @@ export class SimpleAgentLoop {
 		if (this.running) return
 
 		this.running = true
-		console.log(`[SimpleAgentLoop] Starting for ${this.role}`)
+		getLog().info(`Starting for ${this.role}`)
 
 		// Initialize knowledge manager (workspace-local)
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
 		if (workspaceRoot) {
 			this.knowledgeManager = new KnowledgeManager(workspaceRoot)
 			await this.knowledgeManager.initialize()
-			console.log(`[SimpleAgentLoop] Knowledge base initialized at ${workspaceRoot}/.agent-knowledge/`)
+			getLog().info(`Knowledge base initialized at ${workspaceRoot}/.agent-knowledge/`)
 		}
 
 		// kilocode_change start - Initialize inbox manager with shared directory and security
@@ -57,10 +58,10 @@ export class SimpleAgentLoop {
 		if (inboxRoot) {
 			this.inboxManager = new InboxManager(inboxRoot)
 			await this.inboxManager.initialize() // Initialize security keys
-			console.log(`[SimpleAgentLoop] Inbox manager initialized at ${inboxRoot}/.society-agent/inbox/`)
-			console.log(`[SimpleAgentLoop] Message security enabled - signatures will be verified`)
+			getLog().info(`Inbox manager initialized at ${inboxRoot}/.society-agent/inbox/`)
+			getLog().info(`Message security enabled - signatures will be verified`)
 		} else {
-			console.warn(`[SimpleAgentLoop] No shared directory or workspace root - inbox disabled`)
+			getLog().warn(`No shared directory or workspace root - inbox disabled`)
 		}
 		// kilocode_change end
 
@@ -69,7 +70,7 @@ export class SimpleAgentLoop {
 			try {
 				await this.processMessages()
 			} catch (error) {
-				console.error("[SimpleAgentLoop] Error processing messages:", error)
+				getLog().error("Error processing messages:", error)
 			}
 		}, 3000)
 	}
@@ -83,7 +84,7 @@ export class SimpleAgentLoop {
 			this.pollInterval = undefined
 		}
 		this.running = false
-		console.log(`[SimpleAgentLoop] Stopped for ${this.role}`)
+		getLog().info(`Stopped for ${this.role}`)
 	}
 
 	/**
@@ -97,7 +98,7 @@ export class SimpleAgentLoop {
 
 			if (newMessages.length === 0) return
 
-			console.log(`[SimpleAgentLoop] Processing ${newMessages.length} new message(s) (fallback mode)`)
+			getLog().info(`Processing ${newMessages.length} new message(s) (fallback mode)`)
 
 			for (const message of newMessages) {
 				await this.handleMessage(message)
@@ -111,7 +112,7 @@ export class SimpleAgentLoop {
 
 		if (pendingMessages.length === 0) return
 
-		console.log(`[SimpleAgentLoop] Found ${pendingMessages.length} pending message(s) in inbox`)
+		getLog().info(`Found ${pendingMessages.length} pending message(s) in inbox`)
 
 		for (const message of pendingMessages) {
 			const delivered = await this.attemptDelivery(message)
@@ -119,12 +120,12 @@ export class SimpleAgentLoop {
 			if (delivered) {
 				// Acknowledge (delete from inbox) on successful delivery
 				await this.inboxManager.acknowledge(message)
-				console.log(`[SimpleAgentLoop] Successfully delivered and acknowledged message ${message.id}`)
+				getLog().info(`Successfully delivered and acknowledged message ${message.id}`)
 			} else {
 				// Increment attempt count, will retry next cycle
 				await this.inboxManager.incrementAttempt(message)
-				console.log(
-					`[SimpleAgentLoop] Failed to deliver message ${message.id}, attempt ${(message.attempts || 0) + 1}`,
+				getLog().info(
+					`Failed to deliver message ${message.id}, attempt ${(message.attempts || 0) + 1}`,
 				)
 			}
 		}
@@ -146,42 +147,42 @@ export class SimpleAgentLoop {
 		const isWaiting = currentTask && (taskAny?.state === "waiting_for_api" || taskAny?.state === "paused")
 		const isBusy = currentTask && taskAny?.state === "streaming"
 
-		console.log(
-			`[SimpleAgentLoop] Attempting delivery for message ${message.id}, agent state: ${taskAny?.state || "idle"}`,
+		getLog().info(
+			`Attempting delivery for message ${message.id}, agent state: ${taskAny?.state || "idle"}`,
 		)
 
 		// Strategy 1: IDLE - Create new task (always works)
 		if (isIdle) {
-			console.log(`[SimpleAgentLoop] Agent idle - creating new task for message`)
+			getLog().info(`Agent idle - creating new task for message`)
 			try {
 				await this.handleMessage(message)
 				return true
 			} catch (error) {
-				console.error(`[SimpleAgentLoop] Failed to create task:`, error)
+				getLog().error(`Failed to create task:`, error)
 				return false
 			}
 		}
 
 		// Strategy 2: WAITING - Inject into current task (high success rate)
 		if (isWaiting) {
-			console.log(`[SimpleAgentLoop] Agent waiting - injecting message into current task`)
+			getLog().info(`Agent waiting - injecting message into current task`)
 			try {
 				const sender = message.from === "user" ? "user" : message.from
 				const content = typeof message.content === "string" ? message.content : ""
 				const formattedMessage = `📨 **Response from ${sender}:**\n\n${content}`
 
 				await currentTask.handleWebviewAskResponse("messageResponse", formattedMessage, undefined)
-				console.log(`[SimpleAgentLoop] Message injected successfully`)
+				getLog().info(`Message injected successfully`)
 				return true
 			} catch (error) {
-				console.error(`[SimpleAgentLoop] Injection failed:`, error)
+				getLog().error(`Injection failed:`, error)
 				return false
 			}
 		}
 
 		// Strategy 3: BUSY - Add to conversation history (guaranteed delivery on next cycle)
 		if (isBusy || currentTask) {
-			console.log(`[SimpleAgentLoop] Agent busy - adding message to conversation history`)
+			getLog().info(`Agent busy - adding message to conversation history`)
 			try {
 				const sender = message.from === "user" ? "user" : message.from
 				const content = typeof message.content === "string" ? message.content : ""
@@ -198,17 +199,17 @@ export class SimpleAgentLoop {
 					`📨 Message from ${sender} queued. You'll see it in your next response.`,
 				)
 
-				console.log(`[SimpleAgentLoop] Message added to conversation history`)
+				getLog().info(`Message added to conversation history`)
 				return true
 			} catch (error) {
-				console.error(`[SimpleAgentLoop] Failed to add to history:`, error)
+				getLog().error(`Failed to add to history:`, error)
 				// Retry later
 				return false
 			}
 		}
 
 		// Unknown state - retry later
-		console.warn(`[SimpleAgentLoop] Unknown agent state, will retry`)
+		getLog().warn(`Unknown agent state, will retry`)
 		return false
 	}
 
@@ -216,7 +217,7 @@ export class SimpleAgentLoop {
 	 * Handle a single message - inject into chat via ClineProvider
 	 */
 	private async handleMessage(message: AgentMessage): Promise<void> {
-		console.log(`[SimpleAgentLoop] Received message:`, {
+		getLog().info(`Received message:`, {
 			from: message.from,
 			type: message.type,
 			content: typeof message.content === "string" ? message.content.substring(0, 100) : message.content,
@@ -240,7 +241,7 @@ export class SimpleAgentLoop {
 
 		// If agent has active task and receives a "message" type, inject AND add to history
 		if (message.type === "message" && hasActiveTask) {
-			console.log(`[SimpleAgentLoop] Agent busy - injecting message from ${sender} into active task`)
+			getLog().info(`Agent busy - injecting message from ${sender} into active task`)
 			const formattedMessage = `📨 **Response from ${sender}:**\n\n${content}`
 
 			// Add directly to API conversation history so agent sees it in next API call
@@ -249,17 +250,17 @@ export class SimpleAgentLoop {
 					role: "user",
 					content: formattedMessage,
 				} as any)
-				console.log(`[SimpleAgentLoop] Message added to conversation history`)
+				getLog().info(`Message added to conversation history`)
 			} catch (error) {
-				console.log(`[SimpleAgentLoop] Failed to add to history:`, error)
+				getLog().info(`Failed to add to history:`, error)
 			}
 
 			// Also try to inject immediately for visibility
 			try {
 				await currentTask.handleWebviewAskResponse("messageResponse", formattedMessage, undefined)
-				console.log(`[SimpleAgentLoop] Message injected into current stream`)
+				getLog().info(`Message injected into current stream`)
 			} catch (error) {
-				console.log(`[SimpleAgentLoop] Immediate injection failed (agent may be streaming):`, error)
+				getLog().info(`Immediate injection failed (agent may be streaming):`, error)
 				// Show notification as fallback
 				vscode.window.showInformationMessage(
 					`📨 Message from ${sender} added to your conversation. You'll see it in your next response.`,
@@ -271,7 +272,7 @@ export class SimpleAgentLoop {
 
 		// Only create NEW tasks for task_assign and question types
 		if (message.type !== "task_assign" && message.type !== "question") {
-			console.log(`[SimpleAgentLoop] Message type '${message.type}' - showing notification only`)
+			getLog().info(`Message type '${message.type}' - showing notification only`)
 			const typeLabel = "Message"
 			vscode.window.showInformationMessage(
 				`💬 ${typeLabel} from ${sender}: ${content}\n\n(Use --type task_assign or --type question to create a task)`,
@@ -283,7 +284,7 @@ export class SimpleAgentLoop {
 		// Additional check: Is content too simple to be a real task?
 		const isSimpleMessage = this.isSimpleMessage(content)
 		if (isSimpleMessage) {
-			console.log(`[SimpleAgentLoop] Content too simple for task: "${content}"`)
+			getLog().info(`Content too simple for task: "${content}"`)
 			vscode.window.showInformationMessage(
 				`💬 ${sender}: ${content}\n\n(Message too simple to start a task. Please provide a task description.)`,
 			)
@@ -306,22 +307,22 @@ export class SimpleAgentLoop {
 				if (isContinuation) {
 					// Continue existing conversation
 					await currentTask.handleWebviewAskResponse("messageResponse", formattedMessage, undefined)
-					console.log(`[SimpleAgentLoop] Appended message to existing task from ${sender}`)
+					getLog().info(`Appended message to existing task from ${sender}`)
 				} else {
 					// Create new task (first message or previous task finished)
 					// Enable auto-approvals for autonomous agent work
 					// kilocode_change - CreateTaskOptions only supports enableDiff, enableCheckpoints, etc.
 					await provider.createTask(formattedMessage)
-					console.log(
-						`[SimpleAgentLoop] Created new task with message from ${sender} (auto-approvals enabled)`,
+					getLog().info(
+						`Created new task with message from ${sender} (auto-approvals enabled)`,
 					)
 				}
 			} else {
-				console.log("[SimpleAgentLoop] No visible ClineProvider, showing notification")
+				getLog().info("No visible ClineProvider, showing notification")
 				vscode.window.showInformationMessage(`📨 ${sender}: ${this.getMessagePreview(message)}`)
 			}
 		} catch (error) {
-			console.error("[SimpleAgentLoop] Failed to inject message into chat:", error)
+			getLog().error("Failed to inject message into chat:", error)
 			vscode.window.showInformationMessage(`📨 ${sender}: ${this.getMessagePreview(message)}`)
 		}
 	}

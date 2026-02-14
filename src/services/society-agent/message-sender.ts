@@ -15,6 +15,7 @@ import * as path from "path"
 import * as http from "http"
 import { AgentIdentityManager, SignedMessage, AttachmentRef } from "./agent-identity"
 import { AttachmentManager, AttachmentInput } from "./attachment-manager"
+import { getLog } from "./logger"
 
 export interface AgentEndpoint {
 	agentId: string
@@ -118,14 +119,14 @@ export class MessageSender {
 			if (endpoint?.url && endpoint.status !== "offline") {
 				try {
 					await this.sendHttp(endpoint.url, message)
-					console.log(`[MessageSender] HTTP delivery to ${recipientId} succeeded`)
+					getLog().info(`HTTP delivery to ${recipientId} succeeded`)
 				} catch (error) {
-					console.log(`[MessageSender] HTTP delivery to ${recipientId} failed (inbox file will be picked up)`)
+					getLog().info(`HTTP delivery to ${recipientId} failed (inbox file will be picked up)`)
 				}
 			}
 		}
 
-		console.log(`[MessageSender] Sent ${type} to ${to}: ${content.substring(0, 80)}`)
+		getLog().info(`Sent ${type} to ${to}: ${content.substring(0, 80)}`)
 		return message
 	}
 

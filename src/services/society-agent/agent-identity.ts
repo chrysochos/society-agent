@@ -20,6 +20,7 @@
 import * as crypto from "crypto"
 import * as fs from "fs/promises"
 import * as path from "path"
+import { getLog } from "./logger"
 
 /**
  * Agent identity stored in identity.json
@@ -163,13 +164,13 @@ export function isReplayAttack(message: SignedMessage): boolean {
 	// Check timestamp window
 	const messageAge = Date.now() - new Date(message.timestamp).getTime()
 	if (messageAge > REPLAY_WINDOW_MS) {
-		console.warn(`[AgentIdentity] Message too old (${Math.round(messageAge / 1000)}s) — possible replay`)
+		getLog().warn(`Message too old (${Math.round(messageAge / 1000)}s) — possible replay`)
 		return true
 	}
 
 	// Check nonce
 	if (processedNonces.has(message.nonce)) {
-		console.warn(`[AgentIdentity] Duplicate nonce ${message.nonce} — replay attack`)
+		getLog().warn(`Duplicate nonce ${message.nonce} — replay attack`)
 		return true
 	}
 
@@ -235,7 +236,7 @@ export class AgentIdentityManager {
 		const identityPath = path.join(agentDir, "identity.json")
 		await fs.writeFile(identityPath, JSON.stringify(identity, null, 2), "utf-8")
 
-		console.log(`[AgentIdentity] Created identity for ${agentId} at ${agentDir}`)
+		getLog().info(`Created identity for ${agentId} at ${agentDir}`)
 
 		return {
 			identity,
@@ -259,7 +260,7 @@ export class AgentIdentityManager {
 		this.publicKeys.set(agentId, crypto.createPublicKey(publicKeyPem))
 		this.authorizedAgents.add(agentId)
 
-		console.log(`[AgentIdentity] Registered public key for ${agentId}`)
+		getLog().info(`Registered public key for ${agentId}`)
 	}
 
 	// ─── Identity Loading (Agent Startup) ─────────────────────────────
@@ -286,7 +287,7 @@ export class AgentIdentityManager {
 		const keyPem = await fs.readFile(keyPath, "utf-8")
 		this.privateKey = crypto.createPrivateKey(keyPem)
 
-		console.log(`[AgentIdentity] Loaded identity: ${this.identity!.agentId} (${this.identity!.role})`)
+		getLog().info(`Loaded identity: ${this.identity!.agentId} (${this.identity!.role})`)
 
 		return this.identity!
 	}
@@ -309,9 +310,9 @@ export class AgentIdentityManager {
 				this.authorizedAgents.add(agentId)
 			}
 
-			console.log(`[AgentIdentity] Loaded ${this.publicKeys.size} public keys`)
+			getLog().info(`Loaded ${this.publicKeys.size} public keys`)
 		} catch {
-			console.warn(`[AgentIdentity] No keys directory found at ${keysDir}`)
+			getLog().warn(`No keys directory found at ${keysDir}`)
 		}
 	}
 
@@ -333,9 +334,9 @@ export class AgentIdentityManager {
 				}
 			}
 
-			console.log(`[AgentIdentity] ${this.authorizedAgents.size} authorized agents`)
+			getLog().info(`${this.authorizedAgents.size} authorized agents`)
 		} catch {
-			console.warn(`[AgentIdentity] No project-plan.json found`)
+			getLog().warn(`No project-plan.json found`)
 		}
 	}
 
@@ -404,14 +405,14 @@ export class AgentIdentityManager {
 
 		// Check if sender is authorized
 		if (!this.authorizedAgents.has(senderId)) {
-			console.warn(`[AgentIdentity] UNAUTHORIZED sender: ${senderId}`)
+			getLog().warn(`UNAUTHORIZED sender: ${senderId}`)
 			return false
 		}
 
 		// Get sender's public key
 		const publicKey = this.publicKeys.get(senderId)
 		if (!publicKey) {
-			console.warn(`[AgentIdentity] No public key for sender: ${senderId}`)
+			getLog().warn(`No public key for sender: ${senderId}`)
 			return false
 		}
 
@@ -423,12 +424,12 @@ export class AgentIdentityManager {
 			const isValid = crypto.verify(null, Buffer.from(canonical), publicKey, Buffer.from(signature, "base64"))
 
 			if (!isValid) {
-				console.warn(`[AgentIdentity] ⚠️ INVALID SIGNATURE from ${senderId} — possible impersonation!`)
+				getLog().warn(`INVALID SIGNATURE from ${senderId} — possible impersonation!`)
 			}
 
 			return isValid
 		} catch (error) {
-			console.error(`[AgentIdentity] Verification error for ${senderId}:`, error)
+			getLog().error(`Verification error for ${senderId}:`, error)
 			return false
 		}
 	}

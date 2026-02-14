@@ -49,6 +49,7 @@ import { flushModels, getModels } from "./api/providers/fetchers/modelCache"
 import { ManagedIndexer } from "./services/code-index/managed/ManagedIndexer" // kilocode_change
 import { registerSocietyAgentProvider } from "./core/webview/registerSocietyAgentProvider" // kilocode_change
 import { AgentRegistry } from "./services/society-agent/agent-registry" // kilocode_change
+import { createChannelLog, setSocietyLog } from "./services/society-agent/logger" // kilocode_change
 
 /**
  * Built using https://github.com/microsoft/vscode-webview-ui-toolkit
@@ -74,6 +75,9 @@ export async function activate(context: vscode.ExtensionContext) {
 	outputChannel = vscode.window.createOutputChannel("Kilo-Code")
 	context.subscriptions.push(outputChannel)
 	outputChannel.appendLine(`${Package.name} extension activated - ${JSON.stringify(Package)}`)
+
+	// kilocode_change - Wire OutputChannel-based logger for society-agent services
+	setSocietyLog(createChannelLog(outputChannel))
 
 	// Migrate old settings to new
 	await migrateSettings(context, outputChannel)
@@ -163,13 +167,14 @@ export async function activate(context: vscode.ExtensionContext) {
 	// const initManagedCodeIndexing = updateCodeIndexWithKiloProps(provider) // kilocode_change
 
 	// kilocode_change start - Initialize Society Agent with ClineProvider reference
-	console.log("🚀 EXTENSION: About to register Society Agent provider...")
-	let societyAgentProvider: any // kilocode_change - reference for monitor data wiring
+	const societyLog = createChannelLog(outputChannel) // kilocode_change
+	societyLog.info("Registering Society Agent provider...")
+	let societyAgentProvider: ReturnType<typeof registerSocietyAgentProvider> | undefined // kilocode_change
 	try {
 		societyAgentProvider = registerSocietyAgentProvider(context, provider)
-		console.log("✅ EXTENSION: Society Agent provider registered successfully")
+		societyLog.info("Society Agent provider registered successfully")
 	} catch (error) {
-		console.error("❌ EXTENSION: Failed to register Society Agent:", error)
+		societyLog.error("Failed to register Society Agent:", error)
 		vscode.window.showErrorMessage(`Failed to register Society Agent: ${error}`)
 	}
 

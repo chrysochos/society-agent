@@ -11,6 +11,7 @@
 
 import type { AgentIdentity } from "./types"
 import type { ApprovalRequest, ApprovalResponse } from "./approval"
+import { getLog } from "./logger"
 
 /**
  * Message types for supervisor communication
@@ -97,7 +98,7 @@ export class SupervisorChannel {
 			try {
 				handler(message)
 			} catch (error) {
-				console.error("Error in message handler:", error)
+				getLog().error("Error in message handler:", error)
 			}
 		}
 	}
@@ -265,14 +266,14 @@ export class MockSupervisorChannel extends SupervisorChannel {
 	 * Mock message sending (logs to console)
 	 */
 	override async sendMessage(message: SupervisorMessage): Promise<void> {
-		console.log("[MockSupervisorChannel] Message sent:", message)
+		getLog().info("Message sent:", message)
 	}
 
 	/**
 	 * Mock approval request (auto-approves or auto-denies based on configuration)
 	 */
 	override async requestApproval(request: ApprovalRequest): Promise<ApprovalResponse> {
-		console.log("[MockSupervisorChannel] Approval request:", request)
+		getLog().info("Approval request:", request)
 
 		// Simulate processing delay
 		await new Promise((resolve) => setTimeout(resolve, 100))

@@ -8,6 +8,7 @@
 
 import * as fs from "fs"
 import * as path from "path"
+import { getLog } from "./logger"
 
 // kilocode_change start
 export interface LogEntry {
@@ -170,7 +171,7 @@ export class ExecutionLogger {
 			const line = JSON.stringify(entry) + "\n"
 			fs.appendFileSync(logFile, line, "utf8")
 		} catch (error) {
-			console.error("Failed to write log:", error)
+			getLog().error("Failed to write log:", error)
 		}
 		// kilocode_change end
 	}
@@ -216,7 +217,7 @@ export class ExecutionLogger {
 			const lines = content.trim().split("\n")
 			return lines.map((line) => JSON.parse(line))
 		} catch (error) {
-			console.error("Failed to read logs:", error)
+			getLog().error("Failed to read logs:", error)
 			return []
 		}
 		// kilocode_change end

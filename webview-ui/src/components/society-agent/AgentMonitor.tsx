@@ -155,8 +155,8 @@ export const AgentMonitor: React.FC = () => {
 
 		window.addEventListener("message", handleMessage)
 
-		// Poll for updates every 5 seconds
-		const interval = setInterval(requestRefresh, 5000)
+		// Poll for updates every 15 seconds (real-time pushes handle most updates)
+		const interval = setInterval(requestRefresh, 15000) // kilocode_change
 
 		return () => {
 			window.removeEventListener("message", handleMessage)

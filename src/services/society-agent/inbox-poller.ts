@@ -18,6 +18,7 @@ import * as fs from "fs/promises"
 import * as path from "path"
 import { UnifiedMessageHandler } from "./message-handler"
 import { SignedMessage } from "./agent-identity"
+import { getLog } from "./logger"
 
 export interface InboxPollerOptions {
 	/** Shared .society-agent directory path */
@@ -64,11 +65,11 @@ export class InboxPoller {
 			try {
 				await this.poll()
 			} catch (error) {
-				console.error("[InboxPoller] Poll error:", error)
+				getLog().error("Poll error:", error)
 			}
 		}, intervalMs)
 
-		console.log(`[InboxPoller] Started for ${this.options.agentId} (${intervalMs}ms interval)`)
+		getLog().info(`Started for ${this.options.agentId} (${intervalMs}ms interval)`)
 	}
 
 	/**
@@ -80,7 +81,7 @@ export class InboxPoller {
 			this.interval = null
 		}
 		this.running = false
-		console.log(`[InboxPoller] Stopped for ${this.options.agentId}`)
+		getLog().info(`Stopped for ${this.options.agentId}`)
 	}
 
 	/**
@@ -119,9 +120,9 @@ export class InboxPoller {
 
 				if (result.accepted) {
 					// Handler moves to processed/ internally via confirmDelivery()
-					console.log(`[InboxPoller] Delivered ${file}: ${result.reason || "accepted"}`)
+					getLog().info(`Delivered ${file}: ${result.reason || "accepted"}`)
 				} else {
-					console.log(`[InboxPoller] Skipped ${file}: ${result.reason}`)
+					getLog().info(`Skipped ${file}: ${result.reason}`)
 					// If rejected (not just dedup), handler quarantines it
 					// If dedup, leave it — confirmDelivery will clean up
 					if (result.reason === "Already processed") {
@@ -132,7 +133,7 @@ export class InboxPoller {
 					}
 				}
 			} catch (error) {
-				console.error(`[InboxPoller] Failed to process ${file}:`, error)
+				getLog().error(`Failed to process ${file}:`, error)
 			}
 		}
 	}
