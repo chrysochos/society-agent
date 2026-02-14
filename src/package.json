@@ -110,7 +110,7 @@
 			"activitybar": [
 				{
 					"id": "kilo-code-ActivityBar",
-					"title": "%views.activitybar.title%",
+					"title": "Society Agent",
 					"icon": "assets/icons/kilo.png",
 					"darkIcon": "assets/icons/kilo-dark.png"
 				}
@@ -121,7 +121,7 @@
 				{
 					"type": "webview",
 					"id": "kilo-code.SidebarProvider",
-					"name": "%views.sidebar.name%",
+					"name": "Society Agent",
 					"icon": "assets/icons/kilo.png",
 					"darkIcon": "assets/icons/kilo-dark.png"
 				},
