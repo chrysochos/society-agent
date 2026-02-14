@@ -32,7 +32,7 @@ const log = getLog()
 
 // Middleware
 app.use(express.json())
-app.use(express.static(path.join(__dirname, "../../webview-ui/dist")))
+app.use(express.static(path.join(__dirname, "public")))  // kilocode_change - serve standalone frontend
 
 // Global state
 let societyManager: SocietyManager | null = null
@@ -166,14 +166,111 @@ function getTeamAgents(purposeId: string) {
  * GET /api/status - Server health check
  */
 app.get("/api/status", (req, res) => {
+	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 	res.json({
 		status: "ok",
 		environment: NODE_ENV,
 		societyManagerReady: !!societyManager,
 		apiKeyConfigured: !!process.env.ANTHROPIC_API_KEY,
+		workspacePath,
+		outputDir: path.join(workspacePath, "projects"),
 		timestamp: new Date().toISOString(),
 	})
 })
+
+// kilocode_change start - workspace file browser
+/**
+ * GET /api/workspace/files - List files in the projects output directory
+ */
+app.get("/api/workspace/files", async (req, res): Promise<void> => {
+	try {
+		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		const projectsDir = path.join(workspacePath, "projects")
+
+		const files: { path: string; fullPath: string; size: number; modified: string; isDir: boolean }[] = []
+
+		async function walkDir(dir: string, prefix: string = "") {
+			try {
+				const entries = await fs.promises.readdir(dir, { withFileTypes: true })
+				for (const entry of entries) {
+					if (entry.name.startsWith(".")) continue
+					const fullPath = path.join(dir, entry.name)
+					const relPath = prefix ? `${prefix}/${entry.name}` : entry.name
+					if (entry.isDirectory()) {
+						files.push({ path: relPath, fullPath, size: 0, modified: "", isDir: true })
+						await walkDir(fullPath, relPath)
+					} else {
+						const stat = await fs.promises.stat(fullPath)
+						files.push({
+							path: relPath,
+							fullPath,
+							size: stat.size,
+							modified: stat.mtime.toISOString(),
+							isDir: false,
+						})
+					}
+				}
+			} catch {
+				// Directory doesn't exist yet
+			}
+		}
+
+		await walkDir(projectsDir)
+
+		res.json({
+			workspacePath,
+			outputDir: projectsDir,
+			files,
+			totalFiles: files.filter((f) => !f.isDir).length,
+			totalDirs: files.filter((f) => f.isDir).length,
+		})
+	} catch (error) {
+		log.error("Error listing workspace files:", error)
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/workspace/file - Read a specific file's content
+ */
+app.get("/api/workspace/file", async (req, res): Promise<void> => {
+	try {
+		const filePath = req.query.path as string
+		if (!filePath) {
+			res.status(400).json({ error: "path query parameter required" })
+			return
+		}
+
+		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		const fullPath = path.join(workspacePath, "projects", filePath)
+
+		// Security: ensure path is within projects directory
+		const resolved = path.resolve(fullPath)
+		const projectsResolved = path.resolve(path.join(workspacePath, "projects"))
+		if (!resolved.startsWith(projectsResolved)) {
+			res.status(403).json({ error: "Access denied: path outside projects directory" })
+			return
+		}
+
+		const content = await fs.promises.readFile(fullPath, "utf-8")
+		const stat = await fs.promises.stat(fullPath)
+
+		res.json({
+			path: filePath,
+			fullPath,
+			content,
+			size: stat.size,
+			modified: stat.mtime.toISOString(),
+		})
+	} catch (error: any) {
+		if (error.code === "ENOENT") {
+			res.status(404).json({ error: "File not found" })
+		} else {
+			res.status(500).json({ error: String(error) })
+		}
+	}
+})
+// kilocode_change end
 
 /**
  * POST /api/config/api-key - Save API key to .env file
@@ -298,27 +395,25 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 
 			userAgent = new ConversationAgent({
 				identity: {
-					id: "user-agent",
-					role: "worker",
-					capabilities: ["chat", "coding", "analysis", "creative"],
+					id: "society-agent",
+					role: "supervisor",
+					capabilities: ["chat", "coding", "analysis", "creative", "planning"],
 					createdAt: Date.now(),
 				},
 				apiHandler,
-				systemPrompt: `You are Claude 3.5 Sonnet, a helpful AI assistant.
+				systemPrompt: `You are Society Agent, an AI assistant powering a multi-agent collaboration system.
 
 Your role:
-- Answer questions conversationally
-- Help with coding, writing, analysis, and creative tasks
-- Provide clear, helpful responses
+- Answer questions conversationally and helpfully
+- Help with coding, writing, analysis, planning, and creative tasks
+- Provide clear, well-structured responses
 - Maintain context across the conversation
 
 Guidelines:
-- Be conversational and natural
+- Be conversational and direct
 - Use markdown formatting when helpful
 - Be concise but thorough
-- Remember previous messages in our conversation
-
-You maintain your own conversation memory, so you can reference earlier parts of our discussion.`,
+- You have full conversation memory across messages`,
 				onMessage: (message) => {
 					// Stream message to client
 					io.emit("agent-message", {
@@ -328,6 +423,18 @@ You maintain your own conversation memory, so you can reference earlier parts of
 						isStreaming: false,
 					})
 				},
+				// kilocode_change start - file creation tracking
+				onFileCreated: (relativePath, fullPath, size) => {
+					log.info(`File created: ${fullPath} (${size} bytes)`)
+					io.emit("file-created", {
+						agentId: "society-agent",
+						relativePath,
+						fullPath,
+						size,
+						timestamp: Date.now(),
+					})
+				},
+				// kilocode_change end
 			})
 		}
 
@@ -366,6 +473,67 @@ You maintain your own conversation memory, so you can reference earlier parts of
 		res.status(500).json({ error: String(error) })
 	}
 })
+
+// kilocode_change start
+/**
+ * POST /api/purpose/launch - Launch a multi-agent team for a complex purpose
+ * This is the real multi-agent flow: supervisor analyzes → team forms → workers execute
+ */
+app.post("/api/purpose/launch", async (req, res): Promise<void> => {
+	try {
+		const apiKey = (req.headers["x-api-key"] as string) || process.env.ANTHROPIC_API_KEY
+
+		if (!apiKey) {
+			res.status(401).json({ error: "API key required" })
+			return
+		}
+
+		const { description, constraints, successCriteria } = req.body
+
+		if (!description) {
+			res.status(400).json({ error: "Purpose description required" })
+			return
+		}
+
+		// Initialize SocietyManager if needed
+		await initializeSocietyManager(apiKey)
+
+		if (!societyManager) {
+			res.status(500).json({ error: "Failed to initialize Society Manager" })
+			return
+		}
+
+		log.info("Launching multi-agent purpose:", description)
+
+		io.emit("system-event", {
+			type: "purpose-launching",
+			message: `Analyzing purpose: "${description}"`,
+			timestamp: Date.now(),
+		})
+
+		const purposeId = await societyManager.startPurpose({
+			description,
+			constraints: constraints || [],
+			successCriteria: successCriteria || [],
+		})
+
+		res.json({
+			type: "multi-agent",
+			purposeId,
+			status: "launched",
+			message: "Purpose launched - supervisor is forming a team",
+		})
+	} catch (error) {
+		log.error("Error launching purpose:", error)
+		io.emit("system-event", {
+			type: "purpose-error",
+			message: `Failed: ${String(error)}`,
+			timestamp: Date.now(),
+		})
+		res.status(500).json({ error: String(error) })
+	}
+})
+// kilocode_change end
 
 /**
  * GET /api/purposes - Get all purposes (active + completed)
@@ -719,7 +887,7 @@ io.on("connection", (socket) => {
 // ============================================================================
 
 app.get("*", (req, res) => {
-	res.sendFile(path.join(__dirname, "../webview-ui/build-standalone/index-standalone.html"))
+	res.sendFile(path.join(__dirname, "public/index.html"))  // kilocode_change - serve standalone frontend
 })
 
 // ============================================================================

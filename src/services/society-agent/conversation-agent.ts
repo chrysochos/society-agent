@@ -48,6 +48,7 @@ export interface ConversationAgentConfig {
 	workspacePath?: string
 	onMessage?: (message: AgentMessage) => void
 	onStatusChange?: (status: AgentState["status"]) => void
+	onFileCreated?: (relativePath: string, fullPath: string, size: number) => void // kilocode_change - file tracking
 	maxMessages?: number // Max messages before summarization (default: 50)
 	summaryThreshold?: number // When to trigger summary (default: 40)
 }
@@ -64,6 +65,7 @@ export class ConversationAgent {
 	private workspacePath: string
 	private onMessage?: (message: AgentMessage) => void
 	private onStatusChange?: (status: AgentState["status"]) => void
+	private onFileCreated?: (relativePath: string, fullPath: string, size: number) => void // kilocode_change - file tracking
 	private maxMessages: number // Kilocode: Max messages before summarization
 	private summaryThreshold: number // Kilocode: When to trigger summary
 	private conversationSummary: string = "" // Kilocode: Summarized older context
@@ -82,6 +84,7 @@ export class ConversationAgent {
 		this.systemPrompt = config.systemPrompt || this.getDefaultSystemPrompt()
 		this.onMessage = config.onMessage
 		this.onStatusChange = config.onStatusChange
+		this.onFileCreated = config.onFileCreated // kilocode_change - file tracking
 		// Kilocode: Memory management configuration
 		this.maxMessages = config.maxMessages || 50
 		this.summaryThreshold = config.summaryThreshold || 40
@@ -531,6 +534,10 @@ Respond with the complete JSON now:`
 
 		getLog().info(`${this.state.identity.id} created file: ${relativePath}`)
 		this.addMessage("assistant", `Created file: ${relativePath}`)
+
+		// kilocode_change start - notify about file creation
+		this.onFileCreated?.(relativePath, fullPath, Buffer.byteLength(content, "utf-8"))
+		// kilocode_change end
 		// kilocode_change end
 	}
 

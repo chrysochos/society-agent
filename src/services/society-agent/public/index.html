@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Society Agent</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+
+  /* Header */
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px;
+    display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 16px; font-weight: 600; }
+  header .status { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; }
+  header .dot.online { background: var(--green); }
+  header .dot.offline { background: var(--red); }
+
+  /* Layout */
+  .main { display: flex; flex: 1; overflow: hidden; }
+  .sidebar { width: 260px; background: var(--surface); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow-y: auto; }
+  .chat-area { flex: 1; display: flex; flex-direction: column; }
+
+  /* Sidebar */
+  .sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--muted); padding: 12px 16px 8px; }
+  .stat-row { display: flex; justify-content: space-between; padding: 6px 16px; font-size: 13px; }
+  .stat-row .label { color: var(--muted); }
+  .stat-row .value { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-card { padding: 10px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .agent-card:hover { background: rgba(88,166,255,0.08); }
+  .agent-card .name { font-size: 13px; font-weight: 500; }
+  .agent-card .role { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .agent-card .status-badge { display: inline-block; font-size: 10px; padding: 1px 6px;
+    border-radius: 10px; margin-top: 4px; }
+  .agent-card .status-badge.idle { background: rgba(139,148,158,0.2); color: var(--muted); }
+  .agent-card .status-badge.working { background: rgba(88,166,255,0.2); color: var(--accent); }
+  .agent-card .status-badge.completed { background: rgba(63,185,80,0.2); color: var(--green); }
+  .agent-card .status-badge.error { background: rgba(248,81,73,0.2); color: var(--red); }
+
+  /* File tree */
+  .file-tree { font-size: 12px; }
+  .file-item { padding: 4px 16px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .file-item:hover { background: rgba(88,166,255,0.08); }
+  .file-item.dir { color: var(--accent); font-weight: 500; }
+  .file-item.file { color: var(--text); padding-left: 28px; }
+  .file-item .size { color: var(--muted); font-size: 10px; margin-left: auto; }
+  .file-item .icon { width: 14px; text-align: center; }
+
+  /* API Key Modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex;
+    align-items: center; justify-content: center; z-index: 100; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 24px; width: 440px; max-width: 90vw; }
+  .modal h2 { font-size: 18px; margin-bottom: 8px; }
+  .modal p { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
+  .modal input { width: 100%; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 14px; outline: none; }
+  .modal input:focus { border-color: var(--accent); }
+  .modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+
+  /* Chat messages */
+  .messages { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .message { max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 14px;
+    line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+  .message.user { align-self: flex-end; background: #1f6feb; border-bottom-right-radius: 4px; }
+  .message.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border);
+    border-bottom-left-radius: 4px; }
+  .message.system { align-self: center; color: var(--muted); font-size: 12px; font-style: italic; }
+  .message.assistant .sender { font-size: 11px; color: var(--accent); margin-bottom: 4px; font-weight: 500; }
+  .message code { background: rgba(110,118,129,0.2); padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+  .message pre { background: var(--bg); padding: 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; }
+  .message pre code { background: none; padding: 0; }
+  .typing { align-self: flex-start; color: var(--muted); font-size: 13px; }
+  .typing::after { content: '...'; animation: dots 1.5s steps(3) infinite; }
+  @keyframes dots { 0% { content: '.'; } 33% { content: '..'; } 66% { content: '...'; } }
+
+  /* Input area */
+  .input-area { padding: 12px 20px; border-top: 1px solid var(--border); background: var(--surface); }
+  .input-row { display: flex; gap: 8px; }
+  .input-row textarea { flex: 1; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: 14px; font-family: inherit;
+    resize: none; outline: none; min-height: 44px; max-height: 200px; }
+  .input-row textarea:focus { border-color: var(--accent); }
+
+  /* Buttons */
+  btn, button { cursor: pointer; }
+  .btn { padding: 8px 16px; border-radius: 6px; border: none; font-size: 13px; font-weight: 500;
+    cursor: pointer; transition: opacity 0.15s; }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-secondary { background: var(--border); color: var(--text); }
+  .btn-send { padding: 10px 20px; background: var(--accent); color: #fff; border: none;
+    border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; }
+  .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Log panel */
+  .log-panel { height: 180px; border-top: 1px solid var(--border); background: var(--bg);
+    overflow-y: auto; padding: 8px 16px; font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 12px; }
+  .log-entry { color: var(--muted); padding: 1px 0; }
+  .log-entry.info { color: var(--accent); }
+  .log-entry.warn { color: var(--yellow); }
+  .log-entry.error { color: var(--red); }
+  .log-entry .ts { color: #484f58; margin-right: 8px; }
+
+  /* Welcome */
+  .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    flex: 1; color: var(--muted); text-align: center; padding: 40px; }
+  .welcome h2 { font-size: 20px; color: var(--text); margin-bottom: 8px; }
+  .welcome p { font-size: 14px; max-width: 500px; line-height: 1.6; }
+  .welcome .features { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px;
+    text-align: left; }
+  .welcome .feature { padding: 12px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; }
+  .welcome .feature .title { font-size: 13px; color: var(--text); font-weight: 500; }
+  .welcome .feature .desc { font-size: 12px; color: var(--muted); margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>&#9670; Society Agent</h1>
+  <div class="status">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">Connecting...</span>
+  </div>
+  <div style="flex:1"></div>
+  <button class="btn btn-secondary" onclick="showApiKeyModal()" style="font-size:12px">&#9881; Settings</button>
+</header>
+
+<div class="main">
+  <div class="sidebar">
+    <h2>System</h2>
+    <div class="stat-row"><span class="label">Status</span><span class="value" id="sysStatus">-</span></div>
+    <div class="stat-row"><span class="label">Messages</span><span class="value" id="msgCount">0</span></div>
+    <div class="stat-row"><span class="label">API Key</span><span class="value" id="apiKeyStatus">-</span></div>
+
+    <h2 style="margin-top:16px">Workspace</h2>
+    <div class="stat-row"><span class="label">Output Dir</span><span class="value" id="outputDir" title="">projects/</span></div>
+    <div class="stat-row"><span class="label">Files</span><span class="value" id="fileCount">0</span></div>
+
+    <h2 style="margin-top:16px">Files <button class="btn btn-secondary" onclick="refreshFiles()" style="font-size:10px;padding:2px 8px;margin-left:8px">&#8635;</button></h2>
+    <div id="fileTree" class="file-tree">
+      <div style="padding:16px;color:var(--muted);font-size:12px">No files yet</div>
+    </div>
+
+    <h2 style="margin-top:16px">Agents</h2>
+    <div id="agentList">
+      <div style="padding:16px;color:var(--muted);font-size:12px">No active agents</div>
+    </div>
+  </div>
+
+  <div class="chat-area">
+    <div class="messages" id="messages">
+      <div class="welcome" id="welcome">
+        <h2>Society Agent Server</h2>
+        <p>Multi-agent collaboration system. Chat naturally, or ask it to build something &mdash; files appear in the sidebar.</p>
+        <div class="features">
+          <div class="feature">
+            <div class="title">&#128172; Chat</div>
+            <div class="desc">Conversational AI with persistent memory</div>
+          </div>
+          <div class="feature">
+            <div class="title">&#128196; Create Files</div>
+            <div class="desc">"Build a calculator" &rarr; files in projects/</div>
+          </div>
+          <div class="feature">
+            <div class="title">&#129302; Multi-Agent</div>
+            <div class="desc">Complex tasks get supervisor + worker teams</div>
+          </div>
+          <div class="feature">
+            <div class="title">&#128065; Workspace View</div>
+            <div class="desc">See created files, click to view contents</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <div class="input-row">
+        <textarea id="input" placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
+          rows="1" autofocus></textarea>
+        <button class="btn-send" id="sendBtn" onclick="sendMessage()">Send</button>
+      </div>
+    </div>
+
+    <div class="log-panel" id="logPanel"></div>
+  </div>
+</div>
+
+<!-- API Key Modal -->
+<div class="modal-overlay" id="apiKeyModal" style="display:none">
+  <div class="modal">
+    <h2>API Configuration</h2>
+    <p>Enter your Anthropic API key. It will be saved to the server's .env file.</p>
+    <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-...">
+    <div class="actions">
+      <button class="btn btn-secondary" onclick="hideApiKeyModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveApiKey()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+const socket = io(API);
+let messageCount = 0;
+let isStreaming = false;
+let currentStreamEl = null;
+let streamText = '';
+
+// ============================================================================
+// Socket.IO Events
+// ============================================================================
+
+socket.on('connect', () => {
+  setStatus(true);
+  addLog('info', 'Connected to Society Agent server');
+  checkApiKey();
+  checkServerStatus();
+});
+
+socket.on('disconnect', () => {
+  setStatus(false);
+  addLog('warn', 'Disconnected from server');
+});
+
+// Streaming agent messages
+let streamDidFire = false;
+socket.on('agent-message', (data) => {
+  if (data.isStreaming) {
+    streamDidFire = true;
+    if (!currentStreamEl) {
+      removeTyping();
+      currentStreamEl = addMessage('assistant', '', 'Society Agent');
+      streamText = '';
+    }
+    streamText += data.message;
+    currentStreamEl.querySelector('.content').textContent = streamText;
+    scrollToBottom();
+  } else if (data.isDone) {
+    // Streaming complete - format the final message
+    if (currentStreamEl && streamText) {
+      currentStreamEl.querySelector('.content').innerHTML = formatMarkdown(streamText);
+    }
+    currentStreamEl = null;
+    streamText = '';
+    isStreaming = false;
+    document.getElementById('sendBtn').disabled = false;
+    removeTyping();
+  }
+});
+
+// Purpose events
+socket.on('purpose-started', (data) => {
+  addLog('info', `Purpose started: ${data.description}`);
+});
+
+socket.on('team-formed', (data) => {
+  addLog('info', `Team formed: ${data.teamSize} agents`);
+  refreshAgents();
+});
+
+socket.on('progress-update', (data) => {
+  addLog('info', `Progress: ${JSON.stringify(data.progress)}`);
+});
+
+socket.on('agent-status-change', (data) => {
+  addLog('info', `Agent ${data.agentId}: ${data.status}`);
+  refreshAgents();
+});
+
+// File creation events
+socket.on('file-created', (data) => {
+  addLog('info', `File created: ${data.relativePath} (${formatSize(data.size)})`);
+  addMessage('system', `&#128196; Created: ${data.relativePath} (${formatSize(data.size)})`);
+  refreshFiles();
+});
+
+// System events (multi-agent)
+socket.on('system-event', (data) => {
+  addLog(data.type.includes('error') ? 'error' : 'info', data.message);
+  if (data.type === 'purpose-launching') {
+    addMessage('system', data.message);
+  }
+});
+
+// ============================================================================
+// API Functions
+// ============================================================================
+
+async function checkServerStatus() {
+  try {
+    const res = await fetch(`${API}/api/status`);
+    const data = await res.json();
+    document.getElementById('sysStatus').textContent = data.status === 'ok' ? 'Online' : 'Error';
+    if (data.outputDir) {
+      const el = document.getElementById('outputDir');
+      el.textContent = data.outputDir;
+      el.title = data.outputDir;
+    }
+    addLog('info', `Server: ${data.environment} | Output: ${data.outputDir || 'projects/'}`);
+    refreshFiles();
+  } catch (e) {
+    document.getElementById('sysStatus').textContent = 'Error';
+    addLog('error', 'Failed to reach server');
+  }
+}
+
+async function checkApiKey() {
+  try {
+    const res = await fetch(`${API}/api/config/api-key`);
+    const data = await res.json();
+    const el = document.getElementById('apiKeyStatus');
+    if (data.configured) {
+      el.textContent = data.masked || 'Set';
+      el.style.color = 'var(--green)';
+    } else {
+      el.textContent = 'Not set';
+      el.style.color = 'var(--red)';
+      // Show modal if no key
+      showApiKeyModal();
+    }
+  } catch (e) {
+    addLog('error', 'Failed to check API key');
+  }
+}
+
+async function sendMessage() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if (!text || isStreaming) return;
+
+  // Hide welcome
+  const welcome = document.getElementById('welcome');
+  if (welcome) welcome.style.display = 'none';
+
+  addMessage('user', text);
+  input.value = '';
+  input.style.height = 'auto';
+  messageCount++;
+  document.getElementById('msgCount').textContent = messageCount;
+
+  isStreaming = true;
+  streamDidFire = false;
+  document.getElementById('sendBtn').disabled = true;
+  showTyping();
+
+  try {
+    const res = await fetch(`${API}/api/purpose/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: text }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      removeTyping();
+      addMessage('system', `Error: ${data.error || 'Unknown error'}`);
+      isStreaming = false;
+      document.getElementById('sendBtn').disabled = false;
+      if (res.status === 401) showApiKeyModal();
+      return;
+    }
+
+    // Only show HTTP response if WebSocket streaming didn't already handle it
+    if (!streamDidFire && data.response) {
+      removeTyping();
+      const el = addMessage('assistant', '', 'Society Agent');
+      el.querySelector('.content').innerHTML = formatMarkdown(data.response);
+      isStreaming = false;
+      document.getElementById('sendBtn').disabled = false;
+    }
+
+    messageCount++;
+    document.getElementById('msgCount').textContent = messageCount;
+    addLog('info', `Response received (history: ${data.historyLength} messages)`);
+  } catch (e) {
+    removeTyping();
+    addMessage('system', `Network error: ${e.message}`);
+    isStreaming = false;
+    document.getElementById('sendBtn').disabled = false;
+  }
+}
+
+async function saveApiKey() {
+  const input = document.getElementById('apiKeyInput');
+  const key = input.value.trim();
+  if (!key) return;
+
+  try {
+    const res = await fetch(`${API}/api/config/api-key`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: key }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      hideApiKeyModal();
+      checkApiKey();
+      addLog('info', 'API key saved successfully');
+    } else {
+      alert(data.error || 'Failed to save');
+    }
+  } catch (e) {
+    alert('Network error');
+  }
+}
+
+async function refreshAgents() {
+  try {
+    const res = await fetch(`${API}/api/agents`);
+    const data = await res.json();
+    const list = document.getElementById('agentList');
+    if (!data.agents || data.agents.length === 0) {
+      list.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">No active agents</div>';
+      return;
+    }
+    list.innerHTML = data.agents.map(a => `
+      <div class="agent-card">
+        <div class="name">${a.name || a.id}</div>
+        <div class="role">${a.role}</div>
+        <span class="status-badge ${a.status}">${a.status}</span>
+      </div>
+    `).join('');
+  } catch (e) {}
+}
+
+async function refreshFiles() {
+  try {
+    const res = await fetch(`${API}/api/workspace/files`);
+    const data = await res.json();
+    document.getElementById('fileCount').textContent = `${data.totalFiles} files, ${data.totalDirs} dirs`;
+
+    const tree = document.getElementById('fileTree');
+    if (!data.files || data.files.length === 0) {
+      tree.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">No files yet &mdash; ask the agent to create something</div>';
+      return;
+    }
+
+    tree.innerHTML = data.files.map(f => {
+      if (f.isDir) {
+        return `<div class="file-item dir"><span class="icon">&#128193;</span>${f.path}</div>`;
+      } else {
+        return `<div class="file-item file" onclick="viewFile('${escapeAttr(f.path)}')"><span class="icon">&#128196;</span>${f.path.split('/').pop()}<span class="size">${formatSize(f.size)}</span></div>`;
+      }
+    }).join('');
+  } catch (e) {
+    addLog('warn', 'Failed to refresh files');
+  }
+}
+
+async function viewFile(filePath) {
+  try {
+    const res = await fetch(`${API}/api/workspace/file?path=${encodeURIComponent(filePath)}`);
+    const data = await res.json();
+    if (!res.ok) { addLog('error', data.error); return; }
+
+    // Show file content as a message
+    const header = `**${filePath}** (${formatSize(data.size)})`;
+    const content = '```\n' + data.content + '\n```';
+    addMessage('system', `&#128196; ${filePath}`);
+    const el = addMessage('assistant', '', 'File Viewer');
+    el.querySelector('.content').innerHTML = formatMarkdown(header + '\n\n' + content);
+    scrollToBottom();
+  } catch (e) {
+    addLog('error', 'Failed to read file');
+  }
+}
+
+function formatSize(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function escapeAttr(s) {
+  return s.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+// ============================================================================
+// UI Helpers
+// ============================================================================
+
+function addMessage(role, content, sender) {
+  const el = document.createElement('div');
+  el.className = `message ${role}`;
+  if (role === 'assistant') {
+    el.innerHTML = `<div class="sender">${sender || 'Agent'}</div><div class="content">${formatMarkdown(content)}</div>`;
+  } else {
+    el.innerHTML = `<div class="content">${escapeHtml(content)}</div>`;
+  }
+  document.getElementById('messages').appendChild(el);
+  scrollToBottom();
+  return el;
+}
+
+function showTyping() {
+  const el = document.createElement('div');
+  el.className = 'typing';
+  el.id = 'typingIndicator';
+  el.textContent = 'Agent is thinking';
+  document.getElementById('messages').appendChild(el);
+  scrollToBottom();
+}
+
+function removeTyping() {
+  const el = document.getElementById('typingIndicator');
+  if (el) el.remove();
+}
+
+function scrollToBottom() {
+  const m = document.getElementById('messages');
+  m.scrollTop = m.scrollHeight;
+}
+
+function setStatus(online) {
+  document.getElementById('statusDot').className = `dot ${online ? 'online' : 'offline'}`;
+  document.getElementById('statusText').textContent = online ? 'Connected' : 'Disconnected';
+}
+
+function addLog(level, text) {
+  const el = document.createElement('div');
+  el.className = `log-entry ${level}`;
+  const ts = new Date().toLocaleTimeString();
+  el.innerHTML = `<span class="ts">${ts}</span>${escapeHtml(text)}`;
+  const panel = document.getElementById('logPanel');
+  panel.appendChild(el);
+  panel.scrollTop = panel.scrollHeight;
+}
+
+function showApiKeyModal() { document.getElementById('apiKeyModal').style.display = 'flex'; }
+function hideApiKeyModal() { document.getElementById('apiKeyModal').style.display = 'none'; }
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+function formatMarkdown(text) {
+  if (!text) return '';
+  let html = escapeHtml(text);
+  // Code blocks
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bold
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Line breaks
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
+
+// ============================================================================
+// Keyboard
+// ============================================================================
+
+document.getElementById('input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+// Auto-resize textarea
+document.getElementById('input').addEventListener('input', function() {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+});
+</script>
+</body>
+</html>
