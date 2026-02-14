@@ -164,9 +164,12 @@ function getTeamAgents(purposeId: string) {
 
 	if (!purpose) return []
 
-	return purpose.team.getAllMembers().map((member) => ({
+	const purposeAny = purpose as any // kilocode_change - access team/identity properties
+	if (!purposeAny.team) return []
+
+	return purposeAny.team.getAllMembers().map((member: any) => ({
 		id: member.identity.id,
-		name: member.identity.name,
+		name: member.identity.name || member.identity.id,
 		role: member.identity.role,
 		status: member.agent.getState().status,
 		progress: member.agent.getState().progress || 0,
@@ -194,17 +197,19 @@ app.get("/api/status", (req, res) => {
 /**
  * POST /api/config/api-key - Save API key to .env file
  */
-app.post("/api/config/api-key", async (req, res) => {
+app.post("/api/config/api-key", async (req, res): Promise<void> => {
 	try {
 		const { apiKey } = req.body
 
 		if (!apiKey || typeof apiKey !== "string") {
-			return res.status(400).json({ error: "API key required" })
+			res.status(400).json({ error: "API key required" })
+			return
 		}
 
 		// Validate API key format
 		if (!apiKey.startsWith("sk-ant-")) {
-			return res.status(400).json({ error: "Invalid API key format" })
+			res.status(400).json({ error: "Invalid API key format" })
+			return
 		}
 
 		const envPath = path.join(__dirname, "../../.env")
@@ -256,21 +261,23 @@ app.get("/api/config/api-key", (req, res) => {
 /**
  * POST /api/purpose/start - Start a new purpose (Agent-driven with memory)
  */
-app.post("/api/purpose/start", async (req, res) => {
+app.post("/api/purpose/start", async (req, res): Promise<void> => {
 	try {
 		// Get API key from header or use environment variable
 		const apiKey = (req.headers["x-api-key"] as string) || process.env.ANTHROPIC_API_KEY
 
 		if (!apiKey) {
-			return res.status(401).json({
+			res.status(401).json({
 				error: "API key required. Provide via X-API-Key header or configure ANTHROPIC_API_KEY environment variable",
 			})
+			return
 		}
 
 		const { description } = req.body
 
 		if (!description) {
-			return res.status(400).json({ error: "Purpose description required" })
+			res.status(400).json({ error: "Purpose description required" })
+			return
 		}
 
 		// Initialize user agent if not exists (maintains conversation memory)
@@ -366,12 +373,13 @@ You maintain your own conversation memory, so you can reference earlier parts of
 			isDone: true,
 		})
 
-		return res.json({
+		res.json({
 			type: "chat",
 			response: fullResponse,
 			status: "completed",
 			historyLength: userAgent.getHistory().length,
 		})
+		return
 	} catch (error) {
 		console.error("❌ Error handling purpose:", error)
 		res.status(500).json({ error: String(error) })
@@ -381,22 +389,26 @@ You maintain your own conversation memory, so you can reference earlier parts of
 /**
  * GET /api/purposes - Get all purposes (active + completed)
  */
-app.get("/api/purposes", (req, res) => {
+app.get("/api/purposes", (req, res): void => {
 	try {
 		if (!societyManager) {
-			return res.json({ active: [], completed: [] })
+			res.json({ active: [], completed: [] })
+			return
 		}
 
 		const state = societyManager.getState()
 
-		const active = Array.from(state.activePurposes.values()).map((purpose) => ({
-			id: purpose.purpose.id,
-			description: purpose.purpose.description,
-			status: purpose.status,
-			startedAt: purpose.startedAt,
-			progress: purpose.supervisorState?.progressPercentage || 0,
-			teamSize: purpose.team.getAllMembers().length,
-		}))
+		const active = Array.from(state.activePurposes.values()).map((purpose) => {
+			const pAny = purpose as any // kilocode_change
+			return {
+				id: purpose.purpose.id,
+				description: purpose.purpose.description,
+				status: purpose.status,
+				startedAt: purpose.startedAt,
+				progress: pAny.supervisorState?.progressPercentage || 0,
+				teamSize: pAny.team?.getAllMembers()?.length || 0,
+			}
+		})
 
 		const completed = state.completedPurposes.map((purpose) => ({
 			id: purpose.id,
@@ -415,24 +427,27 @@ app.get("/api/purposes", (req, res) => {
 /**
  * GET /api/purpose/:purposeId - Get details of a specific purpose
  */
-app.get("/api/purpose/:purposeId", (req, res) => {
+app.get("/api/purpose/:purposeId", (req, res): void => {
 	try {
 		if (!societyManager) {
-			return res.status(404).json({ error: "Society Manager not initialized" })
+			res.status(404).json({ error: "Society Manager not initialized" })
+			return
 		}
 
 		const state = societyManager.getState()
 		const purpose = state.activePurposes.get(req.params.purposeId)
 
 		if (!purpose) {
-			return res.status(404).json({ error: "Purpose not found" })
+			res.status(404).json({ error: "Purpose not found" })
+			return
 		}
 
+		const pAny = purpose as any // kilocode_change
 		res.json({
 			id: purpose.purpose.id,
 			description: purpose.purpose.description,
 			status: purpose.status,
-			progress: purpose.supervisorState?.progressPercentage || 0,
+			progress: pAny.supervisorState?.progressPercentage || 0,
 			agents: getTeamAgents(req.params.purposeId),
 			startedAt: purpose.startedAt,
 		})
@@ -445,20 +460,23 @@ app.get("/api/purpose/:purposeId", (req, res) => {
 /**
  * GET /api/agents - Get all active agents
  */
-app.get("/api/agents", (req, res) => {
+app.get("/api/agents", (req, res): void => {
 	try {
 		if (!societyManager) {
-			return res.json({ agents: [] })
+			res.json({ agents: [] })
+			return
 		}
 
 		const state = societyManager.getState()
 		const agents: any[] = []
 
 		state.activePurposes.forEach((purpose) => {
-			purpose.team.getAllMembers().forEach((member) => {
+			const pAny = purpose as any // kilocode_change
+			if (!pAny.team) return
+			pAny.team.getAllMembers().forEach((member: any) => {
 				agents.push({
 					id: member.identity.id,
-					name: member.identity.name,
+					name: member.identity.name || member.identity.id,
 					role: member.identity.role,
 					purposeId: purpose.purpose.id,
 					status: member.agent.getState().status,
@@ -479,21 +497,24 @@ app.get("/api/agents", (req, res) => {
 /**
  * GET /api/agent/:agentId - Get details of a specific agent
  */
-app.get("/api/agent/:agentId", (req, res) => {
+app.get("/api/agent/:agentId", (req, res): void => {
 	try {
 		if (!societyManager) {
-			return res.status(404).json({ error: "Society Manager not initialized" })
+			res.status(404).json({ error: "Society Manager not initialized" })
+			return
 		}
 
 		const state = societyManager.getState()
 		let foundAgent: any = null
 
 		state.activePurposes.forEach((purpose) => {
-			const member = purpose.team.getAllMembers().find((m) => m.identity.id === req.params.agentId)
+			const pAny = purpose as any // kilocode_change
+			if (!pAny.team) return
+			const member = pAny.team.getAllMembers().find((m: any) => m.identity.id === req.params.agentId)
 			if (member) {
 				foundAgent = {
 					id: member.identity.id,
-					name: member.identity.name,
+					name: member.identity.name || member.identity.id,
 					role: member.identity.role,
 					purposeId: purpose.purpose.id,
 					status: member.agent.getState().status,
@@ -506,7 +527,8 @@ app.get("/api/agent/:agentId", (req, res) => {
 		})
 
 		if (!foundAgent) {
-			return res.status(404).json({ error: "Agent not found" })
+			res.status(404).json({ error: "Agent not found" })
+			return
 		}
 
 		res.json(foundAgent)
@@ -547,12 +569,13 @@ app.post("/api/agent/:agentId/stop", async (req, res) => {
 /**
  * POST /api/terminal/execute - Execute a shell command
  */
-app.post("/api/terminal/execute", async (req, res) => {
+app.post("/api/terminal/execute", async (req, res): Promise<void> => {
 	try {
 		const { command, cwd, projectId } = req.body
 
 		if (!command || typeof command !== "string") {
-			return res.status(400).json({ error: "Command required" })
+			res.status(400).json({ error: "Command required" })
+			return
 		}
 
 		// Determine working directory
@@ -610,12 +633,13 @@ app.post("/api/terminal/execute", async (req, res) => {
 /**
  * POST /api/terminal/kill - Kill a running command
  */
-app.post("/api/terminal/kill", (req, res) => {
+app.post("/api/terminal/kill", (req, res): void => {
 	try {
 		const { commandId } = req.body
 
 		if (!commandId) {
-			return res.status(400).json({ error: "Command ID required" })
+			res.status(400).json({ error: "Command ID required" })
+			return
 		}
 
 		const killed = commandExecutor.killCommand(commandId)
@@ -671,10 +695,11 @@ app.post("/api/purpose/:purposeId/pause", async (req, res) => {
 /**
  * POST /api/purpose/:purposeId/stop - Stop a purpose
  */
-app.post("/api/purpose/:purposeId/stop", async (req, res) => {
+app.post("/api/purpose/:purposeId/stop", async (req, res): Promise<void> => {
 	try {
 		if (!societyManager) {
-			return res.status(404).json({ error: "Society Manager not initialized" })
+			res.status(404).json({ error: "Society Manager not initialized" })
+			return
 		}
 
 		await societyManager.stopPurpose(req.params.purposeId, "User requested stop")

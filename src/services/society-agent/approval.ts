@@ -126,7 +126,8 @@ export class ApprovalManager {
 	/**
 	 * Set the supervisor communication channel
 	 */
-	setSupervisorChannel(channel: SupervisorChannel): void { // kilocode_change - typed properly
+	setSupervisorChannel(channel: SupervisorChannel): void {
+		// kilocode_change - typed properly
 		this.supervisorChannel = channel
 	}
 
@@ -176,7 +177,7 @@ export class ApprovalManager {
 					agentId: request.agentId,
 					tool: request.tool,
 					params: request.parameters,
-					decision: response.approved ? 'approved' : 'denied',
+					decision: response.approved ? "approved" : "denied",
 					approvedBy: response.supervisorId,
 					reason: response.reason,
 					autoApproved: false, // Could track this if we add auto-approval

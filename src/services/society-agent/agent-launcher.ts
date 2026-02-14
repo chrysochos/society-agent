@@ -323,6 +323,7 @@ This workspace starts empty. You'll create files and folders as needed based on 
 			if (!agent) continue // kilocode_change - type safety
 
 			onProgress({
+				type: "progress", // kilocode_change - ProgressUpdate requires type field
 				total: agentsToLaunch.length,
 				agentId: agent.agentId,
 				message: `Launching ${agent.agentId}...`,

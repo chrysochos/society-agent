@@ -1,7 +1,7 @@
 // kilocode_change - new file
 /**
  * API request/response logging utilities for Society Agent framework
- * 
+ *
  * This module provides logging for LLM API calls, tracking token usage,
  * latency, errors, and model information for debugging and auditing.
  */
@@ -86,22 +86,16 @@ export class ApiLogger {
 		const logger = this.getLogger()
 		if (!logger) return
 
-		await logger.logAction(
-			"api:request",
-			{
-				...metadata,
-				...params,
-			},
-		)
+		await logger.logAction("api:request", {
+			...metadata,
+			...params,
+		})
 	}
 
 	/**
 	 * Log an API response
 	 */
-	async logResponse(
-		requestMetadata: ApiRequestMetadata,
-		responseMetadata: ApiResponseMetadata,
-	): Promise<void> {
+	async logResponse(requestMetadata: ApiRequestMetadata, responseMetadata: ApiResponseMetadata): Promise<void> {
 		const logger = this.getLogger()
 		if (!logger) return
 
@@ -172,29 +166,17 @@ export class ApiLogger {
 	/**
 	 * Log API rate limit hit
 	 */
-	async logRateLimitHit(
-		provider: string,
-		model: string,
-		retryAfter?: number,
-	): Promise<void> {
+	async logRateLimitHit(provider: string, model: string, retryAfter?: number): Promise<void> {
 		const logger = this.getLogger()
 		if (!logger) return
 
-		await logger.logAction(
-			"api:rate-limit",
-			{ provider, model, retryAfter },
-		)
+		await logger.logAction("api:rate-limit", { provider, model, retryAfter })
 	}
 
 	/**
 	 * Log API error with details
 	 */
-	async logApiError(
-		provider: string,
-		model: string,
-		error: Error,
-		statusCode?: number,
-	): Promise<void> {
+	async logApiError(provider: string, model: string, error: Error, statusCode?: number): Promise<void> {
 		const logger = this.getLogger()
 		if (!logger) return
 
@@ -235,11 +217,7 @@ export function initializeApiLogger(metadata: AgentMetadata): void {
 /**
  * Helper to create request metadata
  */
-export function createRequestMetadata(
-	provider: string,
-	model: string,
-	requestId?: string,
-): ApiRequestMetadata {
+export function createRequestMetadata(provider: string, model: string, requestId?: string): ApiRequestMetadata {
 	return {
 		provider,
 		model,

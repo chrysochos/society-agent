@@ -1,7 +1,7 @@
 // kilocode_change - new file
 /**
  * Agent Registry
- * 
+ *
  * Tracks all active agents in the society, their capabilities,
  * status, and availability.
  */
@@ -139,7 +139,7 @@ export class AgentRegistry {
 				}
 			}
 		} catch (error) {
-			console.error('Failed to load agent registry from storage:', error)
+			console.error("Failed to load agent registry from storage:", error)
 		}
 	}
 

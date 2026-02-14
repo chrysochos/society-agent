@@ -1,6 +1,7 @@
 // kilocode_change - new file
 import * as vscode from "vscode"
 import { AgentRegistry } from "./agent-registry"
+import { AgentMessage } from "./types" // kilocode_change
 
 /**
  * Custom tool that allows agents to send messages to other agents directly from chat.
@@ -65,12 +66,7 @@ export class AgentMessagingTool {
 			}
 
 			// Send the message
-			const messageId = await this.registry.sendMessage({
-				from: this.agentId,
-				to: recipient,
-				content: message,
-				type: type,
-			})
+			await this.registry.sendMessage(recipient, type as AgentMessage["type"], message) // kilocode_change - positional args
 
 			// Format success response based on type
 			const typeLabel = type === "question" ? "Question" : type === "task_assign" ? "Task" : "Message"
@@ -81,7 +77,7 @@ export class AgentMessagingTool {
 Your message:
 "${message}"
 
-Message ID: ${messageId}
+Message sent successfully.
 
 ${recipient === "user" ? "The user will see this message." : `${recipientLabel} will receive this message and can respond.`}`
 		} catch (error) {

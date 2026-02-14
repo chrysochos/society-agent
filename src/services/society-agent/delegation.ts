@@ -1,7 +1,7 @@
 // kilocode_change - new file
 /**
  * Task Delegation System
- * 
+ *
  * Enables supervisors to delegate tasks to worker agents based on
  * capabilities and availability.
  */
@@ -77,11 +77,7 @@ export class TaskDelegation {
 	/**
 	 * Delegate a task to the most suitable agent
 	 */
-	async delegateTask(
-		task: string,
-		requirements: TaskRequirements,
-		context?: any,
-	): Promise<DelegationResult> {
+	async delegateTask(task: string, requirements: TaskRequirements, context?: any): Promise<DelegationResult> {
 		try {
 			// Find suitable agents
 			const suitableAgents = this.findSuitableAgents(requirements)
@@ -209,9 +205,7 @@ export class TaskDelegation {
 			}
 
 			// Check required capabilities
-			const hasAllRequired = requirements.requiredCapabilities.every((cap) =>
-				agent.capabilities.includes(cap),
-			)
+			const hasAllRequired = requirements.requiredCapabilities.every((cap) => agent.capabilities.includes(cap))
 			if (!hasAllRequired) {
 				return false
 			}
@@ -241,9 +235,7 @@ export class TaskDelegation {
 
 			// +1 for each preferred capability
 			if (requirements.preferredCapabilities) {
-				score += requirements.preferredCapabilities.filter((cap) =>
-					agent.capabilities.includes(cap),
-				).length
+				score += requirements.preferredCapabilities.filter((cap) => agent.capabilities.includes(cap)).length
 			}
 
 			// Prefer agents with lower task count (less busy)

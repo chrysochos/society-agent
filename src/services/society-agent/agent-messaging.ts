@@ -1,7 +1,7 @@
 // kilocode_change - new file
 /**
  * Agent-to-Agent Messaging System
- * 
+ *
  * Enables direct communication between agents in a society.
  * Supports request/response, broadcast, and notification patterns.
  */
@@ -142,11 +142,7 @@ export class AgentMessaging {
 	/**
 	 * Send a response to a previous request
 	 */
-	async respondToAgent(
-		targetAgentId: string,
-		correlationId: string,
-		payload: any,
-	): Promise<void> {
+	async respondToAgent(targetAgentId: string, correlationId: string, payload: any): Promise<void> {
 		if (!this.channel.isConnected()) {
 			throw new Error("Message channel not connected")
 		}
@@ -374,7 +370,7 @@ export class AgentMessageStore {
 			const storedMessages = await this.storage.getMessages()
 
 			// Convert stored format to AgentMessage format
-			this.messages = storedMessages.map(entry => ({
+			this.messages = storedMessages.map((entry) => ({
 				type: entry.type,
 				fromAgentId: entry.fromAgentId,
 				toAgentId: entry.toAgentId,
@@ -384,7 +380,7 @@ export class AgentMessageStore {
 				correlationId: entry.correlationId,
 			}))
 		} catch (error) {
-			console.error('Failed to load messages from storage:', error)
+			console.error("Failed to load messages from storage:", error)
 		}
 	}
 
@@ -420,25 +416,21 @@ export class AgentMessageStore {
 	 * Get messages by agent ID (sent or received)
 	 */
 	getMessagesByAgent(agentId: string): AgentMessage[] {
-		return this.messages.filter(
-			msg => msg.fromAgentId === agentId || msg.toAgentId === agentId
-		)
+		return this.messages.filter((msg) => msg.fromAgentId === agentId || msg.toAgentId === agentId)
 	}
 
 	/**
 	 * Get messages by correlation ID
 	 */
 	getMessagesByCorrelation(correlationId: string): AgentMessage[] {
-		return this.messages.filter(msg => msg.correlationId === correlationId)
+		return this.messages.filter((msg) => msg.correlationId === correlationId)
 	}
 
 	/**
 	 * Clear messages for a specific agent
 	 */
 	clearMessagesByAgent(agentId: string): void {
-		this.messages = this.messages.filter(
-			msg => msg.fromAgentId !== agentId && msg.toAgentId !== agentId
-		)
+		this.messages = this.messages.filter((msg) => msg.fromAgentId !== agentId && msg.toAgentId !== agentId)
 	}
 
 	/**

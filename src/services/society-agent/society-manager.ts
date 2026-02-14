@@ -321,9 +321,16 @@ Respond with JSON:
 Respond with ONLY the JSON:`
 
 		try {
-			const response = await apiHandler.createMessage("anthropic", [{ role: "user", content: prompt }])
+			const stream = apiHandler.createMessage("Analyze task complexity", [{ role: "user", content: prompt }]) // kilocode_change
 
-			let jsonText = response.content[0].text.trim()
+			let jsonText = ""
+			for await (const chunk of stream) {
+				if (chunk.type === "text") {
+					jsonText += chunk.text
+				}
+			}
+
+			jsonText = jsonText.trim()
 			if (jsonText.includes("```")) {
 				const match = jsonText.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/)
 				if (match) jsonText = match[1]
@@ -369,7 +376,8 @@ Respond with ONLY the JSON:`
 		await agent.assignTask(purpose.description)
 
 		// Wait for completion (poll status)
-		await new Promise((resolve) => {
+		await new Promise<void>((resolve) => {
+			// kilocode_change - typed Promise
 			const checkInterval = setInterval(() => {
 				if (agent.getState().status === "completed") {
 					clearInterval(checkInterval)
@@ -379,7 +387,7 @@ Respond with ONLY the JSON:`
 		})
 
 		this.config.onProgressUpdate?.(purpose.id, 100)
-		this.config.onPurposeCompleted?.(purpose.id, { success: true })
+		this.config.onPurposeCompleted?.(purpose, "Task completed successfully") // kilocode_change
 
 		return purpose.id
 	}

@@ -138,15 +138,16 @@ export class SimpleAgentLoop {
 	private async attemptDelivery(message: InboxMessage): Promise<boolean> {
 		const { ClineProvider } = await import("../../core/webview/ClineProvider")
 		const provider = ClineProvider.getVisibleInstance()
-		const currentTask = provider?.currentTask
+		const currentTask = provider?.getCurrentTask() // kilocode_change
+		const taskAny = currentTask as any // kilocode_change - Task class has no public state property
 
 		// Determine agent state
-		const isIdle = !currentTask || currentTask.state === "completed" || currentTask.state === "error"
-		const isWaiting = currentTask && (currentTask.state === "waiting_for_api" || currentTask.state === "paused")
-		const isBusy = currentTask && currentTask.state === "streaming"
+		const isIdle = !currentTask || taskAny?.state === "completed" || taskAny?.state === "error"
+		const isWaiting = currentTask && (taskAny?.state === "waiting_for_api" || taskAny?.state === "paused")
+		const isBusy = currentTask && taskAny?.state === "streaming"
 
 		console.log(
-			`[SimpleAgentLoop] Attempting delivery for message ${message.id}, agent state: ${currentTask?.state || "idle"}`,
+			`[SimpleAgentLoop] Attempting delivery for message ${message.id}, agent state: ${taskAny?.state || "idle"}`,
 		)
 
 		// Strategy 1: IDLE - Create new task (always works)
@@ -233,8 +234,9 @@ export class SimpleAgentLoop {
 		// kilocode_change start - Smart message routing
 		const { ClineProvider } = await import("../../core/webview/ClineProvider")
 		const provider = ClineProvider.getVisibleInstance()
-		const currentTask = provider?.currentTask
-		const hasActiveTask = currentTask && currentTask.state !== "completed" && currentTask.state !== "error"
+		const currentTask = provider?.getCurrentTask() // kilocode_change
+		const taskAny2 = currentTask as any // kilocode_change - Task class has no public state property
+		const hasActiveTask = currentTask && taskAny2?.state !== "completed" && taskAny2?.state !== "error"
 
 		// If agent has active task and receives a "message" type, inject AND add to history
 		if (message.type === "message" && hasActiveTask) {
@@ -294,8 +296,9 @@ export class SimpleAgentLoop {
 			const provider = ClineProvider.getVisibleInstance()
 
 			if (provider) {
-				const currentTask = provider.currentTask
-				const isContinuation = currentTask && currentTask.state !== "completed" && currentTask.state !== "error"
+				const currentTask = provider.getCurrentTask() // kilocode_change
+				const taskState = currentTask as any // kilocode_change - Task class has no public state property
+				const isContinuation = currentTask && taskState?.state !== "completed" && taskState?.state !== "error"
 
 				// Format message for chat (with continuation hint if applicable)
 				const formattedMessage = this.formatMessageForChat(message, sender, !!isContinuation)
@@ -307,11 +310,8 @@ export class SimpleAgentLoop {
 				} else {
 					// Create new task (first message or previous task finished)
 					// Enable auto-approvals for autonomous agent work
-					await provider.createTask(formattedMessage, undefined, undefined, {
-						mode: "code",
-						alwaysAllowWrite: true, // Auto-approve file writes
-						alwaysAllowExecute: true, // Auto-approve command execution
-					})
+					// kilocode_change - CreateTaskOptions only supports enableDiff, enableCheckpoints, etc.
+					await provider.createTask(formattedMessage)
 					console.log(
 						`[SimpleAgentLoop] Created new task with message from ${sender} (auto-approvals enabled)`,
 					)

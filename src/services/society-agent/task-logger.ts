@@ -1,7 +1,7 @@
 // kilocode_change - new file
 /**
  * Task-specific logging utilities for Society Agent framework
- * 
+ *
  * This module provides helper functions for logging agent actions
  * within the Task execution context, including tool executions,
  * API calls, and decision points in the agentic loop.
@@ -68,7 +68,7 @@ export class TaskLogger extends SocietyAgentLogger {
 	): Promise<void> {
 		const action = "api:llm-call"
 		const params = { provider, model, tokensUsed, latencyMs }
-		
+
 		if (error) {
 			await this.logError(action, error)
 		} else {
@@ -79,11 +79,7 @@ export class TaskLogger extends SocietyAgentLogger {
 	/**
 	 * Log a capability check
 	 */
-	async logCapabilityCheck(
-		capability: AgentCapability,
-		allowed: boolean,
-		reason?: string,
-	): Promise<void> {
+	async logCapabilityCheck(capability: AgentCapability, allowed: boolean, reason?: string): Promise<void> {
 		await this.logAction(
 			"permission:capability-check",
 			{ capability, allowed, reason },
@@ -118,41 +114,25 @@ export class TaskLogger extends SocietyAgentLogger {
 		taskDescription: string,
 		requiredCapabilities: AgentCapability[],
 	): Promise<void> {
-		await this.logAction(
-			"task:delegation",
-			{
-				delegateToId,
-				delegateToRole,
-				taskDescription,
-				requiredCapabilities,
-			},
-		)
+		await this.logAction("task:delegation", {
+			delegateToId,
+			delegateToRole,
+			taskDescription,
+			requiredCapabilities,
+		})
 	}
 
 	/**
 	 * Log a decision point in the agentic loop
 	 */
-	async logDecision(
-		decisionType: string,
-		options: string[],
-		chosen: string,
-		reasoning?: string,
-	): Promise<void> {
-		await this.logAction(
-			`decision:${decisionType}`,
-			{ options, reasoning },
-			{ success: true, data: { chosen } },
-		)
+	async logDecision(decisionType: string, options: string[], chosen: string, reasoning?: string): Promise<void> {
+		await this.logAction(`decision:${decisionType}`, { options, reasoning }, { success: true, data: { chosen } })
 	}
 
 	/**
 	 * Log task completion
 	 */
-	async logTaskComplete(
-		success: boolean,
-		result?: unknown,
-		error?: Error,
-	): Promise<void> {
+	async logTaskComplete(success: boolean, result?: unknown, error?: Error): Promise<void> {
 		const action = "task:complete"
 		if (error) {
 			await this.logError(action, error)

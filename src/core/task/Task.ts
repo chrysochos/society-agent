@@ -1976,26 +1976,26 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					this.societyManager = new SocietyManager({
 						apiHandler: this.api,
 						workspacePath: workspacePath, // kilocode_change
-						onMessage: (purposeId, agentId, message) => {
+						onMessage: (purposeId: string, agentId: string, message: string) => {
 							// Forward agent messages to webview
 							provider.postMessageToWebview({
-								type: "society-agent-message",
+								type: "society-agent-message" as any, // kilocode_change
 								purposeId,
 								agentId,
 								message,
 								timestamp: Date.now(),
-							})
+							} as any)
 						},
-						onStatusChange: (purposeId, agentId, status, task) => {
+						onStatusChange: (purposeId: string, agentId: string, status: string, task: string) => {
 							// Forward status updates to webview
 							provider.postMessageToWebview({
-								type: "society-agent-status",
+								type: "society-agent-status" as any, // kilocode_change
 								purposeId,
 								agentId,
 								status,
 								task,
 								timestamp: Date.now(),
-							})
+							} as any)
 						},
 					})
 				}
@@ -2019,7 +2019,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						description: taskText,
 						workspacePath: this.cwd,
 						contextItems: [], // Can add attachments here
-					})
+					} as any) // kilocode_change - PurposeContext extended
 
 					await this.say("text", `✅ **Multi-Agent Execution Complete**\n\n${result}`)
 					await this.say("completion_result", result)

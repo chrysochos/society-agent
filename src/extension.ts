@@ -398,8 +398,8 @@ export async function activate(context: vscode.ExtensionContext) {
 				const checkMessagesCommand = vscode.commands.registerCommand(
 					"kilo-code.societyCheckMessages",
 					async () => {
-						const messages = await agentRegistry.getUndeliveredMessages()
-						if (messages.length === 0) {
+						const messages = await agentRegistry?.getUndeliveredMessages() // kilocode_change - null safety
+						if (!messages || messages.length === 0) {
 							vscode.window.showInformationMessage(`No new messages for ${role}`)
 							return
 						}
@@ -408,7 +408,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 						// Process messages
 						for (const msg of messages) {
-							await agentRegistry.markDelivered(msg.id)
+							await agentRegistry?.markDelivered(msg.id) // kilocode_change - null safety
 							const sender = msg.from === "user" ? "User" : msg.from
 							const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)
 

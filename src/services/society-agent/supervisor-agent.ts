@@ -407,7 +407,7 @@ Respond with the JSON now:`
 			console.log("✅ Parsed tasks:", JSON.stringify(tasks, null, 2))
 
 			// Validate: ensure all workers have tasks
-			const assignedWorkers = new Set(tasks.map((t) => t.workerId))
+			const assignedWorkers = new Set(tasks.map((t: any) => t.workerId)) // kilocode_change - explicit type
 			const missingWorkers = this.supervisorState.workerIds.filter((id) => !assignedWorkers.has(id))
 			if (missingWorkers.length > 0) {
 				console.warn(`⚠️ Warning: ${missingWorkers.length} workers not assigned tasks:`, missingWorkers)
@@ -420,7 +420,7 @@ Respond with the JSON now:`
 			const folderPrompt = `Purpose: ${this.supervisorState.purpose.description}
 
 Tasks assigned:
-${tasks.map((t, i) => `${i + 1}. Worker ${i + 1}: ${t.task} ${t.dependencies?.length ? `(depends on: ${t.dependencies.join(", ")})` : "(parallel)"}`).join("\n")}
+${tasks.map((t: any, i: number) => `${i + 1}. Worker ${i + 1}: ${t.task} ${t.dependencies?.length ? `(depends on: ${t.dependencies.join(", ")})` : "(parallel)"}`).join("\n")}
 
 ANALYZE FOLDER STRUCTURE NEEDS:
 

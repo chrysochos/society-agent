@@ -50,13 +50,15 @@ export class ResponseCapture {
 			} else {
 				// Check ResponseHandler context for default recipient
 				const { ResponseHandler } = await import("./response-handler")
-				const handler = ResponseHandler.getInstance(this.registry, this.agentId)
-				const context = handler.getCurrentContext()
+				const handler = new ResponseHandler(this.registry, this.agentId) // kilocode_change - no getInstance
+				const context = (handler as any).responseContext as
+					| { lastSender?: string; replyTo?: string }
+					| undefined // kilocode_change - access private field
 
-				if (context?.replyTo && context.replyTo !== "user") {
+				if (context?.lastSender && context.replyTo !== "user") {
 					// Reply to the agent who sent the original message
-					await this.sendResponse(context.replyTo, response)
-				} else if (context?.replyTo === "user") {
+					await this.sendResponse(context.lastSender!, response) // kilocode_change
+				} else if (context?.lastSender === "user") {
 					// Notify user
 					vscode.window.showInformationMessage(
 						`📨 ${this.agentId} completed task:\n\n${this.truncate(response, 200)}`,
@@ -94,12 +96,7 @@ export class ResponseCapture {
 	 */
 	private async sendResponse(recipient: string, response: string): Promise<void> {
 		try {
-			await this.registry.sendMessage({
-				from: this.agentId,
-				to: recipient,
-				content: response,
-				type: "message",
-			})
+			await this.registry.sendMessage(recipient, "message", response) // kilocode_change - positional args
 
 			console.log(`[ResponseCapture] Routed response to ${recipient}`)
 		} catch (error) {

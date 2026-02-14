@@ -512,30 +512,6 @@ export class AgentRegistry {
 	}
 
 	/**
-	 * Get undelivered messages for this agent
-	 */
-	async getUndeliveredMessages(): Promise<AgentMessage[]> {
-		try {
-			const content = await fs.readFile(this.messagesPath, "utf-8")
-			const lines = content.trim().split("\n").filter(Boolean)
-			const messages: AgentMessage[] = []
-
-			for (const line of lines) {
-				const message = JSON.parse(line) as AgentMessage
-				// Check if message is for us and not delivered yet
-				if ((message.to === this.agentId || message.to === "broadcast") && !message.delivered) {
-					messages.push(message)
-				}
-			}
-
-			return messages
-		} catch (error) {
-			console.error("[AgentRegistry] Error reading undelivered messages:", error)
-			return []
-		}
-	}
-
-	/**
 	 * Mark message as delivered
 	 */
 	async markDelivered(messageId: string): Promise<void> {

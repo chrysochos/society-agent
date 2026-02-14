@@ -233,7 +233,8 @@ export function registerSocietyCommands(program: Command): void {
 				const canonical = JSON.stringify(messageData, Object.keys(messageData).sort())
 				const hmac = crypto.createHmac("sha256", senderSecret)
 				hmac.update(canonical)
-				;(message as any).signature = hmac.digest("hex") // kilocode_change
+			;(message as any).signature = hmac.digest("hex") // eslint-disable-line @typescript-eslint/no-explicit-any -- kilocode_change
+			// kilocode_change start - Also write to inbox for persistent queue
 				const inboxDir = path.join(sharedDir, "inbox", agentId)
 				await fs.mkdir(inboxDir, { recursive: true })
 

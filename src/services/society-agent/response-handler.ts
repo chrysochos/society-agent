@@ -8,6 +8,7 @@
 
 import * as vscode from "vscode"
 import { AgentRegistry } from "./agent-registry"
+import { AgentMessage } from "./types" // kilocode_change
 
 export interface ResponseContext {
 	lastSender: string // Who sent the last message to this agent
@@ -92,11 +93,7 @@ export class ResponseHandler {
 	 */
 	private async sendTo(to: string, content: string, type: string): Promise<void> {
 		try {
-			await this.registry.sendMessage({
-				to,
-				type,
-				content,
-			})
+			await this.registry.sendMessage(to, type as AgentMessage["type"], content) // kilocode_change - positional args
 			console.log(`[ResponseHandler] Sent response to ${to}`)
 		} catch (error) {
 			console.error(`[ResponseHandler] Failed to send to ${to}:`, error)

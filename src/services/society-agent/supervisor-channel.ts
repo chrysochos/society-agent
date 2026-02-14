@@ -1,7 +1,7 @@
 // kilocode_change - new file
 /**
  * Supervisor communication channel (Phase 4)
- * 
+ *
  * Enables worker agents to communicate with supervisor agents for:
  * - Approval requests
  * - Status updates
@@ -57,7 +57,7 @@ type MessageHandler = (message: SupervisorMessage) => void
 
 /**
  * Supervisor communication channel (Phase 4)
- * 
+ *
  * Uses callback-based messaging for in-process communication.
  * Can be extended to use WebSocket/IPC for multi-process supervision.
  */
@@ -236,7 +236,7 @@ export class SupervisorChannel {
 
 /**
  * Mock supervisor channel for testing (Phase 3)
- * 
+ *
  * Simulates supervisor responses for testing approval workflows.
  */
 export class MockSupervisorChannel extends SupervisorChannel {

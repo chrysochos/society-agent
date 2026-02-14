@@ -1,36 +1,36 @@
 // kilocode_change - new file
 /**
  * Society Agent Persistent Storage
- * 
+ *
  * Workspace-local file-based storage for agent state using JSONL format.
  * Enables data sharing between CLI and VS Code extension instances.
  */
 
-import * as fs from 'fs/promises'
-import * as path from 'path'
+import * as fs from "fs/promises"
+import * as path from "path"
 
 /**
  * Storage paths for Society Agent data
  */
 export interface StoragePaths {
-	baseDir: string          // .society-agent/
-	logsDir: string          // .society-agent/logs/
-	registryFile: string     // .society-agent/registry.jsonl
-	messagesFile: string     // .society-agent/messages.jsonl
-	approvalsFile: string    // .society-agent/approvals.jsonl
+	baseDir: string // .society-agent/
+	logsDir: string // .society-agent/logs/
+	registryFile: string // .society-agent/registry.jsonl
+	messagesFile: string // .society-agent/messages.jsonl
+	approvalsFile: string // .society-agent/approvals.jsonl
 }
 
 /**
  * Get storage paths for a workspace
  */
 export function getStoragePaths(workspaceRoot: string): StoragePaths {
-	const baseDir = path.join(workspaceRoot, '.society-agent')
+	const baseDir = path.join(workspaceRoot, ".society-agent")
 	return {
 		baseDir,
-		logsDir: path.join(baseDir, 'logs'),
-		registryFile: path.join(baseDir, 'registry.jsonl'),
-		messagesFile: path.join(baseDir, 'messages.jsonl'),
-		approvalsFile: path.join(baseDir, 'approvals.jsonl'),
+		logsDir: path.join(baseDir, "logs"),
+		registryFile: path.join(baseDir, "registry.jsonl"),
+		messagesFile: path.join(baseDir, "messages.jsonl"),
+		approvalsFile: path.join(baseDir, "approvals.jsonl"),
 	}
 }
 
@@ -52,10 +52,10 @@ export class JsonlStorage<T> {
 	 */
 	async append(entry: T): Promise<void> {
 		try {
-			const line = JSON.stringify(entry) + '\n'
+			const line = JSON.stringify(entry) + "\n"
 			const dir = path.dirname(this.filePath)
 			await fs.mkdir(dir, { recursive: true })
-			await fs.appendFile(this.filePath, line, 'utf-8')
+			await fs.appendFile(this.filePath, line, "utf-8")
 		} catch (error) {
 			console.error(`Failed to append to ${this.filePath}:`, error)
 			throw error
@@ -67,12 +67,15 @@ export class JsonlStorage<T> {
 	 */
 	async readAll(): Promise<T[]> {
 		try {
-			const content = await fs.readFile(this.filePath, 'utf-8')
-			const lines = content.trim().split('\n').filter(line => line.length > 0)
-			return lines.map(line => JSON.parse(line) as T)
+			const content = await fs.readFile(this.filePath, "utf-8")
+			const lines = content
+				.trim()
+				.split("\n")
+				.filter((line) => line.length > 0)
+			return lines.map((line) => JSON.parse(line) as T)
 		} catch (error: any) {
 			// File doesn't exist yet - return empty array
-			if (error.code === 'ENOENT') {
+			if (error.code === "ENOENT") {
 				return []
 			}
 			console.error(`Failed to read from ${this.filePath}:`, error)
@@ -96,7 +99,7 @@ export class JsonlStorage<T> {
 			await fs.unlink(this.filePath)
 		} catch (error: any) {
 			// Ignore if file doesn't exist
-			if (error.code !== 'ENOENT') {
+			if (error.code !== "ENOENT") {
 				console.error(`Failed to clear ${this.filePath}:`, error)
 				throw error
 			}
@@ -125,7 +128,7 @@ export class JsonlStorage<T> {
  */
 export interface RegistryEntry {
 	timestamp: number
-	event: 'register' | 'deregister' | 'status-update'
+	event: "register" | "deregister" | "status-update"
 	agentId: string
 	agentData?: {
 		name: string
@@ -144,13 +147,13 @@ export interface RegistryEntry {
 export interface MessageEntry {
 	timestamp: number
 	messageId: string
-	type: 'request' | 'response' | 'broadcast' | 'notification'
+	type: "request" | "response" | "broadcast" | "notification"
 	fromAgentId: string
 	toAgentId?: string
 	action?: string
 	payload?: unknown
 	correlationId?: string
-	priority?: 'low' | 'normal' | 'high' | 'urgent'
+	priority?: "low" | "normal" | "high" | "urgent"
 	error?: string
 }
 
@@ -162,7 +165,7 @@ export interface ApprovalEntry {
 	agentId: string
 	tool: string
 	params?: unknown
-	decision: 'approved' | 'denied'
+	decision: "approved" | "denied"
 	approvedBy?: string
 	reason?: string
 	autoApproved?: boolean
@@ -194,10 +197,10 @@ export class SocietyAgentStorage {
 	/**
 	 * Registry operations
 	 */
-	async recordAgentRegistration(agentId: string, agentData: RegistryEntry['agentData']): Promise<void> {
+	async recordAgentRegistration(agentId: string, agentData: RegistryEntry["agentData"]): Promise<void> {
 		await this.registryStorage.append({
 			timestamp: Date.now(),
-			event: 'register',
+			event: "register",
 			agentId,
 			agentData,
 		})
@@ -206,15 +209,15 @@ export class SocietyAgentStorage {
 	async recordAgentDeregistration(agentId: string): Promise<void> {
 		await this.registryStorage.append({
 			timestamp: Date.now(),
-			event: 'deregister',
+			event: "deregister",
 			agentId,
 		})
 	}
 
-	async recordAgentStatusUpdate(agentId: string, agentData: RegistryEntry['agentData']): Promise<void> {
+	async recordAgentStatusUpdate(agentId: string, agentData: RegistryEntry["agentData"]): Promise<void> {
 		await this.registryStorage.append({
 			timestamp: Date.now(),
-			event: 'status-update',
+			event: "status-update",
 			agentId,
 			agentData,
 		})
@@ -230,9 +233,9 @@ export class SocietyAgentStorage {
 
 		// Build current state by replaying events
 		for (const entry of history) {
-			if (entry.event === 'register' || entry.event === 'status-update') {
+			if (entry.event === "register" || entry.event === "status-update") {
 				agents.set(entry.agentId, entry)
-			} else if (entry.event === 'deregister') {
+			} else if (entry.event === "deregister") {
 				agents.delete(entry.agentId)
 			}
 		}
@@ -243,7 +246,7 @@ export class SocietyAgentStorage {
 	/**
 	 * Message operations
 	 */
-	async recordMessage(message: Omit<MessageEntry, 'timestamp'>): Promise<void> {
+	async recordMessage(message: Omit<MessageEntry, "timestamp">): Promise<void> {
 		await this.messagesStorage.append({
 			timestamp: Date.now(),
 			...message,
@@ -253,16 +256,14 @@ export class SocietyAgentStorage {
 	async getMessages(agentId?: string): Promise<MessageEntry[]> {
 		if (agentId) {
 			return await this.messagesStorage.readFiltered(
-				msg => msg.fromAgentId === agentId || msg.toAgentId === agentId
+				(msg) => msg.fromAgentId === agentId || msg.toAgentId === agentId,
 			)
 		}
 		return await this.messagesStorage.readAll()
 	}
 
 	async getMessagesByCorrelation(correlationId: string): Promise<MessageEntry[]> {
-		return await this.messagesStorage.readFiltered(
-			msg => msg.correlationId === correlationId
-		)
+		return await this.messagesStorage.readFiltered((msg) => msg.correlationId === correlationId)
 	}
 
 	async getRecentMessages(count: number): Promise<MessageEntry[]> {
@@ -276,7 +277,7 @@ export class SocietyAgentStorage {
 	/**
 	 * Approval operations
 	 */
-	async recordApproval(approval: Omit<ApprovalEntry, 'timestamp'>): Promise<void> {
+	async recordApproval(approval: Omit<ApprovalEntry, "timestamp">): Promise<void> {
 		await this.approvalsStorage.append({
 			timestamp: Date.now(),
 			...approval,
@@ -285,16 +286,14 @@ export class SocietyAgentStorage {
 
 	async getApprovals(agentId?: string): Promise<ApprovalEntry[]> {
 		if (agentId) {
-			return await this.approvalsStorage.readFiltered(
-				approval => approval.agentId === agentId
-			)
+			return await this.approvalsStorage.readFiltered((approval) => approval.agentId === agentId)
 		}
 		return await this.approvalsStorage.readAll()
 	}
 
 	async getApprovalHistory(agentId: string, tool: string): Promise<ApprovalEntry[]> {
 		return await this.approvalsStorage.readFiltered(
-			approval => approval.agentId === agentId && approval.tool === tool
+			(approval) => approval.agentId === agentId && approval.tool === tool,
 		)
 	}
 
@@ -323,10 +322,6 @@ export class SocietyAgentStorage {
 	 * Clear all storage
 	 */
 	async clearAll(): Promise<void> {
-		await Promise.all([
-			this.registryStorage.clear(),
-			this.messagesStorage.clear(),
-			this.approvalsStorage.clear(),
-		])
+		await Promise.all([this.registryStorage.clear(), this.messagesStorage.clear(), this.approvalsStorage.clear()])
 	}
 }

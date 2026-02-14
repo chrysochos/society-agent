@@ -37,6 +37,7 @@ export interface AgentState {
 	currentTask?: string
 	status: "idle" | "working" | "waiting" | "paused" | "error" | "completed"
 	metadata: Record<string, unknown>
+	systemPrompt?: string // kilocode_change - used by callLLM methods
 }
 
 export interface ConversationAgentConfig {

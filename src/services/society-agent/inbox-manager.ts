@@ -82,6 +82,7 @@ export class InboxManager {
 
 				// kilocode_change start - Verify message signature
 				if (message.signature) {
+					// kilocode_change - signature is now in AgentMessage type
 					const isValid = await this.security.verifyMessage(message, message.from)
 					if (!isValid) {
 						console.warn(
