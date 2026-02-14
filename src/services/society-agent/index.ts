@@ -22,4 +22,7 @@ export { MessageSender } from "./message-sender"
 export { InboxPoller } from "./inbox-poller"
 export { PortManager } from "./port-manager"
 export { commandExecutor } from "./command-executor"
+export { AgentDirectory, type AgentDirectoryConfig } from "./agent-directory"
+export { KnowledgeManager, type ConversationEntry } from "./knowledge-manager"
+export { PermissionChecker, getPermissionChecker } from "./permissions"
 // kilocode_change end

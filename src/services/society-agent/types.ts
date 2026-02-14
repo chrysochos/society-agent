@@ -77,6 +77,103 @@ export interface AgentMetadata {
 	historyPath: string
 }
 
+// kilocode_change start - Hierarchy, discovery, and lifecycle types
+
+/**
+ * Each VS Code instance is a **node** — operated by a human AND acting as an agent.
+ * The human can always intervene, accept work from other agents, or override decisions.
+ * Supervisor hierarchy governs regular delegated work; humans can bypass it.
+ */
+
+/**
+ * Agent lifecycle mode — determines folder and knowledge behavior per VS Code instance.
+ * - ephemeral: Created per purpose, temp workspace, disposed after completion. No persistent knowledge.
+ * - persistent: Each VS Code has its own permanent folder with .agent-knowledge/.
+ *               Knowledge survives across purposes and sessions.
+ */
+export type AgentLifecycle = "ephemeral" | "persistent"
+
+/**
+ * Supervision chain — ordered path from agent up through supervisors to human.
+ * Index 0 = the agent itself, last = human.
+ *
+ * Used for:
+ * - Escalation routing (who to ask next when stuck)
+ * - Permission inheritance (supervisor can override worker decisions)
+ * - Regular work delegation (tasks flow down the chain)
+ *
+ * Note: Humans can always send work DIRECTLY to any agent, bypassing the chain.
+ * The chain is for agent→agent delegation under normal operation.
+ */
+export interface SupervisionChain {
+	/** Ordered node IDs from agent → supervisor → ... → human */
+	chain: string[]
+	/** The human user node (always last in chain) */
+	humanNodeId: string
+}
+
+/**
+ * Entry in the agent directory — everything needed for discovery and communication.
+ * Published to .society-agent/directory.json by each VS Code instance on startup.
+ *
+ * Key design:
+ * - Each VS Code window = 1 directory entry
+ * - The human at that VS Code can accept work from other agents via channels
+ * - Persistent VS Code instances have their own .agent-knowledge/ folder
+ * - Ephemeral ones get temp folders, cleaned up after purpose completion
+ */
+export interface AgentDirectoryEntry {
+	/** Agent unique ID (per VS Code instance) */
+	agentId: string
+	/** Human-readable name */
+	name: string
+	/** Role in supervisor hierarchy */
+	role: AgentRole
+	/** Capabilities offered */
+	capabilities: AgentCapability[]
+	/** Domain specialty (e.g., "testing", "frontend") */
+	domain?: string
+	/** Who supervises this agent for regular work (agentId or "human" for top-level) */
+	supervisorId: string
+	/** Lifecycle mode — determines folder persistence */
+	lifecycle: AgentLifecycle
+	/** Workspace folder this VS Code instance owns */
+	workspace: string
+	/** HTTP endpoint for channel communication */
+	url?: string
+	/** Status */
+	status: "online" | "offline" | "busy" | "paused"
+	/** Last heartbeat ISO timestamp */
+	lastSeen: string
+	/** Knowledge directory path (persistent instances only, per-workspace) */
+	knowledgeDir?: string
+	/** Whether a human is actively using this VS Code instance */
+	humanPresent?: boolean
+	/** Can accept work from any agent (not just supervisor chain) */
+	acceptsExternalWork?: boolean
+}
+
+/**
+ * Markdown-based knowledge files maintained per persistent VS Code workspace.
+ * Each VS Code instance has its own .agent-knowledge/ folder.
+ * The AI creates and updates these files based on what it learns.
+ * Humans can also read/edit them directly.
+ */
+export interface AgentKnowledgeFiles {
+	/** All conversations the agent has participated in */
+	chatHistory: string     // chat-history.md
+	/** Objects, entities, concepts — tangible and intangible */
+	inventory: string       // inventory.md
+	/** Current state vs desired state */
+	state: string           // state.md
+	/** How things relate to each other */
+	relationships: string   // relationships.md
+	/** Key decisions and rationale */
+	decisions: string       // decisions.md
+}
+
+// kilocode_change end
+
 /**
  * Agent action log entry
  */
