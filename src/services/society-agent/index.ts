@@ -15,7 +15,7 @@ export { AgentIdentityManager, type SignedMessage, type AttachmentRef } from "./
 export { UnifiedMessageHandler, type MessageHandlerOptions } from "./message-handler"
 export { AgentRegistry, type AgentMessage } from "./agent-registry"
 export { SocietyManager, type SocietyManagerConfig } from "./society-manager"
-export { SupervisorAgent, type SupervisorConfig, type Purpose } from "./supervisor-agent"
+export { SupervisorAgent, type SupervisorAgentConfig, type Purpose } from "./supervisor-agent"
 export { PurposeAnalyzer, type PurposeContext } from "./purpose-analyzer"
 export { AgentTeam } from "./agent-team"
 export { MessageSender } from "./message-sender"

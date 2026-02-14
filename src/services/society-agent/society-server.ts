@@ -18,6 +18,7 @@ import { ConversationAgent } from "./conversation-agent"
 import { Anthropic } from "@anthropic-ai/sdk"
 import { ApiHandler } from "../../api/index"
 import { commandExecutor } from "./command-executor"
+import { getLog } from "./logger"
 
 const app = express()
 const server = http.createServer(app)
@@ -27,27 +28,7 @@ const io = new SocketIOServer(server, {
 
 const PORT = process.env.PORT || 3000
 const NODE_ENV = process.env.NODE_ENV || "development"
-const VERBOSE = process.env.VERBOSE_LOGGING !== "false"
-
-// Override console.log to respect VERBOSE_LOGGING
-const originalLog = console.log
-console.log = (...args: any[]) => {
-	// Always show important messages (with emoji indicators)
-	const msg = args.join(" ")
-	if (
-		msg.includes("✅ Server") ||
-		msg.includes("📊 API") ||
-		msg.includes("💬 WebSocket") ||
-		msg.includes("💡 Configure") ||
-		msg.includes("╔") ||
-		msg.includes("║") ||
-		msg.includes("╚")
-	) {
-		originalLog(...args)
-	} else if (VERBOSE) {
-		originalLog(...args)
-	}
-}
+const log = getLog()
 
 // Middleware
 app.use(express.json())
@@ -65,7 +46,7 @@ async function initializeSocietyManager(apiKey?: string) {
 	if (societyManager) return
 
 	try {
-		console.log("🔧 Initializing Society Manager...")
+		log.info("Initializing Society Manager...")
 
 		// Use provided API key or fallback to environment variable
 		const key = apiKey || process.env.ANTHROPIC_API_KEY
@@ -110,7 +91,7 @@ async function initializeSocietyManager(apiKey?: string) {
 			apiHandler,
 			workspacePath,
 			onPurposeStarted: (purpose) => {
-				console.log("📌 Purpose started:", purpose.id)
+				log.info("Purpose started:", purpose.id)
 				io.emit("purpose-started", {
 					id: purpose.id,
 					description: purpose.description,
@@ -118,7 +99,7 @@ async function initializeSocietyManager(apiKey?: string) {
 				})
 			},
 			onTeamFormed: (purposeId, teamSize) => {
-				console.log("👥 Team formed:", teamSize, "agents")
+				log.info("Team formed:", teamSize, "agents")
 				io.emit("team-formed", {
 					purposeId,
 					teamSize,
@@ -146,9 +127,9 @@ async function initializeSocietyManager(apiKey?: string) {
 			},
 		})
 
-		console.log("✅ Society Manager initialized")
+		log.info("Society Manager initialized")
 	} catch (error) {
-		console.error("❌ Failed to initialize Society Manager:", error)
+		log.error("Failed to initialize Society Manager:", error)
 		throw error
 	}
 }
@@ -233,14 +214,14 @@ app.post("/api/config/api-key", async (req, res): Promise<void> => {
 		// Update process.env immediately
 		process.env.ANTHROPIC_API_KEY = apiKey
 
-		console.log("✅ API key saved to .env file")
+		log.info("API key saved to .env file")
 
 		res.json({
 			success: true,
 			message: "API key saved successfully. Server will use this key for future requests.",
 		})
 	} catch (error) {
-		console.error("❌ Error saving API key:", error)
+		log.error("Error saving API key:", error)
 		res.status(500).json({ error: String(error) })
 	}
 })
@@ -282,7 +263,7 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 
 		// Initialize user agent if not exists (maintains conversation memory)
 		if (!userAgent) {
-			console.log("🤖 Creating user conversation agent...")
+			log.info("Creating user conversation agent...")
 
 			const anthropic = new Anthropic({ apiKey })
 
@@ -350,7 +331,7 @@ You maintain your own conversation memory, so you can reference earlier parts of
 			})
 		}
 
-		console.log("💬 User agent handling:", description)
+		log.info("User agent handling:", description)
 
 		// Send message to agent (it maintains its own conversation history)
 		let fullResponse = ""
@@ -381,7 +362,7 @@ You maintain your own conversation memory, so you can reference earlier parts of
 		})
 		return
 	} catch (error) {
-		console.error("❌ Error handling purpose:", error)
+		log.error("Error handling purpose:", error)
 		res.status(500).json({ error: String(error) })
 	}
 })
@@ -419,7 +400,7 @@ app.get("/api/purposes", (req, res): void => {
 
 		res.json({ active, completed })
 	} catch (error) {
-		console.error("❌ Error getting purposes:", error)
+		log.error("Error getting purposes:", error)
 		res.status(500).json({ error: String(error) })
 	}
 })
@@ -452,7 +433,7 @@ app.get("/api/purpose/:purposeId", (req, res): void => {
 			startedAt: purpose.startedAt,
 		})
 	} catch (error) {
-		console.error("❌ Error getting purpose:", error)
+		log.error("Error getting purpose:", error)
 		res.status(500).json({ error: String(error) })
 	}
 })
@@ -489,7 +470,7 @@ app.get("/api/agents", (req, res): void => {
 
 		res.json({ agents })
 	} catch (error) {
-		console.error("❌ Error getting agents:", error)
+		log.error("Error getting agents:", error)
 		res.status(500).json({ error: String(error) })
 	}
 })
@@ -533,7 +514,7 @@ app.get("/api/agent/:agentId", (req, res): void => {
 
 		res.json(foundAgent)
 	} catch (error) {
-		console.error("❌ Error getting agent:", error)
+		log.error("Error getting agent:", error)
 		res.status(500).json({ error: String(error) })
 	}
 })
@@ -543,8 +524,7 @@ app.get("/api/agent/:agentId", (req, res): void => {
  */
 app.post("/api/agent/:agentId/pause", async (req, res) => {
 	try {
-		// TODO: Implement agent pause
-		res.json({ status: "paused", agentId: req.params.agentId })
+		res.status(501).json({ error: "Agent pause not yet implemented", agentId: req.params.agentId })
 	} catch (error) {
 		res.status(500).json({ error: String(error) })
 	}
@@ -555,8 +535,7 @@ app.post("/api/agent/:agentId/pause", async (req, res) => {
  */
 app.post("/api/agent/:agentId/stop", async (req, res) => {
 	try {
-		// TODO: Implement agent stop
-		res.json({ status: "stopped", agentId: req.params.agentId })
+		res.status(501).json({ error: "Agent stop not yet implemented", agentId: req.params.agentId })
 	} catch (error) {
 		res.status(500).json({ error: String(error) })
 	}
@@ -579,13 +558,7 @@ app.post("/api/terminal/execute", async (req, res): Promise<void> => {
 		}
 
 		// Determine working directory
-		let workingDir = cwd
-		if (projectId) {
-			// TODO: Get project path from workspace manager
-			workingDir = cwd || process.cwd()
-		} else {
-			workingDir = cwd || process.cwd()
-		}
+		const workingDir = cwd || process.cwd()
 
 		const commandId = `cmd-${Date.now()}`
 
@@ -625,7 +598,7 @@ app.post("/api/terminal/execute", async (req, res): Promise<void> => {
 				})
 			})
 	} catch (error) {
-		console.error("❌ Error executing command:", error)
+		log.error("Error executing command:", error)
 		res.status(500).json({ error: String(error) })
 	}
 })
@@ -685,8 +658,7 @@ app.get("/api/terminal/running", (req, res) => {
  */
 app.post("/api/purpose/:purposeId/pause", async (req, res) => {
 	try {
-		// TODO: Implement purpose pause
-		res.json({ status: "paused", purposeId: req.params.purposeId })
+		res.status(501).json({ error: "Purpose pause not yet implemented", purposeId: req.params.purposeId })
 	} catch (error) {
 		res.status(500).json({ error: String(error) })
 	}
@@ -706,7 +678,7 @@ app.post("/api/purpose/:purposeId/stop", async (req, res): Promise<void> => {
 
 		res.json({ status: "stopped", purposeId: req.params.purposeId })
 	} catch (error) {
-		console.error("❌ Error stopping purpose:", error)
+		log.error("Error stopping purpose:", error)
 		res.status(500).json({ error: String(error) })
 	}
 })
@@ -719,26 +691,26 @@ io.on("connection", (socket) => {
 	const clientId = socket.id
 	connectedClients.add(clientId)
 
-	console.log(`✅ Client connected: ${clientId}`)
+	log.info(`Client connected: ${clientId}`)
 
 	socket.on("subscribe-purpose", (purposeId: string) => {
-		console.log(`📡 Client ${clientId} subscribed to purpose ${purposeId}`)
+		log.info(`Client ${clientId} subscribed to purpose ${purposeId}`)
 		socket.join(`purpose:${purposeId}`)
 	})
 
 	socket.on("unsubscribe-purpose", (purposeId: string) => {
-		console.log(`📡 Client ${clientId} unsubscribed from purpose ${purposeId}`)
+		log.info(`Client ${clientId} unsubscribed from purpose ${purposeId}`)
 		socket.leave(`purpose:${purposeId}`)
 	})
 
 	socket.on("subscribe-agent", (agentId: string) => {
-		console.log(`📡 Client ${clientId} subscribed to agent ${agentId}`)
+		log.info(`Client ${clientId} subscribed to agent ${agentId}`)
 		socket.join(`agent:${agentId}`)
 	})
 
 	socket.on("disconnect", () => {
 		connectedClients.delete(clientId)
-		console.log(`❌ Client disconnected: ${clientId}`)
+		log.info(`Client disconnected: ${clientId}`)
 	})
 })
 
@@ -755,7 +727,7 @@ app.get("*", (req, res) => {
 // ============================================================================
 
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-	console.error("🔴 Server error:", err)
+	log.error("Server error:", err)
 	res.status(500).json({
 		error: "Internal server error",
 		message: NODE_ENV === "development" ? err.message : undefined,
@@ -768,24 +740,18 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 
 async function start() {
 	try {
-		console.log(`
-╔════════════════════════════════════════╗
-║   Society Agent Web Server             ║
-║   Environment: ${NODE_ENV.padEnd(24)} ║
-║   Port: ${String(PORT).padEnd(28)} ║
-╚════════════════════════════════════════╝
-		`)
+		log.info(`Society Agent Web Server | Environment: ${NODE_ENV} | Port: ${PORT}`)
 
 		// Don't initialize Society Manager at startup - wait for first request with API key
 
 		server.listen(PORT, () => {
-			console.log(`✅ Server running on http://localhost:${PORT}`)
-			console.log(`📊 API: http://localhost:${PORT}/api`)
-			console.log(`💬 WebSocket: ws://localhost:${PORT}`)
-			console.log(`\n💡 Configure your API key in the web UI (click Settings button)`)
+			log.info(`Server running on http://localhost:${PORT}`)
+			log.info(`API: http://localhost:${PORT}/api`)
+			log.info(`WebSocket: ws://localhost:${PORT}`)
+			log.info(`Configure your API key in the web UI (click Settings button)`)
 		})
 	} catch (error) {
-		console.error("❌ Failed to start server:", error)
+		log.error("Failed to start server:", error)
 		process.exit(1)
 	}
 }
@@ -794,9 +760,9 @@ start()
 
 // Graceful shutdown
 process.on("SIGTERM", () => {
-	console.log("🛑 SIGTERM received, shutting down gracefully")
+	log.info("SIGTERM received, shutting down gracefully")
 	server.close(() => {
-		console.log("✅ Server closed")
+		log.info("Server closed")
 		process.exit(0)
 	})
 })

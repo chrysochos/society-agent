@@ -140,7 +140,7 @@ export function createAgentLogger(metadata: AgentMetadata): SocietyAgentLogger {
  * Format agent action for display
  */
 export function formatAgentAction(action: AgentAction): string {
-	const timestamp = action.timestamp.toISOString()
+	const timestamp = action.timestamp // kilocode_change - already ISO string
 	const status = action.result?.success ? "✓" : "✗"
 	const approval = action.requiredApproval ? ` [Approved by: ${action.approvedBy}]` : ""
 

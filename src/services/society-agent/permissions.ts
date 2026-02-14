@@ -68,7 +68,8 @@ export class PermissionChecker {
 	private capabilityMap: ToolCapabilityMap
 
 	constructor(customMap?: ToolCapabilityMap) {
-		this.capabilityMap = customMap || defaultToolCapabilityMap
+		// Clone to prevent mutation of the default map
+		this.capabilityMap = { ...(customMap || defaultToolCapabilityMap) } // kilocode_change
 	}
 
 	/**
