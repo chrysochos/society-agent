@@ -492,6 +492,27 @@ export class AgentIdentityManager {
 		return this.identity
 	}
 
+	// kilocode_change start - Public key fingerprint for monitor display
+	/**
+	 * Get a short hex fingerprint of this agent's public key.
+	 * Returns first 16 hex chars of the SHA-256 hash of the public key DER encoding.
+	 */
+	getFingerprint(): string | undefined {
+		if (!this.privateKey) {
+			return undefined
+		}
+		try {
+			// Derive the public key from the private key
+			const pubKey = crypto.createPublicKey(this.privateKey)
+			const der = pubKey.export({ type: "spki", format: "der" })
+			const hash = crypto.createHash("sha256").update(der).digest("hex")
+			return hash.slice(0, 16)
+		} catch {
+			return undefined
+		}
+	}
+	// kilocode_change end
+
 	/**
 	 * Check if a given agent ID is authorized
 	 */

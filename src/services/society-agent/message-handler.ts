@@ -61,6 +61,18 @@ export class UnifiedMessageHandler {
 	// Max processed IDs to track (prevent memory leak)
 	private static readonly MAX_PROCESSED_IDS = 10_000
 
+	// kilocode_change start - Recent message tracking for monitor
+	private static readonly MAX_RECENT_MESSAGES = 50
+	private recentMessages: Array<{
+		id: string
+		from: string
+		to: string
+		type: string
+		content: string
+		timestamp: number
+	}> = []
+	// kilocode_change end
+
 	constructor(options: MessageHandlerOptions) {
 		this.options = options
 	}
@@ -112,6 +124,20 @@ export class UnifiedMessageHandler {
 		// 4. Mark as processed
 		this.processedIds.add(message.id)
 		this.cleanupProcessedIds()
+
+		// kilocode_change start - Track recent messages for monitor
+		this.recentMessages.push({
+			id: message.id,
+			from: message.from,
+			to: message.to,
+			type: message.type,
+			content: typeof message.content === "string" ? message.content.slice(0, 200) : JSON.stringify(message.content).slice(0, 200),
+			timestamp: Date.now(),
+		})
+		if (this.recentMessages.length > UnifiedMessageHandler.MAX_RECENT_MESSAGES) {
+			this.recentMessages = this.recentMessages.slice(-UnifiedMessageHandler.MAX_RECENT_MESSAGES)
+		}
+		// kilocode_change end
 
 		// 5. Route by priority
 		const priority = getMessagePriority(message.type)
@@ -481,4 +507,28 @@ export class UnifiedMessageHandler {
 			}
 		}
 	}
+
+	// kilocode_change start - Monitor data accessors
+
+	/**
+	 * Get the number of queued tasks waiting to be processed
+	 */
+	getQueueDepth(): number {
+		return this.taskQueue.length
+	}
+
+	/**
+	 * Get recent messages for the monitor display
+	 */
+	getRecentMessages(): Array<{
+		id: string
+		from: string
+		to: string
+		type: string
+		content: string
+		timestamp: number
+	}> {
+		return [...this.recentMessages]
+	}
+	// kilocode_change end
 }

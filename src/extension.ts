@@ -164,8 +164,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// kilocode_change start - Initialize Society Agent with ClineProvider reference
 	console.log("🚀 EXTENSION: About to register Society Agent provider...")
+	let societyAgentProvider: any // kilocode_change - reference for monitor data wiring
 	try {
-		registerSocietyAgentProvider(context, provider)
+		societyAgentProvider = registerSocietyAgentProvider(context, provider)
 		console.log("✅ EXTENSION: Society Agent provider registered successfully")
 	} catch (error) {
 		console.error("❌ EXTENSION: Failed to register Society Agent:", error)
@@ -305,6 +306,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				agentRegistry = new AgentRegistry(sharedDir, serverUrl)
 				await agentRegistry.initialize()
 				await agentRegistry.catchUp()
+				agentRegistry.startCacheRefresh() // kilocode_change - start background cache for monitor
 
 				// kilocode_change start - Wire HTTP server to unified handler (instant delivery)
 				agentServer.on("message", async (message: any) => {
@@ -337,6 +339,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 				context.subscriptions.push({
 					dispose: async () => {
+						agentRegistry?.stopCacheRefresh() // kilocode_change
 						await agentRegistry?.dispose()
 						await agentServer.stop()
 						PortManager.releasePort(port)
@@ -375,6 +378,51 @@ export async function activate(context: vscode.ExtensionContext) {
 
 				// Store sender in workspace state so other components can use it
 				await context.workspaceState.update("societyAgent.messageSender", "initialized")
+				// kilocode_change end
+
+				// kilocode_change start - Wire monitor data source to Society Agent webview
+				if (societyAgentProvider && typeof societyAgentProvider.setMonitorDataSource === "function") {
+					const monitorAgentId = agentId
+					const monitorRole = role
+					societyAgentProvider.setMonitorDataSource({
+						getIdentity: () => {
+							const id = identityManager.getAgentId()
+							if (!id) return null
+							return {
+								id,
+								name: `${monitorRole} (${id.slice(-8)})`,
+								role: monitorRole || "worker",
+								capabilities: capabilities || [],
+								fingerprint: identityManager.getFingerprint() ?? undefined, // kilocode_change
+								teamId: undefined,
+							}
+						},
+						getRegisteredAgents: () => {
+							try {
+								const agents = agentRegistry?.getRegisteredAgents() ?? [] // kilocode_change
+								return agents.map((a: any) => ({
+									id: a.agentId || a.id,
+									name: `${a.role} (${(a.agentId || a.id || "").slice(-8)})`,
+									role: a.role,
+									status: a.status === "online" ? "busy" : a.status === "idle" ? "idle" : "offline",
+									currentTask: null,
+									lastSeen: a.lastHeartbeat ? new Date(a.lastHeartbeat).getTime() : Date.now(),
+									domain: a.role,
+								}))
+							} catch {
+								return []
+							}
+						},
+						getQueueDepth: () => {
+							return messageHandler.getQueueDepth() // kilocode_change
+						},
+						getRecentMessages: () => {
+							return messageHandler.getRecentMessages() // kilocode_change
+						},
+						getTeamStatus: () => null,
+					})
+					outputChannel.appendLine(`[Society Agent] Monitor data source wired to webview provider`)
+				}
 				// kilocode_change end
 
 				outputChannel.appendLine(`[Society Agent] Unified message system started for ${role} (inbox poller + HTTP handler)`)

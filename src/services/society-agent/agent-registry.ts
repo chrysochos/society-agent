@@ -64,6 +64,10 @@ export class AgentRegistry {
 	private lastMessagePosition: number = 0
 	private inboxManager?: InboxManager // kilocode_change
 	private messageSecurity?: MessageSecurity // kilocode_change
+	// kilocode_change start - Cached agents for synchronous monitor access
+	private cachedAgents: AgentRegistration[] = []
+	private cacheRefreshInterval: NodeJS.Timeout | undefined
+	// kilocode_change end
 
 	constructor(sharedDir: string, serverUrl?: string) {
 		// kilocode_change - added serverUrl param
@@ -537,6 +541,46 @@ export class AgentRegistry {
 	getCapabilities(): string[] {
 		return this.capabilities
 	}
+
+	// kilocode_change start - Synchronous accessor for monitor (uses cached data)
+	/**
+	 * Get registered agents synchronously from cache.
+	 * Cache is refreshed on a background interval.
+	 */
+	getRegisteredAgents(): AgentRegistration[] {
+		return [...this.cachedAgents]
+	}
+
+	/**
+	 * Start background cache refresh for the agent registry
+	 */
+	startCacheRefresh(intervalMs: number = 10_000): void {
+		// Do an initial refresh
+		this.refreshCache()
+		// Then refresh on interval
+		this.cacheRefreshInterval = setInterval(() => this.refreshCache(), intervalMs)
+	}
+
+	/**
+	 * Stop background cache refresh
+	 */
+	stopCacheRefresh(): void {
+		if (this.cacheRefreshInterval) {
+			clearInterval(this.cacheRefreshInterval)
+			this.cacheRefreshInterval = undefined
+		}
+	}
+
+	private refreshCache(): void {
+		this.getAgents()
+			.then((agents) => {
+				this.cachedAgents = agents
+			})
+			.catch(() => {
+				// Keep stale cache on error
+			})
+	}
+	// kilocode_change end
 
 	// kilocode_change start - helper methods for network communication
 	/**

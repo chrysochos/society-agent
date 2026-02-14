@@ -24,6 +24,10 @@ export interface ActivePurpose {
 export interface SocietyManagerConfig {
 	apiHandler: ApiHandler
 	workspacePath?: string
+	/** Shared directory for .society-agent/ (identity, inbox, keys) */
+	sharedDir?: string // kilocode_change
+	/** Enable multi-window mode: launch real VS Code windows for workers */
+	multiWindow?: boolean // kilocode_change
 	onPurposeStarted?: (purpose: Purpose) => void
 	onPurposeCompleted?: (purpose: Purpose, summary: string) => void
 	onTeamFormed?: (purposeId: string, teamSize: number) => void
@@ -147,6 +151,10 @@ export class SocietyManager {
 			purpose,
 			apiHandler: this.config.apiHandler,
 			workspacePath: this.config.workspacePath,
+			// kilocode_change start - Supervisor → Launcher bridge
+			sharedDir: this.config.sharedDir,
+			multiWindow: this.config.multiWindow,
+			// kilocode_change end
 			onMessage: (agentId, content) => {
 				this.config.onMessage?.(purpose.id, agentId, content)
 			},

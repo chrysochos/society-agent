@@ -6,11 +6,12 @@ import { ClineProvider } from "./ClineProvider" // kilocode_change
 
 /**
  * Register Society Agent provider with VS Code extension
+ * Returns the provider instance so extension.ts can wire the monitor data source
  */
 export function registerSocietyAgentProvider(
 	context: vscode.ExtensionContext,
 	clineProvider: ClineProvider,
-): vscode.Disposable {
+): SocietyAgentProvider { // kilocode_change - return provider instead of disposable
 	// kilocode_change - added clineProvider param
 	// Create output channel for Society Agent logs
 	const outputChannel = vscode.window.createOutputChannel("Society Agent")
@@ -43,7 +44,7 @@ export function registerSocietyAgentProvider(
 		outputChannel.appendLine("✅ Society Agent commands registered")
 		outputChannel.appendLine("Open 'Society Agent' view to start using the system")
 
-		return disposable
+		return provider // kilocode_change - return provider for data source wiring
 	} catch (error) {
 		const errorMsg = error instanceof Error ? error.message : String(error)
 		outputChannel.appendLine(`❌ Failed to register Society Agent: ${errorMsg}`)

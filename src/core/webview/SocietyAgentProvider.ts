@@ -11,12 +11,51 @@ import { getNonce } from "./getNonce"
 import { SocietyManager, SocietyManagerConfig } from "../../services/society-agent/society-manager"
 import { PurposeContext } from "../../services/society-agent/purpose-analyzer"
 
+// kilocode_change start - Monitor data source interface
+export interface MonitorDataSource {
+	getIdentity(): {
+		id: string
+		name: string
+		role: string
+		capabilities: string[]
+		domain?: string
+		fingerprint?: string
+		teamId?: string
+	} | null
+	getRegisteredAgents(): Array<{
+		id: string
+		name: string
+		role: string
+		status: string
+		currentTask: string | null
+		lastSeen: number
+		domain?: string
+	}>
+	getQueueDepth(): number
+	getRecentMessages(): Array<{
+		id: string
+		from: string
+		to?: string
+		type: string
+		content: string
+		timestamp: number
+	}>
+	getTeamStatus(): {
+		teamId: string
+		supervisorId: string
+		workerCount: number
+		activeWorkers: number
+	} | null
+}
+// kilocode_change end
+
 export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = "kilocode.societyAgentView"
 
 	private _view?: vscode.WebviewView
 	private societyManager?: SocietyManager
 	private currentPurposeId?: string // kilocode_change
+	private monitorDataSource?: MonitorDataSource // kilocode_change
 
 	constructor(
 		private readonly _extensionUri: vscode.Uri,
@@ -52,9 +91,18 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 		console.log("📁 Workspace path:", workspacePath || "No workspace folder open")
 
 		// Initialize Society Manager with callbacks
+		// kilocode_change start - Derive sharedDir and enable multiWindow from config
+		const path = require("path")
+		const sharedDir = workspacePath ? path.join(workspacePath, ".society-agent") : undefined
+		const config = vscode.workspace.getConfiguration("kilo-code")
+		const multiWindow = config.get<boolean>("societyAgent.multiWindow", false)
+		// kilocode_change end
+
 		this.societyManager = new SocietyManager({
 			apiHandler,
 			workspacePath,
+			sharedDir, // kilocode_change
+			multiWindow, // kilocode_change
 				onPurposeStarted: (purpose) => {
 					console.log("🎯 Purpose started:", purpose.id)
 					this._sendToWebview({
@@ -310,6 +358,17 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 					break
 				}
 
+				// kilocode_change start - Agent Monitor data refresh
+				case "agent-monitor-refresh": {
+					const monitorData = this.gatherMonitorData()
+					this._sendToWebview({
+						type: "agent-monitor-data",
+						data: monitorData,
+					})
+					break
+				}
+				// kilocode_change end
+
 				default:
 					console.warn("Unknown message type:", data.type)
 			}
@@ -327,6 +386,60 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 			this._view.webview.postMessage(message)
 		}
 	}
+
+	// kilocode_change start - Gather monitor data from all sources
+	private gatherMonitorData() {
+		if (this.monitorDataSource) {
+			return {
+				identity: this.monitorDataSource.getIdentity(),
+				agents: this.monitorDataSource.getRegisteredAgents(),
+				queueDepth: this.monitorDataSource.getQueueDepth(),
+				recentMessages: this.monitorDataSource.getRecentMessages(),
+				teamStatus: this.monitorDataSource.getTeamStatus(),
+			}
+		}
+
+		// Fallback: gather from SocietyManager if available
+		const state = this.societyManager?.getState()
+		if (state && state.activePurposes.size > 0) {
+			const firstPurpose = Array.from(state.activePurposes.values())[0]
+			const members = firstPurpose?.team?.getAllMembers?.() ?? []
+			return {
+				identity: null,
+				agents: members.map((m: any) => ({
+					id: m.identity.id,
+					name: m.identity.role === "supervisor"
+						? `Supervisor (${m.identity.id.slice(-8)})`
+						: `Worker (${m.identity.id.slice(-8)})`,
+					role: m.identity.role,
+					status: m.agent?.getState?.().status === "completed" ? "idle" : "busy",
+					currentTask: m.agent?.getState?.().currentTask ?? null,
+					lastSeen: Date.now(),
+					domain: m.identity.workerType,
+				})),
+				queueDepth: 0,
+				recentMessages: [],
+				teamStatus: null,
+			}
+		}
+
+		// No data available
+		return {
+			identity: null,
+			agents: [],
+			queueDepth: 0,
+			recentMessages: [],
+			teamStatus: null,
+		}
+	}
+	// kilocode_change end
+
+	// kilocode_change start - Set monitor data source (called from extension.ts after backend init)
+	public setMonitorDataSource(source: MonitorDataSource): void {
+		this.monitorDataSource = source
+		console.log("📊 Monitor data source connected to SocietyAgentProvider")
+	}
+	// kilocode_change end
 
 	// kilocode_change start - Cleanup
 	public dispose(): void {
