@@ -1,0 +1,400 @@
+// kilocode_change - new file
+/**
+ * Unified Message Handler - Single entry point for all message processing
+ *
+ * Both HTTP and inbox polling feed into this handler.
+ * Handles deduplication, signature verification, priority routing, and delivery.
+ *
+ * Message flow:
+ *   HTTP POST → handleMessage()
+ *   Inbox poll → handleMessage()
+ *                    ↓
+ *   dedup → verify signature → check replay → route by priority
+ *                                                ↓
+ *   INTERRUPT → inject into active conversation
+ *   QUEUE     → add to task queue, process when idle
+ *   LOG       → log and notify, don't disturb agent
+ */
+
+import * as vscode from "vscode"
+import * as path from "path"
+import * as fs from "fs/promises"
+import * as crypto from "crypto"
+import {
+	AgentIdentityManager,
+	SignedMessage,
+	AttachmentRef,
+	getMessagePriority,
+	isReplayAttack,
+} from "./agent-identity"
+
+export interface MessageHandlerOptions {
+	/** Shared .society-agent directory */
+	sharedDir: string
+
+	/** Identity manager for signature verification */
+	identityManager: AgentIdentityManager
+
+	/** This agent's ID */
+	agentId: string
+}
+
+/**
+ * UnifiedMessageHandler - Single handler for all incoming messages
+ */
+export class UnifiedMessageHandler {
+	private options: MessageHandlerOptions
+	private processedIds: Set<string> = new Set()
+	private taskQueue: SignedMessage[] = []
+	private currentTask: SignedMessage | null = null
+	private onTaskComplete: (() => void) | null = null
+
+	// Max processed IDs to track (prevent memory leak)
+	private static readonly MAX_PROCESSED_IDS = 10_000
+
+	constructor(options: MessageHandlerOptions) {
+		this.options = options
+	}
+
+	/**
+	 * Handle an incoming message — THE single entry point
+	 * Called by both HTTP server and inbox poller
+	 */
+	async handleMessage(message: SignedMessage): Promise<{ accepted: boolean; reason?: string }> {
+		const { agentId, identityManager } = this.options
+
+		// Skip messages not for us
+		if (message.to !== agentId && message.to !== "all") {
+			return { accepted: false, reason: "Not addressed to this agent" }
+		}
+
+		// 1. Deduplication
+		if (this.processedIds.has(message.id)) {
+			console.log(`[MessageHandler] Dedup: already processed ${message.id}`)
+			return { accepted: false, reason: "Already processed" }
+		}
+
+		// 2. Validate (signature + replay + authorization)
+		const validation = identityManager.validateMessage(message)
+		if (!validation.valid) {
+			console.warn(`[MessageHandler] REJECTED message ${message.id}: ${validation.reason}`)
+			await this.quarantineMessage(message, validation.reason!)
+			return { accepted: false, reason: validation.reason }
+		}
+
+		// 3. Verify attachments if present
+		if (message.attachments && message.attachments.length > 0) {
+			const attachmentValid = await this.verifyAttachments(message)
+			if (!attachmentValid) {
+				console.warn(`[MessageHandler] REJECTED message ${message.id}: attachment hash mismatch`)
+				await this.quarantineMessage(message, "Attachment hash mismatch")
+				return { accepted: false, reason: "Attachment integrity check failed" }
+			}
+		}
+
+		// 4. Mark as processed
+		this.processedIds.add(message.id)
+		this.cleanupProcessedIds()
+
+		// 5. Route by priority
+		const priority = getMessagePriority(message.type)
+		console.log(`[MessageHandler] Processing ${message.type} from ${message.from} (priority: ${priority})`)
+
+		switch (priority) {
+			case "interrupt":
+				await this.handleInterrupt(message)
+				break
+			case "queue":
+				await this.handleQueue(message)
+				break
+			case "log":
+				await this.handleLog(message)
+				break
+		}
+
+		// 6. Write delivery confirmation
+		await this.confirmDelivery(message)
+
+		return { accepted: true }
+	}
+
+	// ─── Priority Handlers ───────────────────────────────────────────
+
+	/**
+	 * INTERRUPT: Inject into active conversation or create mini-task
+	 */
+	private async handleInterrupt(message: SignedMessage): Promise<void> {
+		// Shutdown is special
+		if (message.type === "shutdown") {
+			console.log(`[MessageHandler] Shutdown requested by ${message.from}`)
+			vscode.window.showWarningMessage(`🛑 Shutdown requested by ${message.from}: ${message.content}`)
+			// TODO: graceful shutdown sequence
+			return
+		}
+
+		const { ClineProvider } = await import("../../core/webview/ClineProvider")
+		const provider = ClineProvider.getVisibleInstance()
+		const currentTask = provider?.getCurrentTask()
+
+		if (currentTask) {
+			// Inject into active conversation
+			const formatted = this.formatForInjection(message)
+
+			try {
+				// Try direct injection first
+				await currentTask.handleWebviewAskResponse("messageResponse", formatted, undefined)
+				console.log(`[MessageHandler] Injected ${message.type} from ${message.from} into active task`)
+			} catch {
+				// Fallback: add to conversation history
+				try {
+					await currentTask.addToApiConversationHistory({
+						role: "user",
+						content: formatted,
+					} as any)
+					console.log(`[MessageHandler] Added ${message.type} from ${message.from} to conversation history`)
+				} catch (error) {
+					console.error(`[MessageHandler] Failed to inject message:`, error)
+					vscode.window.showInformationMessage(`📨 ${message.from}: ${message.content.substring(0, 100)}`)
+				}
+			}
+		} else {
+			// Agent is idle — create a mini-task to respond
+			if (provider) {
+				const formatted = this.formatForNewTask(message)
+				await provider.createTask(formatted)
+				console.log(`[MessageHandler] Created task for ${message.type} from ${message.from}`)
+			} else {
+				vscode.window.showInformationMessage(`📨 ${message.from}: ${message.content.substring(0, 100)}`)
+			}
+		}
+	}
+
+	/**
+	 * QUEUE: Add to task queue, process when current task finishes
+	 */
+	private async handleQueue(message: SignedMessage): Promise<void> {
+		const { ClineProvider } = await import("../../core/webview/ClineProvider")
+		const provider = ClineProvider.getVisibleInstance()
+		const currentTask = provider?.getCurrentTask()
+
+		if (!currentTask) {
+			// Agent is idle — start immediately
+			if (provider) {
+				this.currentTask = message
+				const formatted = this.formatForNewTask(message)
+				await provider.createTask(formatted)
+				console.log(`[MessageHandler] Started queued task from ${message.from}`)
+			}
+		} else {
+			// Agent is busy — queue it
+			this.taskQueue.push(message)
+			console.log(
+				`[MessageHandler] Queued ${message.type} from ${message.from} (queue size: ${this.taskQueue.length})`,
+			)
+			vscode.window.showInformationMessage(
+				`📋 Task from ${message.from} queued (position ${this.taskQueue.length})`,
+			)
+		}
+	}
+
+	/**
+	 * LOG: Just log and optionally notify, don't disturb the agent
+	 */
+	private async handleLog(message: SignedMessage): Promise<void> {
+		console.log(`[MessageHandler] ${message.type} from ${message.from}: ${message.content.substring(0, 100)}`)
+
+		// Show subtle notification for status updates
+		if (message.type === "task_complete") {
+			vscode.window.showInformationMessage(`✅ ${message.from} completed: ${message.content.substring(0, 80)}`)
+		}
+	}
+
+	// ─── Task Queue Management ───────────────────────────────────────
+
+	/**
+	 * Called when the current task completes — pick up next from queue
+	 */
+	async onCurrentTaskCompleted(): Promise<void> {
+		this.currentTask = null
+
+		if (this.taskQueue.length === 0) {
+			console.log(`[MessageHandler] Task queue empty — agent idle`)
+			return
+		}
+
+		const next = this.taskQueue.shift()!
+		this.currentTask = next
+
+		console.log(`[MessageHandler] Starting next queued task from ${next.from} (${this.taskQueue.length} remaining)`)
+
+		const { ClineProvider } = await import("../../core/webview/ClineProvider")
+		const provider = ClineProvider.getVisibleInstance()
+		if (provider) {
+			const formatted = this.formatForNewTask(next)
+			await provider.createTask(formatted)
+		}
+	}
+
+	/**
+	 * Get current queue status
+	 */
+	getQueueStatus(): { current: SignedMessage | null; pending: number; queue: SignedMessage[] } {
+		return {
+			current: this.currentTask,
+			pending: this.taskQueue.length,
+			queue: [...this.taskQueue],
+		}
+	}
+
+	// ─── Message Formatting ──────────────────────────────────────────
+
+	private formatForInjection(message: SignedMessage): string {
+		const icon = this.getTypeIcon(message.type)
+		const attachmentNote = message.attachments?.length
+			? `\n\n📎 ${message.attachments.length} attachment(s): ${message.attachments.map((a) => a.name).join(", ")}`
+			: ""
+
+		return `${icon} **Message from ${message.from}:**\n\n${message.content}${attachmentNote}`
+	}
+
+	private formatForNewTask(message: SignedMessage): string {
+		const icon = this.getTypeIcon(message.type)
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "unknown"
+
+		const attachmentNote = message.attachments?.length
+			? `\n\n📎 **Attachments** (${message.attachments.length}):\n${message.attachments.map((a) => `  - ${a.name} (${a.type}, ${this.formatSize(a.size)})`).join("\n")}`
+			: ""
+
+		return [
+			`${icon} **From: ${message.from}**`,
+			"",
+			message.content,
+			attachmentNote,
+			"",
+			`**📁 Your Workspace**: \`${workspaceRoot}\``,
+			`*Work only in this directory. Do NOT navigate to parent directories.*`,
+			"",
+			`**📚 Your Knowledge Base**: \`${workspaceRoot}/.agent-knowledge/\``,
+			"",
+			"---",
+			"",
+			`*💡 Your response will go to **${message.from}** by default.*`,
+			`*Use **@agent-id** to send to another agent, or **@all** to broadcast.*`,
+		].join("\n")
+	}
+
+	private getTypeIcon(type: string): string {
+		switch (type) {
+			case "task_assign":
+				return "🎯"
+			case "question":
+				return "❓"
+			case "task_complete":
+				return "✅"
+			case "status_update":
+				return "📊"
+			case "review_request":
+				return "🔍"
+			case "shutdown":
+				return "🛑"
+			default:
+				return "📨"
+		}
+	}
+
+	private formatSize(bytes: number): string {
+		if (bytes < 1024) return `${bytes}B`
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
+		return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+	}
+
+	// ─── Attachments ─────────────────────────────────────────────────
+
+	/**
+	 * Verify attachment integrity (hash check)
+	 */
+	private async verifyAttachments(message: SignedMessage): Promise<boolean> {
+		if (!message.attachments) return true
+
+		for (const attachment of message.attachments) {
+			const fullPath = path.join(this.options.sharedDir, attachment.path)
+
+			try {
+				const fileData = await fs.readFile(fullPath)
+				const hash = "sha256:" + crypto.createHash("sha256").update(fileData).digest("hex")
+
+				if (hash !== attachment.hash) {
+					console.warn(
+						`[MessageHandler] Attachment ${attachment.name} hash mismatch: expected ${attachment.hash}, got ${hash}`,
+					)
+					return false
+				}
+			} catch (error) {
+				console.warn(`[MessageHandler] Attachment ${attachment.name} not found at ${fullPath}`)
+				return false
+			}
+		}
+
+		return true
+	}
+
+	// ─── Quarantine & Delivery ───────────────────────────────────────
+
+	/**
+	 * Move rejected message to quarantine
+	 */
+	private async quarantineMessage(message: SignedMessage, reason: string): Promise<void> {
+		const quarantineDir = path.join(this.options.sharedDir, "quarantine")
+		await fs.mkdir(quarantineDir, { recursive: true })
+
+		const entry = {
+			message,
+			reason,
+			quarantinedAt: new Date().toISOString(),
+			quarantinedBy: this.options.agentId,
+		}
+
+		const filePath = path.join(quarantineDir, `${message.id}.json`)
+		await fs.writeFile(filePath, JSON.stringify(entry, null, 2), "utf-8")
+	}
+
+	/**
+	 * Write delivery confirmation
+	 */
+	private async confirmDelivery(message: SignedMessage): Promise<void> {
+		// Mark as delivered in the inbox file
+		const inboxPath = path.join(this.options.sharedDir, "inbox", this.options.agentId, `${message.id}.json`)
+
+		try {
+			// Update the file with delivery info
+			const delivered = {
+				...message,
+				delivered: true,
+				deliveredAt: new Date().toISOString(),
+			}
+			await fs.writeFile(inboxPath, JSON.stringify(delivered, null, 2), "utf-8")
+
+			// Move to processed directory
+			const processedDir = path.join(this.options.sharedDir, "inbox", this.options.agentId, "processed")
+			await fs.mkdir(processedDir, { recursive: true })
+			const processedPath = path.join(processedDir, `${message.id}.json`)
+			await fs.rename(inboxPath, processedPath)
+		} catch {
+			// File may not exist if message came via HTTP — that's fine
+		}
+	}
+
+	/**
+	 * Prevent memory leak in processedIds
+	 */
+	private cleanupProcessedIds(): void {
+		if (this.processedIds.size > UnifiedMessageHandler.MAX_PROCESSED_IDS) {
+			// Keep only the most recent half
+			const ids = Array.from(this.processedIds)
+			this.processedIds.clear()
+			for (const id of ids.slice(ids.length / 2)) {
+				this.processedIds.add(id)
+			}
+		}
+	}
+}
