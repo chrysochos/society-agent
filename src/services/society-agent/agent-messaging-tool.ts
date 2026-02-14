@@ -2,6 +2,7 @@
 import * as vscode from "vscode"
 import { AgentRegistry } from "./agent-registry"
 import { AgentMessage } from "./types" // kilocode_change
+import { getLog } from "./logger" // kilocode_change
 
 /**
  * Custom tool that allows agents to send messages to other agents directly from chat.
@@ -81,7 +82,7 @@ Message sent successfully.
 
 ${recipient === "user" ? "The user will see this message." : `${recipientLabel} will receive this message and can respond.`}`
 		} catch (error) {
-			console.error("[AgentMessagingTool] Failed to send message:", error)
+			getLog().error("[AgentMessagingTool] Failed to send message:", error)
 			return `❌ Failed to send message: ${error instanceof Error ? error.message : String(error)}`
 		}
 	}

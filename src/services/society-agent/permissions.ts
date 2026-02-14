@@ -4,6 +4,7 @@
  */
 
 import type { AgentIdentity, AgentCapability } from "./types"
+import { getLog } from "./logger" // kilocode_change
 
 /**
  * Maps tool names to required capabilities
@@ -78,7 +79,7 @@ export class PermissionChecker {
 
 		// If tool not in map, deny by default (fail-safe)
 		if (!requiredCapabilities) {
-			console.warn(`[PermissionChecker] Unknown tool: ${toolName}, denying access`)
+			getLog().warn(`[PermissionChecker] Unknown tool: ${toolName}, denying access`)
 			return false
 		}
 

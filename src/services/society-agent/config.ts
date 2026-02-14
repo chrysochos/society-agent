@@ -6,6 +6,7 @@
  */
 
 import type { SocietyAgentConfig, AgentRole, AgentCapability } from "./types"
+import { getLog } from "./logger" // kilocode_change
 
 /**
  * Default Society Agent configuration
@@ -88,7 +89,7 @@ export function validateCapabilities(capabilities: string[]): AgentCapability[] 
 		if (validCapabilities.includes(cap as AgentCapability)) {
 			validated.push(cap as AgentCapability)
 		} else {
-			console.warn(`[Society Agent] Invalid capability: ${cap}`)
+			getLog().warn(`[Society Agent] Invalid capability: ${cap}`)
 		}
 	}
 
@@ -119,7 +120,7 @@ export function validateRole(role: string): AgentRole {
 		return role as AgentRole
 	}
 
-	console.warn(`[Society Agent (SA)] Invalid role: ${role}, defaulting to 'worker'`)
+	getLog().warn(`[Society Agent (SA)] Invalid role: ${role}, defaulting to 'worker'`)
 	return "worker"
 }
 

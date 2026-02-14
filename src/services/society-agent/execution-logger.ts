@@ -187,16 +187,16 @@ export class ExecutionLogger {
 
 		switch (entry.level) {
 			case "error":
-				console.error(message, entry.data || "")
+				getLog().error(message, entry.data || "")
 				break
 			case "warn":
-				console.warn(message, entry.data || "")
+				getLog().warn(message, entry.data || "")
 				break
 			case "debug":
-				console.debug(message, entry.data || "")
+				getLog().debug(message, entry.data || "")
 				break
 			default:
-				console.log(message, entry.data || "")
+				getLog().info(message, entry.data || "")
 		}
 		// kilocode_change end
 	}

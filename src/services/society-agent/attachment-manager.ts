@@ -18,6 +18,7 @@ import * as crypto from "crypto"
 import * as fs from "fs/promises"
 import * as path from "path"
 import { AttachmentRef } from "./agent-identity"
+import { getLog } from "./logger" // kilocode_change
 
 export interface AttachmentInput {
 	/** Original filename */
@@ -106,7 +107,7 @@ export class AttachmentManager {
 			})
 		}
 
-		console.log(`[AttachmentManager] Stored ${refs.length} attachments for message ${messageId}`)
+		getLog().info(`[AttachmentManager] Stored ${refs.length} attachments for message ${messageId}`)
 		return refs
 	}
 
@@ -138,7 +139,7 @@ export class AttachmentManager {
 		const messageDir = path.join(this.attachmentsRoot, messageId)
 		try {
 			await fs.rm(messageDir, { recursive: true, force: true })
-			console.log(`[AttachmentManager] Cleaned up attachments for ${messageId}`)
+			getLog().info(`[AttachmentManager] Cleaned up attachments for ${messageId}`)
 		} catch {
 			// Ignore
 		}
@@ -167,7 +168,7 @@ export class AttachmentManager {
 		}
 
 		if (cleaned > 0) {
-			console.log(`[AttachmentManager] Cleaned up ${cleaned} old attachment directories`)
+			getLog().info(`[AttachmentManager] Cleaned up ${cleaned} old attachment directories`)
 		}
 		return cleaned
 	}

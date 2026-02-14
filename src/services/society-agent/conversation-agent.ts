@@ -15,6 +15,7 @@ import { ApiMessage } from "../../core/task-persistence/apiMessages"
 import { summarizeConversation } from "../../core/condense"
 import * as fs from "fs/promises"
 import * as path from "path"
+import { getLog } from "./logger" // kilocode_change
 
 // kilocode_change start
 export interface AgentIdentity {
@@ -201,14 +202,14 @@ export class ConversationAgent {
 		this.state.currentTask = task
 		this.state.status = "working"
 
-		console.log(`✅ ${this.state.identity.id} received task: ${task}`)
+		getLog().info(`${this.state.identity.id} received task: ${task}`)
 		if (outputDir) {
-			console.log(`📁 ${this.state.identity.id} will use directory: ${outputDir}`)
+			getLog().info(`${this.state.identity.id} will use directory: ${outputDir}`)
 		}
 
 		// Start working on the task
 		this.executeTask(task, outputDir).catch((error) => {
-			console.error(`❌ ${this.state.identity.id} task execution failed:`, error)
+			getLog().error(`${this.state.identity.id} task execution failed:`, error)
 			this.state.status = "error"
 		})
 		// kilocode_change end
@@ -219,7 +220,7 @@ export class ConversationAgent {
 	 */
 	private async executeTask(task: string, supervisorOutputDir?: string): Promise<void> {
 		// kilocode_change start - LLM-driven intent and folder decisions
-		console.log(`🚀 ${this.state.identity.id} starting work on task...`)
+		getLog().info(`${this.state.identity.id} starting work on task...`)
 
 		// Step 1: Ask LLM to classify the task intent
 		const intentPrompt = `Task: "${task}"
@@ -236,8 +237,8 @@ Respond with ONLY the letter (A, B, or C):`
 			const intentResponse = await this.sendMessage(intentPrompt)
 			const intent = intentResponse.trim().toUpperCase().charAt(0)
 
-			console.log(
-				`🤔 ${this.state.identity.id} classified task as: ${intent === "A" ? "TEXT_ONLY" : intent === "B" ? "CREATE_FILES" : "EXECUTE_AND_SHOW"}`,
+			getLog().info(
+				`${this.state.identity.id} classified task as: ${intent === "A" ? "TEXT_ONLY" : intent === "B" ? "CREATE_FILES" : "EXECUTE_AND_SHOW"}`,
 			)
 
 			// Step 2: For file creation, ask AI where to put files
@@ -254,7 +255,7 @@ Respond with ONLY the letter (A, B, or C):`
 				if (explicitPathMatch) {
 					const userPath = explicitPathMatch[1]
 					outputDir = userPath.startsWith(BASE_OUTPUT_DIR) ? userPath : `${BASE_OUTPUT_DIR}/${userPath}`
-					console.log(`📁 User specified folder: ${outputDir}`)
+					getLog().info(`User specified folder: ${outputDir}`)
 				} else {
 					// No explicit path - run AI folder decision
 					// Get workspace context
@@ -361,10 +362,10 @@ Respond with JSON now:`
 							: folderDecision.action === "continue"
 								? "CONTINUE"
 								: "NEW"
-					console.log(`📁 AI decided: ${actionLabel} → ${outputDir}`)
-					console.log(`💭 Reasoning: ${folderDecision.reasoning}`)
+					getLog().info(`AI decided: ${actionLabel} → ${outputDir}`)
+					getLog().info(`Reasoning: ${folderDecision.reasoning}`)
 					if (folderDecision.matched) {
-						console.log(`♻️ Reusing existing folder: ${folderDecision.matched}`)
+						getLog().info(`Reusing existing folder: ${folderDecision.matched}`)
 					}
 
 					// Update session context
@@ -395,9 +396,9 @@ Respond with JSON now:`
 						}
 
 						await fs.writeFile(contextPath, JSON.stringify(context, null, 2))
-						console.log(`💾 Updated session context: project = ${folderDecision.projectName}`)
+						getLog().info(`Updated session context: project = ${folderDecision.projectName}`)
 					} catch (error) {
-						console.warn(`⚠️ Could not update session context:`, error)
+						getLog().warn(`Could not update session context:`, error)
 					}
 				} // kilocode_change - Close else block for AI folder decision
 			}
@@ -406,7 +407,7 @@ Respond with JSON now:`
 			if (intent === "A") {
 				// TEXT_ONLY: Just get the answer and log it
 				const answer = await this.sendMessage(task)
-				console.log(`✅ ${this.state.identity.id} response:`, answer)
+				getLog().info(`${this.state.identity.id} response:`, answer)
 				this.addMessage("assistant", answer)
 
 				// Save response to a results file
@@ -444,7 +445,7 @@ Respond with ONLY the JSON:`
 				await this.createFile(`${outputDir}/${codeData.filename}`, codeData.code)
 
 				// Note: Actual execution would happen here in full implementation
-				console.log(`✅ ${this.state.identity.id} created executable code at ${outputDir}`)
+				getLog().info(`${this.state.identity.id} created executable code at ${outputDir}`)
 				this.setStatus("completed")
 				return
 			}
@@ -471,8 +472,8 @@ IMPORTANT:
 Respond with the complete JSON now:`
 
 			const response = await this.sendMessage(workPrompt)
-			console.log(`💡 ${this.state.identity.id} received implementation plan`)
-			console.log(`📄 ${this.state.identity.id} LLM response:`, response.substring(0, 500))
+			getLog().info(`${this.state.identity.id} received implementation plan`)
+			getLog().info(`${this.state.identity.id} LLM response:`, response.substring(0, 500))
 
 			// Extract JSON from response
 			let jsonText = response.trim()
@@ -487,11 +488,11 @@ Respond with the complete JSON now:`
 			const files = parsed.files || []
 
 			if (files.length === 0) {
-				console.warn(`⚠️ ${this.state.identity.id} parsed 0 files from response!`)
-				console.warn(`Raw JSON: ${jsonText}`)
+				getLog().warn(`${this.state.identity.id} parsed 0 files from response!`)
+				getLog().warn(`Raw JSON: ${jsonText}`)
 			}
 
-			console.log(`📁 ${this.state.identity.id} creating files in: ${outputDir}`)
+			getLog().info(`${this.state.identity.id} creating files in: ${outputDir}`)
 
 			// Create the files in AI-decided directory
 			for (const file of files) {
@@ -499,10 +500,10 @@ Respond with the complete JSON now:`
 				await this.createFile(filePath, file.content)
 			}
 
-			console.log(`✅ ${this.state.identity.id} created ${files.length} files in ${outputDir}`)
+			getLog().info(`${this.state.identity.id} created ${files.length} files in ${outputDir}`)
 			this.setStatus("completed")
 		} catch (error) {
-			console.error(`❌ ${this.state.identity.id} failed to execute task:`, error)
+			getLog().error(`${this.state.identity.id} failed to execute task:`, error)
 			// Fallback: create a simple status file
 			const errorDir = `.society-agent/outputs/error-${Date.now()}`
 			await this.createFile(`${errorDir}/status.txt`, `Task: ${task}\nStatus: Error\nError: ${error}`)
@@ -519,8 +520,8 @@ Respond with the complete JSON now:`
 		const fullPath = path.join(this.workspacePath, relativePath)
 		const dir = path.dirname(fullPath)
 
-		console.log(`📂 ${this.state.identity.id} workspace path: ${this.workspacePath}`)
-		console.log(`📂 ${this.state.identity.id} full file path: ${fullPath}`)
+		getLog().info(`${this.state.identity.id} workspace path: ${this.workspacePath}`)
+		getLog().info(`${this.state.identity.id} full file path: ${fullPath}`)
 
 		// Create directory if needed
 		await fs.mkdir(dir, { recursive: true })
@@ -528,7 +529,7 @@ Respond with the complete JSON now:`
 		// Write file
 		await fs.writeFile(fullPath, content, "utf-8")
 
-		console.log(`📝 ${this.state.identity.id} created file: ${relativePath}`)
+		getLog().info(`${this.state.identity.id} created file: ${relativePath}`)
 		this.addMessage("assistant", `Created file: ${relativePath}`)
 		// kilocode_change end
 	}
@@ -625,7 +626,7 @@ Follow instructions provided by the supervisor for your specific role and capabi
 	 */
 	private async callLLM(): Promise<string> {
 		// kilocode_change start
-		console.log(`🤖 Calling LLM for ${this.state.identity.id}...`)
+		getLog().info(`Calling LLM for ${this.state.identity.id}...`)
 
 		// Convert conversation history to Anthropic format
 		const messages: Anthropic.MessageParam[] = this.state.conversationHistory.map((msg) => ({
@@ -647,10 +648,10 @@ Follow instructions provided by the supervisor for your specific role and capabi
 				}
 			}
 
-			console.log(`✅ LLM response received (${fullResponse.length} chars)`)
+			getLog().info(`LLM response received (${fullResponse.length} chars)`)
 			return fullResponse.trim()
 		} catch (error) {
-			console.error(`❌ LLM call failed for ${this.state.identity.id}:`, error)
+			getLog().error(`LLM call failed for ${this.state.identity.id}:`, error)
 			throw error
 		}
 		// kilocode_change end
@@ -661,7 +662,7 @@ Follow instructions provided by the supervisor for your specific role and capabi
 	 */
 	private async *callLLMStream(): AsyncGenerator<string, void, unknown> {
 		// kilocode_change start
-		console.log(`🤖 Streaming LLM call for ${this.state.identity.id}...`)
+		getLog().info(`Streaming LLM call for ${this.state.identity.id}...`)
 
 		// Convert conversation history to Anthropic format
 		const messages: Anthropic.MessageParam[] = this.state.conversationHistory.map((msg) => ({
@@ -685,9 +686,9 @@ Follow instructions provided by the supervisor for your specific role and capabi
 				}
 			}
 
-			console.log(`✅ LLM streaming completed for ${this.state.identity.id}`)
+			getLog().info(`LLM streaming completed for ${this.state.identity.id}`)
 		} catch (error) {
-			console.error(`❌ LLM streaming failed for ${this.state.identity.id}:`, error)
+			getLog().error(`LLM streaming failed for ${this.state.identity.id}:`, error)
 			throw error
 		}
 		// kilocode_change end
@@ -702,8 +703,8 @@ Follow instructions provided by the supervisor for your specific role and capabi
 			return // Not long enough yet
 		}
 
-		console.log(
-			`📝 ${this.state.identity.id}: Using Kilo's summarization (${this.state.conversationHistory.length} messages)...`,
+		getLog().info(
+			`${this.state.identity.id}: Using Kilo's summarization (${this.state.conversationHistory.length} messages)...`,
 		)
 
 		try {
@@ -724,7 +725,7 @@ Follow instructions provided by the supervisor for your specific role and capabi
 			)
 
 			if (result.error) {
-				console.error(`❌ ${this.state.identity.id}: Summarization error:`, result.error)
+				getLog().error(`${this.state.identity.id}: Summarization error:`, result.error)
 				return
 			}
 
@@ -738,11 +739,11 @@ Follow instructions provided by the supervisor for your specific role and capabi
 			// Store summary for reference
 			this.conversationSummary = result.summary
 
-			console.log(
-				`✅ ${this.state.identity.id}: Kilo summarized conversation (${result.messages.length} messages after, ${result.cost.toFixed(4)} cost)`,
+			getLog().info(
+				`${this.state.identity.id}: Kilo summarized conversation (${result.messages.length} messages after, ${result.cost.toFixed(4)} cost)`,
 			)
 		} catch (error) {
-			console.error(`❌ ${this.state.identity.id}: Kilo summarization failed:`, error)
+			getLog().error(`${this.state.identity.id}: Kilo summarization failed:`, error)
 		}
 		// kilocode_change end
 	}

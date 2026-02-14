@@ -8,6 +8,7 @@
 
 import { AgentIdentity, AgentRole, AgentCapability } from "./types"
 import { SocietyAgentStorage } from "./storage"
+import { getLog } from "./logger" // kilocode_change
 
 /**
  * Agent status in the registry
@@ -139,7 +140,7 @@ export class AgentRegistry {
 				}
 			}
 		} catch (error) {
-			console.error("Failed to load agent registry from storage:", error)
+			getLog().error("Failed to load agent registry from storage:", error)
 		}
 	}
 

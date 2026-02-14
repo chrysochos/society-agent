@@ -313,6 +313,13 @@ export async function activate(context: vscode.ExtensionContext) {
 				await agentRegistry.catchUp()
 				agentRegistry.startCacheRefresh() // kilocode_change - start background cache for monitor
 
+				// kilocode_change start - Route registry-discovered messages through unified handler
+				agentRegistry.setMessageHandler(async (msg) => {
+					await messageHandler.handleMessage(msg as any)
+				})
+				outputChannel.appendLine(`[Society Agent] Registry message handler wired`)
+				// kilocode_change end
+
 				// kilocode_change start - Wire HTTP server to unified handler (instant delivery)
 				agentServer.on("message", async (message: any) => {
 					outputChannel.appendLine(
@@ -427,6 +434,13 @@ export async function activate(context: vscode.ExtensionContext) {
 						getTeamStatus: () => null,
 					})
 					outputChannel.appendLine(`[Society Agent] Monitor data source wired to webview provider`)
+
+				// kilocode_change start - Wire real-time push: new messages → webview monitor
+				messageHandler.onMessage((msg) => {
+					societyAgentProvider!.pushMonitorMessage(msg)
+				})
+				outputChannel.appendLine(`[Society Agent] Real-time push wired to monitor`)
+				// kilocode_change end
 				}
 				// kilocode_change end
 
@@ -661,8 +675,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			outputChannel.appendLine("[Society Agent] Not a multi-agent project (no .society-agent/ found)")
 		}
 	} catch (error) {
-		console.error("❌ EXTENSION: Failed to initialize agent:", error)
-		outputChannel.appendLine(`[Society Agent] Failed: ${error}`)
+		outputChannel.appendLine(`[Society Agent] Failed to initialize agent: ${error}`) // kilocode_change
 	}
 	// kilocode_change end
 

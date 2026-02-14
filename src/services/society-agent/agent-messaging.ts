@@ -8,6 +8,7 @@
 
 import { AgentIdentity } from "./types"
 import { SocietyAgentStorage } from "./storage"
+import { getLog } from "./logger" // kilocode_change
 
 /**
  * Generate a unique message ID
@@ -129,7 +130,7 @@ export class AgentMessaging {
 			})
 
 			// Store request message
-			AgentMessageStore.getInstance().storeMessage(message).catch(console.error)
+			AgentMessageStore.getInstance().storeMessage(message).catch((err) => getLog().error("Failed to store message:", err))
 
 			this.channel.send(message).catch((error) => {
 				clearTimeout(timeout)
@@ -262,7 +263,7 @@ export class AgentMessaging {
 				await this.defaultHandler(message)
 			}
 		} catch (error) {
-			console.error(`Error handling message ${message.messageId}:`, error)
+			getLog().error(`Error handling message ${message.messageId}:`, error)
 		}
 	}
 
@@ -380,7 +381,7 @@ export class AgentMessageStore {
 				correlationId: entry.correlationId,
 			}))
 		} catch (error) {
-			console.error("Failed to load messages from storage:", error)
+			getLog().error("Failed to load messages from storage:", error)
 		}
 	}
 

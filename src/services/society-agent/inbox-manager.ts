@@ -10,6 +10,7 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import { AgentMessage } from './types'
 import { MessageSecurity } from './message-security' // kilocode_change
+import { getLog } from './logger' // kilocode_change
 
 export interface InboxMessage extends AgentMessage {
 	/** File path where message is stored */
@@ -52,7 +53,7 @@ export class InboxManager {
 		const filePath = path.join(agentInbox, fileName)
 
 		await fs.writeFile(filePath, JSON.stringify(inboxMessage, null, 2), 'utf-8')
-		console.log(`[InboxManager] Queued message ${message.id} for ${agentId}`)
+		getLog().info(`[InboxManager] Queued message ${message.id} for ${agentId}`)
 	}
 
 	/**
@@ -84,23 +85,23 @@ export class InboxManager {
 				if (message.signature) { // kilocode_change - signature is now in AgentMessage type
 					const isValid = await this.security.verifyMessage(message, message.from)
 					if (!isValid) {
-						console.warn(`[InboxManager] ⚠️ INVALID SIGNATURE on message ${file} from ${message.from} - REJECTED`)
+						getLog().warn(`[InboxManager] INVALID SIGNATURE on message ${file} from ${message.from} - REJECTED`)
 						// Move to quarantine instead of delivering
 						const quarantineDir = path.join(path.dirname(this.inboxRoot), 'quarantine')
 						await fs.mkdir(quarantineDir, { recursive: true })
 						await fs.rename(filePath, path.join(quarantineDir, file))
 						continue
 					}
-					console.log(`[InboxManager] ✅ Verified signature for message ${file} from ${message.from}`)
+					getLog().info(`[InboxManager] Verified signature for message ${file} from ${message.from}`)
 				} else {
-					console.warn(`[InboxManager] Message ${file} missing signature - accepting for backward compatibility`)
+					getLog().warn(`[InboxManager] Message ${file} missing signature - accepting for backward compatibility`)
 				}
 				// kilocode_change end
 				
 				message.filePath = filePath
 				messages.push(message)
 			} catch (error) {
-				console.error(`[InboxManager] Failed to read message ${file}:`, error)
+				getLog().error(`[InboxManager] Failed to read message ${file}:`, error)
 			}
 		}
 
@@ -115,15 +116,15 @@ export class InboxManager {
 	 */
 	async acknowledge(message: InboxMessage): Promise<void> {
 		if (!message.filePath) {
-			console.warn('[InboxManager] Cannot acknowledge message without filePath')
+			getLog().warn('[InboxManager] Cannot acknowledge message without filePath')
 			return
 		}
 
 		try {
 			await fs.unlink(message.filePath)
-			console.log(`[InboxManager] Acknowledged message ${message.id}`)
+			getLog().info(`[InboxManager] Acknowledged message ${message.id}`)
 		} catch (error) {
-			console.error(`[InboxManager] Failed to acknowledge ${message.id}:`, error)
+			getLog().error(`[InboxManager] Failed to acknowledge ${message.id}:`, error)
 		}
 	}
 
@@ -138,7 +139,7 @@ export class InboxManager {
 		try {
 			await fs.writeFile(message.filePath, JSON.stringify(message, null, 2), 'utf-8')
 		} catch (error) {
-			console.error(`[InboxManager] Failed to update attempt count:`, error)
+			getLog().error(`[InboxManager] Failed to update attempt count:`, error)
 		}
 	}
 
@@ -158,9 +159,9 @@ export class InboxManager {
 
 		try {
 			await fs.rm(agentInbox, { recursive: true, force: true })
-			console.log(`[InboxManager] Cleared inbox for ${agentId}`)
+			getLog().info(`[InboxManager] Cleared inbox for ${agentId}`)
 		} catch (error) {
-			console.error(`[InboxManager] Failed to clear inbox:`, error)
+			getLog().error(`[InboxManager] Failed to clear inbox:`, error)
 		}
 	}
 }

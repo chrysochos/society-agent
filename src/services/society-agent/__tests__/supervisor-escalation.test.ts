@@ -67,6 +67,7 @@ describe("SupervisorAgent", () => {
 					description: "Test purpose",
 					context: "Testing",
 					successCriteria: [],
+					createdAt: Date.now(),
 				},
 			})
 		})

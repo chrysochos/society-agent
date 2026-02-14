@@ -78,9 +78,19 @@ export class UnifiedMessageHandler {
 	private onShutdownCallback?: () => void
 	// kilocode_change end
 
+	// kilocode_change start - Message listener for real-time push
+	private messageListeners: Array<(msg: SignedMessage) => void> = []
+	// kilocode_change end
+
 	constructor(options: MessageHandlerOptions) {
 		this.options = options
 	}
+
+	// kilocode_change start - Register a listener for accepted messages
+	onMessage(listener: (msg: SignedMessage) => void): void {
+		this.messageListeners.push(listener)
+	}
+	// kilocode_change end
 
 	/**
 	 * Set the message sender for auto-routing responses.
@@ -162,6 +172,16 @@ export class UnifiedMessageHandler {
 
 		// 6. Write delivery confirmation
 		await this.confirmDelivery(message)
+
+		// kilocode_change start - Notify listeners (real-time push to monitor)
+		for (const listener of this.messageListeners) {
+			try {
+				listener(message)
+			} catch (_) {
+				// don't let listener errors break message flow
+			}
+		}
+		// kilocode_change end
 
 		return { accepted: true }
 	}

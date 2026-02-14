@@ -10,6 +10,7 @@
 import * as crypto from "crypto"
 import * as fs from "fs/promises"
 import * as path from "path"
+import { getLog } from "./logger" // kilocode_change
 
 export class MessageSecurity {
 	private keysDir: string
@@ -38,7 +39,7 @@ export class MessageSecurity {
 			// Generate new key
 			const secret = crypto.randomBytes(32).toString("hex")
 			await fs.writeFile(keyPath, secret, { mode: 0o600 }) // Owner read/write only
-			console.log(`[MessageSecurity] Generated new key for ${agentId}`)
+			getLog().info(`[MessageSecurity] Generated new key for ${agentId}`)
 			return secret
 		}
 	}
@@ -64,7 +65,7 @@ export class MessageSecurity {
 	 */
 	async verifyMessage(message: any, senderId: string): Promise<boolean> {
 		if (!message.signature) {
-			console.warn(`[MessageSecurity] Message missing signature`)
+			getLog().warn(`[MessageSecurity] Message missing signature`)
 			return false
 		}
 
@@ -83,7 +84,7 @@ export class MessageSecurity {
 			// Constant-time comparison to prevent timing attacks
 			return crypto.timingSafeEqual(Buffer.from(message.signature, "hex"), Buffer.from(expectedSignature, "hex"))
 		} catch (error) {
-			console.error(`[MessageSecurity] Verification failed:`, error)
+			getLog().error(`[MessageSecurity] Verification failed:`, error)
 			return false
 		}
 	}

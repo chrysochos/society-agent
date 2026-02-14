@@ -8,6 +8,7 @@
 
 import * as fs from "fs/promises"
 import * as path from "path"
+import { getLog } from "./logger" // kilocode_change
 
 /**
  * Storage paths for Society Agent data
@@ -57,7 +58,7 @@ export class JsonlStorage<T> {
 			await fs.mkdir(dir, { recursive: true })
 			await fs.appendFile(this.filePath, line, "utf-8")
 		} catch (error) {
-			console.error(`Failed to append to ${this.filePath}:`, error)
+			getLog().error(`Failed to append to ${this.filePath}:`, error)
 			throw error
 		}
 	}
@@ -78,7 +79,7 @@ export class JsonlStorage<T> {
 			if (error.code === "ENOENT") {
 				return []
 			}
-			console.error(`Failed to read from ${this.filePath}:`, error)
+			getLog().error(`Failed to read from ${this.filePath}:`, error)
 			throw error
 		}
 	}
@@ -100,7 +101,7 @@ export class JsonlStorage<T> {
 		} catch (error: any) {
 			// Ignore if file doesn't exist
 			if (error.code !== "ENOENT") {
-				console.error(`Failed to clear ${this.filePath}:`, error)
+				getLog().error(`Failed to clear ${this.filePath}:`, error)
 				throw error
 			}
 		}

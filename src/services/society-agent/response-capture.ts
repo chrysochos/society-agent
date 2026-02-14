@@ -1,6 +1,7 @@
 // kilocode_change - new file
 import * as vscode from "vscode"
 import { AgentRegistry } from "./agent-registry"
+import { getLog } from "./logger" // kilocode_change
 
 /**
  * Captures agent responses from completed tasks and routes them to appropriate recipients.
@@ -28,7 +29,7 @@ export class ResponseCapture {
 	 */
 	async captureTaskResponse(taskId: string, response: string): Promise<void> {
 		this.capturedResponses.set(taskId, response)
-		console.log(`[ResponseCapture] Captured response for task ${taskId}`)
+		getLog().info(`[ResponseCapture] Captured response for task ${taskId}`)
 
 		// Route the response to the appropriate recipient
 		await this.routeResponse(response)
@@ -64,7 +65,7 @@ export class ResponseCapture {
 				}
 			}
 		} catch (error) {
-			console.error("[ResponseCapture] Failed to route response:", error)
+			getLog().error("[ResponseCapture] Failed to route response:", error)
 		}
 	}
 
@@ -96,9 +97,9 @@ export class ResponseCapture {
 		try {
 			await this.registry.sendMessage(recipient, "message", response) // kilocode_change - positional args
 
-			console.log(`[ResponseCapture] Routed response to ${recipient}`)
+			getLog().info(`[ResponseCapture] Routed response to ${recipient}`)
 		} catch (error) {
-			console.error(`[ResponseCapture] Failed to send response to ${recipient}:`, error)
+			getLog().error(`[ResponseCapture] Failed to send response to ${recipient}:`, error)
 		}
 	}
 

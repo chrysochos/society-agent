@@ -9,6 +9,7 @@
 import * as vscode from "vscode"
 import { AgentRegistry } from "./agent-registry"
 import { AgentMessage } from "./types" // kilocode_change
+import { getLog } from "./logger" // kilocode_change
 
 export interface ResponseContext {
 	lastSender: string // Who sent the last message to this agent
@@ -47,7 +48,7 @@ export class ResponseHandler {
 	 */
 	async routeResponse(responseText: string): Promise<void> {
 		if (!this.responseContext) {
-			console.log("[ResponseHandler] No context, skipping routing")
+			getLog().info("[ResponseHandler] No context, skipping routing")
 			return
 		}
 
@@ -94,9 +95,9 @@ export class ResponseHandler {
 	private async sendTo(to: string, content: string, type: string): Promise<void> {
 		try {
 			await this.registry.sendMessage(to, type as AgentMessage["type"], content) // kilocode_change - positional args
-			console.log(`[ResponseHandler] Sent response to ${to}`)
+			getLog().info(`[ResponseHandler] Sent response to ${to}`)
 		} catch (error) {
-			console.error(`[ResponseHandler] Failed to send to ${to}:`, error)
+			getLog().error(`[ResponseHandler] Failed to send to ${to}:`, error)
 		}
 	}
 

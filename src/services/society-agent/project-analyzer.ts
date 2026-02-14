@@ -1,6 +1,7 @@
 // kilocode_change - new file
 import * as fs from "fs/promises"
 import * as path from "path"
+import { getLog } from "./logger" // kilocode_change
 
 /**
  * Project Analyzer - Analyze existing projects and suggest agent structure
@@ -59,7 +60,7 @@ export class ProjectAnalyzer {
 	 * Analyze existing project structure
 	 */
 	async analyze(projectRoot: string): Promise<AnalysisResult> {
-		console.log(`[ProjectAnalyzer] Analyzing project: ${projectRoot}`)
+		getLog().info(`[ProjectAnalyzer] Analyzing project: ${projectRoot}`)
 
 		const components = await this.detectComponents(projectRoot)
 		const metrics = await this.calculateMetrics(projectRoot)
