@@ -55,6 +55,7 @@ vi.mock("../agent-identity", () => ({
 	}),
 }))
 
+import crypto from "crypto"
 import { UnifiedMessageHandler } from "../message-handler"
 import type { SignedMessage } from "../agent-identity"
 
@@ -73,8 +74,8 @@ function createTestMessage(overrides: Partial<SignedMessage> = {}): SignedMessag
 		type: "message",
 		content: "Hello world",
 		timestamp: new Date().toISOString(),
+		nonce: crypto.randomUUID(),
 		signature: "test-sig",
-		publicKey: "test-key",
 		...overrides,
 	}
 }

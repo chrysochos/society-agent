@@ -81,8 +81,8 @@ export interface AgentMetadata {
  * Agent action log entry
  */
 export interface AgentAction {
-	/** Timestamp of action */
-	timestamp: Date
+	/** Timestamp of action (ISO 8601 string) */
+	timestamp: string // kilocode_change - standardize to ISO string for JSON round-trip
 	
 	/** Agent ID that performed the action */
 	agentId: string

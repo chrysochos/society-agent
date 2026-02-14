@@ -32,7 +32,7 @@ export class SocietyAgentLogger {
 		approvedBy?: string,
 	): Promise<void> {
 		const entry: AgentAction = {
-			timestamp: new Date(),
+			timestamp: new Date().toISOString(), // kilocode_change - ISO string
 			agentId: this.agentMetadata.identity.id,
 			action,
 			...(params !== undefined && { params }),

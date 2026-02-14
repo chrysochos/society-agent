@@ -510,7 +510,7 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 		to?: string
 		type: string
 		content: string
-		timestamp: number
+		timestamp: string | number // kilocode_change - accept both ISO string and epoch
 	}): void {
 		this._sendToWebview({
 			type: "agent-monitor-message",

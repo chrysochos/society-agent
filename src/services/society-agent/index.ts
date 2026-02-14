@@ -8,11 +8,3 @@
 export * from "./types"
 export * from "./config"
 export * from "./logger"
-// kilocode_change start
-// Note: Some exports commented to avoid duplicates during MVP phase
-// export * from './task-logger'
-// export * from './api-logger'
-// export * from './permissions'
-// export * from './approval'
-// export * from './supervisor-channel'
-// kilocode_change end
