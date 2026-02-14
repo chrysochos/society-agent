@@ -55,6 +55,19 @@
   .file-item.file { color: var(--text); padding-left: 28px; }
   .file-item .size { color: var(--muted); font-size: 10px; margin-left: auto; }
   .file-item .icon { width: 14px; text-align: center; }
+  .file-item .del-btn { color: var(--muted); cursor: pointer; margin-left: 6px; font-size: 11px;
+    opacity: 0; transition: opacity 0.15s; }
+  .file-item:hover .del-btn { opacity: 1; }
+  .file-item .del-btn:hover { color: var(--red); }
+
+  /* Upload area */
+  .upload-area { border: 2px dashed var(--border); border-radius: 8px; padding: 16px; margin: 8px 12px;
+    text-align: center; cursor: pointer; transition: border-color 0.2s, background 0.2s; font-size: 12px; color: var(--muted); }
+  .upload-area:hover { border-color: var(--accent); }
+  .upload-area.dragover { border-color: var(--green); background: rgba(63,185,80,0.08); }
+  .upload-area input[type=file] { display: none; }
+  .upload-row { display: flex; gap: 6px; margin: 4px 12px; }
+  .upload-row .btn { flex: 1; font-size: 11px; padding: 5px 0; }
 
   /* API Key Modal */
   .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex;
@@ -150,6 +163,14 @@
     <div class="stat-row"><span class="label">Files</span><span class="value" id="fileCount">0</span></div>
 
     <h2 style="margin-top:16px">Files <button class="btn btn-secondary" onclick="refreshFiles()" style="font-size:10px;padding:2px 8px;margin-left:8px">&#8635;</button></h2>
+    <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+      &#128228; Drop files here or click to upload
+      <input type="file" id="fileInput" multiple onchange="handleFileSelect(event)">
+    </div>
+    <div class="upload-row">
+      <button class="btn btn-secondary" onclick="promptNewFolder()">&#128193; New Folder</button>
+      <button class="btn btn-secondary" onclick="promptPasteFile()">&#128203; Paste Text</button>
+    </div>
     <div id="fileTree" class="file-tree">
       <div style="padding:16px;color:var(--muted);font-size:12px">No files yet</div>
     </div>
@@ -284,6 +305,11 @@ socket.on('agent-status-change', (data) => {
 socket.on('file-created', (data) => {
   addLog('info', `File created: ${data.relativePath} (${formatSize(data.size)})`);
   addMessage('system', `&#128196; Created: ${data.relativePath} (${formatSize(data.size)})`);
+  refreshFiles();
+});
+
+socket.on('file-deleted', (data) => {
+  addLog('info', `Deleted: ${data.relativePath}${data.wasDir ? ' (directory)' : ''}`);
   refreshFiles();
 });
 
@@ -450,9 +476,9 @@ async function refreshFiles() {
 
     tree.innerHTML = data.files.map(f => {
       if (f.isDir) {
-        return `<div class="file-item dir"><span class="icon">&#128193;</span>${f.path}</div>`;
+        return `<div class="file-item dir"><span class="icon">&#128193;</span>${f.path}<span class="del-btn" onclick="event.stopPropagation();deleteFile('${escapeAttr(f.path)}',true)" title="Delete folder">&#10005;</span></div>`;
       } else {
-        return `<div class="file-item file" onclick="viewFile('${escapeAttr(f.path)}')"><span class="icon">&#128196;</span>${f.path.split('/').pop()}<span class="size">${formatSize(f.size)}</span></div>`;
+        return `<div class="file-item file" onclick="viewFile('${escapeAttr(f.path)}')"><span class="icon">&#128196;</span>${f.path.split('/').pop()}<span class="size">${formatSize(f.size)}</span><span class="del-btn" onclick="event.stopPropagation();deleteFile('${escapeAttr(f.path)}',false)" title="Delete file">&#10005;</span></div>`;
       }
     }).join('');
   } catch (e) {
@@ -488,6 +514,131 @@ function formatSize(bytes) {
 
 function escapeAttr(s) {
   return s.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+// ============================================================================
+// File Upload / Delete
+// ============================================================================
+
+// Drag and drop
+const uploadArea = document.getElementById('uploadArea');
+['dragenter', 'dragover'].forEach(ev => {
+  uploadArea.addEventListener(ev, (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+});
+['dragleave', 'drop'].forEach(ev => {
+  uploadArea.addEventListener(ev, (e) => { e.preventDefault(); uploadArea.classList.remove('dragover'); });
+});
+uploadArea.addEventListener('drop', (e) => {
+  const files = e.dataTransfer.files;
+  if (files.length) uploadFiles(files);
+});
+
+function handleFileSelect(event) {
+  const files = event.target.files;
+  if (files.length) uploadFiles(files);
+  event.target.value = ''; // reset so same file can be selected again
+}
+
+async function uploadFiles(files, targetDir = '') {
+  for (const file of files) {
+    const filePath = targetDir ? `${targetDir}/${file.name}` : file.name;
+    addLog('info', `Uploading: ${filePath} (${formatSize(file.size)})...`);
+
+    try {
+      const content = await readFileAsBase64(file);
+      const res = await fetch(`${API}/api/workspace/file`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath, content, encoding: 'base64' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        addLog('info', `Uploaded: ${filePath} (${formatSize(data.size)})`);
+      } else {
+        addLog('error', `Upload failed: ${data.error}`);
+      }
+    } catch (e) {
+      addLog('error', `Upload error: ${e.message}`);
+    }
+  }
+  refreshFiles();
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // Strip the data:...;base64, prefix
+      const b64 = reader.result.split(',')[1];
+      resolve(b64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function deleteFile(filePath, isDir) {
+  const kind = isDir ? 'directory and all its contents' : 'file';
+  if (!confirm(`Delete ${kind}?\n${filePath}`)) return;
+
+  try {
+    const res = await fetch(`${API}/api/workspace/file?path=${encodeURIComponent(filePath)}`, {
+      method: 'DELETE',
+    });
+    const data = await res.json();
+    if (data.success) {
+      addLog('info', `Deleted: ${filePath}`);
+      refreshFiles();
+    } else {
+      addLog('error', `Delete failed: ${data.error}`);
+    }
+  } catch (e) {
+    addLog('error', `Delete error: ${e.message}`);
+  }
+}
+
+async function promptNewFolder() {
+  const name = prompt('New folder name (under projects/):');
+  if (!name) return;
+  try {
+    const res = await fetch(`${API}/api/workspace/dir`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: name }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      addLog('info', `Folder created: ${name}`);
+      refreshFiles();
+    } else {
+      addLog('error', data.error);
+    }
+  } catch (e) {
+    addLog('error', `Error: ${e.message}`);
+  }
+}
+
+async function promptPasteFile() {
+  const name = prompt('File name (e.g. notes.txt):');
+  if (!name) return;
+  const content = prompt('Paste file content:');
+  if (content === null) return;
+  try {
+    const res = await fetch(`${API}/api/workspace/file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: name, content }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      addLog('info', `File created: ${name} (${formatSize(data.size)})`);
+      refreshFiles();
+    } else {
+      addLog('error', data.error);
+    }
+  } catch (e) {
+    addLog('error', `Error: ${e.message}`);
+  }
 }
 
 // ============================================================================

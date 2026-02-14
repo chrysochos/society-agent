@@ -31,7 +31,7 @@ const NODE_ENV = process.env.NODE_ENV || "development"
 const log = getLog()
 
 // Middleware
-app.use(express.json())
+app.use(express.json({ limit: "50mb" })) // kilocode_change - support file uploads
 app.use(express.static(path.join(__dirname, "public")))  // kilocode_change - serve standalone frontend
 
 // Global state
@@ -268,6 +268,143 @@ app.get("/api/workspace/file", async (req, res): Promise<void> => {
 		} else {
 			res.status(500).json({ error: String(error) })
 		}
+	}
+})
+
+/**
+ * POST /api/workspace/file - Upload/create a file in the projects directory
+ * Body: { path: string, content: string, encoding?: 'utf-8' | 'base64' }
+ */
+app.post("/api/workspace/file", async (req, res): Promise<void> => {
+	try {
+		const { path: filePath, content, encoding } = req.body
+		if (!filePath || content === undefined) {
+			res.status(400).json({ error: "'path' and 'content' are required" })
+			return
+		}
+
+		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		const fullPath = path.join(workspacePath, "projects", filePath)
+
+		// Security: ensure path is within projects directory
+		const resolved = path.resolve(fullPath)
+		const projectsResolved = path.resolve(path.join(workspacePath, "projects"))
+		if (!resolved.startsWith(projectsResolved)) {
+			res.status(403).json({ error: "Access denied: path outside projects directory" })
+			return
+		}
+
+		// Create parent directories if needed
+		await fs.promises.mkdir(path.dirname(fullPath), { recursive: true })
+
+		// Write file (supports text or base64-encoded binary)
+		if (encoding === "base64") {
+			await fs.promises.writeFile(fullPath, Buffer.from(content, "base64"))
+		} else {
+			await fs.promises.writeFile(fullPath, content, "utf-8")
+		}
+
+		const stat = await fs.promises.stat(fullPath)
+		log.info(`File uploaded: ${filePath} (${stat.size} bytes)`)
+
+		// Notify via WebSocket
+		io.emit("file-created", { relativePath: filePath, fullPath, size: stat.size })
+
+		res.json({
+			success: true,
+			path: filePath,
+			fullPath,
+			size: stat.size,
+			modified: stat.mtime.toISOString(),
+		})
+	} catch (error) {
+		log.error("Error uploading file:", error)
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * DELETE /api/workspace/file - Delete a file or empty directory
+ * Query: ?path=relative/path/file.txt
+ */
+app.delete("/api/workspace/file", async (req, res): Promise<void> => {
+	try {
+		const filePath = req.query.path as string
+		if (!filePath) {
+			res.status(400).json({ error: "path query parameter required" })
+			return
+		}
+
+		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		const fullPath = path.join(workspacePath, "projects", filePath)
+
+		// Security: ensure path is within projects directory
+		const resolved = path.resolve(fullPath)
+		const projectsResolved = path.resolve(path.join(workspacePath, "projects"))
+		if (!resolved.startsWith(projectsResolved)) {
+			res.status(403).json({ error: "Access denied: path outside projects directory" })
+			return
+		}
+
+		// Prevent deleting the projects root itself
+		if (resolved === projectsResolved) {
+			res.status(403).json({ error: "Cannot delete the projects root directory" })
+			return
+		}
+
+		const stat = await fs.promises.stat(fullPath)
+		if (stat.isDirectory()) {
+			// Remove directory recursively
+			await fs.promises.rm(fullPath, { recursive: true, force: true })
+			log.info(`Directory deleted: ${filePath}`)
+		} else {
+			await fs.promises.unlink(fullPath)
+			log.info(`File deleted: ${filePath}`)
+		}
+
+		io.emit("file-deleted", { relativePath: filePath, fullPath, wasDir: stat.isDirectory() })
+
+		res.json({ success: true, path: filePath, deleted: true })
+	} catch (error: any) {
+		if (error.code === "ENOENT") {
+			res.status(404).json({ error: "File not found" })
+		} else {
+			log.error("Error deleting file:", error)
+			res.status(500).json({ error: String(error) })
+		}
+	}
+})
+
+/**
+ * POST /api/workspace/dir - Create a directory
+ * Body: { path: string }
+ */
+app.post("/api/workspace/dir", async (req, res): Promise<void> => {
+	try {
+		const { path: dirPath } = req.body
+		if (!dirPath) {
+			res.status(400).json({ error: "'path' is required" })
+			return
+		}
+
+		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		const fullPath = path.join(workspacePath, "projects", dirPath)
+
+		// Security: ensure path is within projects directory
+		const resolved = path.resolve(fullPath)
+		const projectsResolved = path.resolve(path.join(workspacePath, "projects"))
+		if (!resolved.startsWith(projectsResolved)) {
+			res.status(403).json({ error: "Access denied: path outside projects directory" })
+			return
+		}
+
+		await fs.promises.mkdir(fullPath, { recursive: true })
+		log.info(`Directory created: ${dirPath}`)
+
+		res.json({ success: true, path: dirPath, fullPath })
+	} catch (error) {
+		log.error("Error creating directory:", error)
+		res.status(500).json({ error: String(error) })
 	}
 })
 // kilocode_change end
