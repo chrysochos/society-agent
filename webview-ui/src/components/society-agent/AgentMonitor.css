@@ -12,6 +12,31 @@
 	overflow: hidden;
 }
 
+/* kilocode_change start - Error banner */
+.monitor-error-banner {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 12px;
+	background: var(--vscode-inputValidation-errorBackground, rgba(255, 0, 0, 0.1));
+	border: 1px solid var(--vscode-inputValidation-errorBorder, #f44);
+	color: var(--vscode-errorForeground, #f44);
+	font-size: 12px;
+	flex-shrink: 0;
+}
+
+.monitor-error-banner .error-icon {
+	flex-shrink: 0;
+}
+
+.monitor-error-banner .error-text {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* kilocode_change end */
+
 /* --- Status Bar --- */
 
 .monitor-status-bar {
@@ -227,13 +252,8 @@
 }
 
 @keyframes pulse {
-	0%,
-	100% {
-		opacity: 1;
-	}
-	50% {
-		opacity: 0.4;
-	}
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.4; }
 }
 
 .agent-row-task {

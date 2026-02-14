@@ -59,7 +59,7 @@ export const Dashboard: React.FC = () => {
 		showInteractiveTerminal: false,
 	})
 
-	const [showPurposeInput, setShowPurposeInput] = useState(true)
+	const [showMonitor, setShowMonitor] = useState(true) // kilocode_change - renamed from showPurposeInput
 	const messageStreamRef = useRef<HTMLDivElement>(null)
 
 	// Handle messages from extension
@@ -78,7 +78,7 @@ export const Dashboard: React.FC = () => {
 						...prev,
 						purpose: message.purpose,
 					}))
-					setShowPurposeInput(false)
+					setShowMonitor(false) // kilocode_change
 					break
 
 				case "team-formed":
@@ -264,7 +264,7 @@ export const Dashboard: React.FC = () => {
 	}
 
 	// Show agent monitor when no active purpose
-	if (showPurposeInput || !state.purpose) {
+	if (showMonitor || !state.purpose) { // kilocode_change - renamed from showPurposeInput
 		return <AgentMonitor /> // kilocode_change - replaced PurposeInput with AgentMonitor
 	}
 
@@ -315,7 +315,7 @@ export const Dashboard: React.FC = () => {
 								messages: [],
 								selectedFilter: "all",
 							}))
-							setShowPurposeInput(true)
+							setShowMonitor(true) // kilocode_change
 						}}
 						title="Start new purpose">
 						➕ New Purpose

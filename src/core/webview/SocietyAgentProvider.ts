@@ -282,21 +282,78 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 				}
 
 				case "pause-agent": {
-					// TODO: Implement pause agent
+					// kilocode_change start - Real pause agent implementation
 					console.log("⏸️  Pause agent:", data.agentId)
+					if (this.societyManager && this.currentPurposeId) {
+						try {
+							const activePurpose = this.societyManager.getState().activePurposes.get(this.currentPurposeId)
+							if (activePurpose) {
+								const member = activePurpose.team.getAllMembers().find((m) => m.identity.id === data.agentId)
+								if (member) {
+									member.agent.pause()
+									this._sendToWebview({
+										type: "agent-status-update",
+										agentId: data.agentId,
+										status: "paused",
+									})
+								}
+							}
+						} catch (error) {
+							console.error("❌ Failed to pause agent:", error)
+						}
+					}
 					break
+					// kilocode_change end
 				}
 
 				case "pause-all": {
-					// TODO: Implement pause all
+					// kilocode_change start - Real pause all implementation
 					console.log("⏸️  Pause all agents")
+					if (this.societyManager && this.currentPurposeId) {
+						try {
+							this.societyManager.pausePurpose(this.currentPurposeId)
+							// Notify webview of each agent's new status
+							const activePurpose = this.societyManager.getState().activePurposes.get(this.currentPurposeId)
+							if (activePurpose) {
+								for (const member of activePurpose.team.getAllMembers()) {
+									this._sendToWebview({
+										type: "agent-status-update",
+										agentId: member.identity.id,
+										status: "paused",
+									})
+								}
+							}
+						} catch (error) {
+							console.error("❌ Failed to pause all:", error)
+						}
+					}
 					break
+					// kilocode_change end
 				}
 
 				case "resume-all": {
-					// TODO: Implement resume all
+					// kilocode_change start - Real resume all implementation
 					console.log("▶️  Resume all agents")
+					if (this.societyManager && this.currentPurposeId) {
+						try {
+							this.societyManager.resumePurpose(this.currentPurposeId)
+							// Notify webview of each agent's new status
+							const activePurpose = this.societyManager.getState().activePurposes.get(this.currentPurposeId)
+							if (activePurpose) {
+								for (const member of activePurpose.team.getAllMembers()) {
+									this._sendToWebview({
+										type: "agent-status-update",
+										agentId: member.identity.id,
+										status: "working",
+									})
+								}
+							}
+						} catch (error) {
+							console.error("❌ Failed to resume all:", error)
+						}
+					}
 					break
+					// kilocode_change end
 				}
 
 				case "stop-purpose": {
@@ -315,9 +372,38 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 				}
 
 				case "send-message-to-agent": {
-					// TODO: Implement send message
+					// kilocode_change start - Real send message implementation
 					console.log("💬 Send message to agent:", data.agentId, data.message)
+					if (this.societyManager && this.currentPurposeId) {
+						try {
+							const response = await this.societyManager.sendMessageToAgent(
+								this.currentPurposeId,
+								data.agentId,
+								data.message,
+							)
+							// Send response back as a society-agent-message
+							this._sendToWebview({
+								type: "society-agent-message",
+								agentId: data.agentId,
+								toAgent: "human",
+								message: response,
+								timestamp: Date.now(),
+							})
+						} catch (error) {
+							console.error("❌ Failed to send message:", error)
+							this._sendToWebview({
+								type: "error",
+								message: `Failed to send message to ${data.agentId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+							})
+						}
+					} else {
+						this._sendToWebview({
+							type: "error",
+							message: "No active purpose — cannot send message",
+						})
+					}
 					break
+					// kilocode_change end
 				}
 
 				case "terminal-input": {
@@ -351,11 +437,28 @@ export class SocietyAgentProvider implements vscode.WebviewViewProvider {
 				}
 
 				case "get-agent-status": {
-					// Return current state
-					const state = this.societyManager?.getState()
-					// TODO: Format and send agent status
-					console.log("📊 Get agent status", state)
+					// kilocode_change start - Real get-agent-status implementation
+					console.log("📊 Get agent status")
+					if (this.societyManager && this.currentPurposeId) {
+						const activePurpose = this.societyManager.getState().activePurposes.get(this.currentPurposeId)
+						if (activePurpose) {
+							const agents = activePurpose.team.getAllMembers().map((member) => ({
+								id: member.identity.id,
+								name: `${member.identity.role === "supervisor" ? "Supervisor" : "Worker"} (${member.identity.id.slice(-8)})`,
+								role: member.identity.role,
+								workerType: member.identity.workerType,
+								status: member.agent.getState().status,
+								currentTask: member.agent.getState().currentTask || undefined,
+								recentActivity: [],
+							}))
+							this._sendToWebview({
+								type: "team-formed",
+								agents,
+							})
+						}
+					}
 					break
+					// kilocode_change end
 				}
 
 				// kilocode_change start - Agent Monitor data refresh

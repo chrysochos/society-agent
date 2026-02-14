@@ -71,6 +71,7 @@ export const AgentMonitor: React.FC = () => {
 	const [isConnected, setIsConnected] = useState(false)
 	const [expandedSection, setExpandedSection] = useState<string | null>("identity")
 	const [lastRefresh, setLastRefresh] = useState<number>(Date.now())
+	const [errorMessage, setErrorMessage] = useState<string | null>(null) // kilocode_change - error display
 
 	// Request data from extension backend
 	const requestRefresh = useCallback(() => {
@@ -90,6 +91,7 @@ export const AgentMonitor: React.FC = () => {
 				case "agent-monitor-data":
 					setData(msg.data)
 					setIsConnected(true)
+					setErrorMessage(null) // kilocode_change - clear error on successful refresh
 					break
 
 				case "agent-monitor-update":
@@ -142,6 +144,12 @@ export const AgentMonitor: React.FC = () => {
 						}))
 					}
 					break
+
+				// kilocode_change start - Handle error messages from backend
+				case "error":
+					setErrorMessage(msg.message || "An unknown error occurred")
+					break
+				// kilocode_change end
 			}
 		}
 
@@ -374,6 +382,18 @@ export const AgentMonitor: React.FC = () => {
 
 	return (
 		<div className="agent-monitor">
+			{/* kilocode_change start - Error banner */}
+			{errorMessage && (
+				<div className="monitor-error-banner">
+					<span className="error-icon">⚠️</span>
+					<span className="error-text">{errorMessage}</span>
+					<VSCodeButton appearance="icon" title="Dismiss" onClick={() => setErrorMessage(null)}>
+						✕
+					</VSCodeButton>
+				</div>
+			)}
+			{/* kilocode_change end */}
+
 			{/* Status bar */}
 			<div className="monitor-status-bar">
 				<div className="status-indicator">
