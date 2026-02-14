@@ -37,6 +37,9 @@ export interface MessageHandlerOptions {
 
 	/** This agent's ID */
 	agentId: string
+
+	/** Optional: message sender for auto-routing responses */
+	messageSender?: { send: (to: string, type: string, content: string, replyTo?: string) => Promise<void> }
 }
 
 /**
@@ -49,11 +52,25 @@ export class UnifiedMessageHandler {
 	private currentTask: SignedMessage | null = null
 	private onTaskComplete: (() => void) | null = null
 
+	/**
+	 * Response context: tracks who sent the current task so we can auto-route
+	 * the response back to them when the task completes.
+	 */
+	private responseContext: { lastSender: string; messageId: string } | null = null
+
 	// Max processed IDs to track (prevent memory leak)
 	private static readonly MAX_PROCESSED_IDS = 10_000
 
 	constructor(options: MessageHandlerOptions) {
 		this.options = options
+	}
+
+	/**
+	 * Set the message sender for auto-routing responses.
+	 * Called after construction since sender may be created later.
+	 */
+	setMessageSender(sender: MessageHandlerOptions["messageSender"]): void {
+		this.options.messageSender = sender
 	}
 
 	/**
@@ -154,17 +171,23 @@ export class UnifiedMessageHandler {
 					console.log(`[MessageHandler] Added ${message.type} from ${message.from} to conversation history`)
 				} catch (error) {
 					console.error(`[MessageHandler] Failed to inject message:`, error)
-					vscode.window.showInformationMessage(`📨 ${message.from}: ${message.content.substring(0, 100)}`)
+					vscode.window.showInformationMessage(
+						`📨 ${message.from}: ${message.content.substring(0, 100)}`,
+					)
 				}
 			}
 		} else {
 			// Agent is idle — create a mini-task to respond
 			if (provider) {
+				// Track sender for response routing
+				this.responseContext = { lastSender: message.from, messageId: message.id }
 				const formatted = this.formatForNewTask(message)
 				await provider.createTask(formatted)
 				console.log(`[MessageHandler] Created task for ${message.type} from ${message.from}`)
 			} else {
-				vscode.window.showInformationMessage(`📨 ${message.from}: ${message.content.substring(0, 100)}`)
+				vscode.window.showInformationMessage(
+					`📨 ${message.from}: ${message.content.substring(0, 100)}`,
+				)
 			}
 		}
 	}
@@ -181,6 +204,8 @@ export class UnifiedMessageHandler {
 			// Agent is idle — start immediately
 			if (provider) {
 				this.currentTask = message
+				// Track who sent this so we can route the response back
+				this.responseContext = { lastSender: message.from, messageId: message.id }
 				const formatted = this.formatForNewTask(message)
 				await provider.createTask(formatted)
 				console.log(`[MessageHandler] Started queued task from ${message.from}`)
@@ -188,9 +213,7 @@ export class UnifiedMessageHandler {
 		} else {
 			// Agent is busy — queue it
 			this.taskQueue.push(message)
-			console.log(
-				`[MessageHandler] Queued ${message.type} from ${message.from} (queue size: ${this.taskQueue.length})`,
-			)
+			console.log(`[MessageHandler] Queued ${message.type} from ${message.from} (queue size: ${this.taskQueue.length})`)
 			vscode.window.showInformationMessage(
 				`📋 Task from ${message.from} queued (position ${this.taskQueue.length})`,
 			)
@@ -205,17 +228,53 @@ export class UnifiedMessageHandler {
 
 		// Show subtle notification for status updates
 		if (message.type === "task_complete") {
-			vscode.window.showInformationMessage(`✅ ${message.from} completed: ${message.content.substring(0, 80)}`)
+			vscode.window.showInformationMessage(
+				`✅ ${message.from} completed: ${message.content.substring(0, 80)}`,
+			)
 		}
 	}
 
 	// ─── Task Queue Management ───────────────────────────────────────
 
 	/**
-	 * Called when the current task completes — pick up next from queue
+	 * Called when the current task completes — auto-route response, then pick up next from queue
+	 *
+	 * @param responseText - The agent's final response text (if available)
 	 */
-	async onCurrentTaskCompleted(): Promise<void> {
+	async onCurrentTaskCompleted(responseText?: string): Promise<void> {
+		// Auto-route response back to sender
+		if (responseText && this.responseContext && this.options.messageSender) {
+			try {
+				const mentions = this.parseMentions(responseText)
+				const sender = this.options.messageSender
+
+				if (mentions.length === 0) {
+					// No @mentions — send back to whoever sent the task
+					await sender.send(
+						this.responseContext.lastSender,
+						"task_complete",
+						responseText,
+						this.responseContext.messageId,
+					)
+					console.log(`[MessageHandler] Auto-routed response to ${this.responseContext.lastSender}`)
+				} else {
+					// Has @mentions — send to each mentioned agent
+					for (const mention of mentions) {
+						if (mention === "all") {
+							await sender.send("all", "message", responseText, this.responseContext.messageId)
+						} else {
+							await sender.send(mention, "message", responseText, this.responseContext.messageId)
+						}
+					}
+					console.log(`[MessageHandler] Routed response to @mentions: ${mentions.join(", ")}`)
+				}
+			} catch (error) {
+				console.error(`[MessageHandler] Failed to auto-route response:`, error)
+			}
+		}
+
 		this.currentTask = null
+		this.responseContext = null
 
 		if (this.taskQueue.length === 0) {
 			console.log(`[MessageHandler] Task queue empty — agent idle`)
@@ -224,6 +283,8 @@ export class UnifiedMessageHandler {
 
 		const next = this.taskQueue.shift()!
 		this.currentTask = next
+		// Track sender for next task's response routing
+		this.responseContext = { lastSender: next.from, messageId: next.id }
 
 		console.log(`[MessageHandler] Starting next queued task from ${next.from} (${this.taskQueue.length} remaining)`)
 
@@ -233,6 +294,26 @@ export class UnifiedMessageHandler {
 			const formatted = this.formatForNewTask(next)
 			await provider.createTask(formatted)
 		}
+	}
+
+	/**
+	 * Parse @mentions from text
+	 */
+	private parseMentions(text: string): string[] {
+		const mentionRegex = /@([\w-]+)/g
+		const mentions: string[] = []
+		let match
+		while ((match = mentionRegex.exec(text)) !== null) {
+			mentions.push(match[1])
+		}
+		return mentions
+	}
+
+	/**
+	 * Get current response context (for external callers like ResponseCapture)
+	 */
+	getResponseContext(): { lastSender: string; messageId: string } | null {
+		return this.responseContext
 	}
 
 	/**
@@ -285,20 +366,13 @@ export class UnifiedMessageHandler {
 
 	private getTypeIcon(type: string): string {
 		switch (type) {
-			case "task_assign":
-				return "🎯"
-			case "question":
-				return "❓"
-			case "task_complete":
-				return "✅"
-			case "status_update":
-				return "📊"
-			case "review_request":
-				return "🔍"
-			case "shutdown":
-				return "🛑"
-			default:
-				return "📨"
+			case "task_assign": return "🎯"
+			case "question": return "❓"
+			case "task_complete": return "✅"
+			case "status_update": return "📊"
+			case "review_request": return "🔍"
+			case "shutdown": return "🛑"
+			default: return "📨"
 		}
 	}
 
@@ -363,7 +437,12 @@ export class UnifiedMessageHandler {
 	 */
 	private async confirmDelivery(message: SignedMessage): Promise<void> {
 		// Mark as delivered in the inbox file
-		const inboxPath = path.join(this.options.sharedDir, "inbox", this.options.agentId, `${message.id}.json`)
+		const inboxPath = path.join(
+			this.options.sharedDir,
+			"inbox",
+			this.options.agentId,
+			`${message.id}.json`,
+		)
 
 		try {
 			// Update the file with delivery info
@@ -375,7 +454,12 @@ export class UnifiedMessageHandler {
 			await fs.writeFile(inboxPath, JSON.stringify(delivered, null, 2), "utf-8")
 
 			// Move to processed directory
-			const processedDir = path.join(this.options.sharedDir, "inbox", this.options.agentId, "processed")
+			const processedDir = path.join(
+				this.options.sharedDir,
+				"inbox",
+				this.options.agentId,
+				"processed",
+			)
 			await fs.mkdir(processedDir, { recursive: true })
 			const processedPath = path.join(processedDir, `${message.id}.json`)
 			await fs.rename(inboxPath, processedPath)

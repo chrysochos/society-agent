@@ -221,9 +221,17 @@ export async function activate(context: vscode.ExtensionContext) {
 						capabilities = matchingAgent.capabilities
 
 						// Save to workspace settings
-						await config.update("societyAgent.agentId", agentId, vscode.ConfigurationTarget.Workspace)
+						await config.update(
+							"societyAgent.agentId",
+							agentId,
+							vscode.ConfigurationTarget.Workspace,
+						)
 						await config.update("societyAgent.role", role, vscode.ConfigurationTarget.Workspace)
-						await config.update("societyAgent.sharedDir", sharedDir, vscode.ConfigurationTarget.Workspace)
+						await config.update(
+							"societyAgent.sharedDir",
+							sharedDir,
+							vscode.ConfigurationTarget.Workspace,
+						)
 						await config.update(
 							"societyAgent.capabilities",
 							capabilities,
@@ -265,9 +273,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				if (identityEnvPath) {
 					try {
 						await identityManager.loadIdentity(identityEnvPath)
-						outputChannel.appendLine(
-							`[Society Agent] Identity loaded from env: ${identityManager.getAgentId()}`,
-						)
+						outputChannel.appendLine(`[Society Agent] Identity loaded from env: ${identityManager.getAgentId()}`)
 					} catch (error) {
 						outputChannel.appendLine(`[Society Agent] Failed to load identity from env: ${error}`)
 					}
@@ -278,9 +284,7 @@ export async function activate(context: vscode.ExtensionContext) {
 						await identityManager.loadIdentity(defaultIdentityPath)
 						outputChannel.appendLine(`[Society Agent] Identity loaded from default path`)
 					} catch {
-						outputChannel.appendLine(
-							`[Society Agent] No identity file found — running without Ed25519 signing`,
-						)
+						outputChannel.appendLine(`[Society Agent] No identity file found — running without Ed25519 signing`)
 					}
 				}
 
@@ -304,7 +308,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
 				// kilocode_change start - Wire HTTP server to unified handler (instant delivery)
 				agentServer.on("message", async (message: any) => {
-					outputChannel.appendLine(`[Society Agent] HTTP message from ${message.from}: ${message.type}`)
+					outputChannel.appendLine(
+						`[Society Agent] HTTP message from ${message.from}: ${message.type}`,
+					)
 					// Feed to unified handler (same handler as inbox poller)
 					const result = await messageHandler.handleMessage(message)
 					if (!result.accepted) {
@@ -337,7 +343,9 @@ export async function activate(context: vscode.ExtensionContext) {
 					},
 				})
 
-				outputChannel.appendLine(`[Society Agent] Connected: ${role} (${agentId}) on ${serverUrl}`)
+				outputChannel.appendLine(
+					`[Society Agent] Connected: ${role} (${agentId}) on ${serverUrl}`,
+				)
 
 				// kilocode_change start - Start inbox poller (replaces SimpleAgentLoop for message processing)
 				const { InboxPoller } = await import("./services/society-agent/inbox-poller")
@@ -358,23 +366,28 @@ export async function activate(context: vscode.ExtensionContext) {
 				const { MessageSender } = await import("./services/society-agent/message-sender")
 				const messageSender = new MessageSender(sharedDir, identityManager)
 
+				// Wire sender into handler for auto-routing responses
+				messageHandler.setMessageSender({
+					send: async (to: string, type: string, content: string, replyTo?: string) => {
+						await messageSender.send({ to, type: type as any, content, replyTo })
+					},
+				})
+
 				// Store sender in workspace state so other components can use it
 				await context.workspaceState.update("societyAgent.messageSender", "initialized")
 				// kilocode_change end
 
-				outputChannel.appendLine(
-					`[Society Agent] Unified message system started for ${role} (inbox poller + HTTP handler)`,
-				)
-
+				outputChannel.appendLine(`[Society Agent] Unified message system started for ${role} (inbox poller + HTTP handler)`)
+				
 				// kilocode_change start - Resume last task immediately to prevent "welcome message" showing
 				// Wait for provider to be available and resume last task if it exists
 				try {
 					const { ClineProvider } = await import("./core/webview/ClineProvider")
-
+					
 					// Wait for provider to be created (max 3 seconds)
 					let attempts = 0
 					while (attempts < 30) {
-						await new Promise((resolve) => setTimeout(resolve, 100))
+						await new Promise(resolve => setTimeout(resolve, 100))
 						const provider = ClineProvider.getVisibleInstance()
 						if (provider) {
 							outputChannel.appendLine(`[Society Agent] Provider available, checking for task history`)
@@ -387,13 +400,11 @@ export async function activate(context: vscode.ExtensionContext) {
 									if (!currentTask || currentTask.taskId !== lastTask.id) {
 										outputChannel.appendLine(`[Society Agent] Resuming last task: ${lastTask.id}`)
 										provider.resumeTask(lastTask.id)
-										await new Promise((resolve) => setTimeout(resolve, 500)) // Wait for task to load
+										await new Promise(resolve => setTimeout(resolve, 500)) // Wait for task to load
 										await provider.postStateToWebview()
 										outputChannel.appendLine(`[Society Agent] Task resumed successfully`)
 									} else {
-										outputChannel.appendLine(
-											`[Society Agent] Task already active: ${currentTask.taskId}`,
-										)
+										outputChannel.appendLine(`[Society Agent] Task already active: ${currentTask.taskId}`)
 									}
 								}
 							} else {
@@ -436,37 +447,40 @@ export async function activate(context: vscode.ExtensionContext) {
 				statusBarItem.command = "kilo-code.societyCheckMessages"
 				statusBarItem.show()
 				context.subscriptions.push(statusBarItem)
-
+				
 				// kilocode_change start - Add Stop Agent button
 				const stopAgentButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99)
 				stopAgentButton.text = `$(debug-stop) Stop Agent`
 				stopAgentButton.tooltip = `Stop ${role} agent and close this window`
 				stopAgentButton.command = "kilo-code.societyStopAgent"
-				stopAgentButton.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground")
+				stopAgentButton.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
 				stopAgentButton.show()
 				context.subscriptions.push(stopAgentButton)
-
+				
 				// Register stop agent command
-				const stopAgentCommand = vscode.commands.registerCommand("kilo-code.societyStopAgent", async () => {
-					const answer = await vscode.window.showWarningMessage(
-						`Stop ${role} agent and close this window?`,
-						{ modal: true },
-						"Stop Agent",
-						"Cancel",
-					)
-
-					if (answer === "Stop Agent") {
-						outputChannel.appendLine(`[Society Agent] Stopping ${role} agent`)
-
-						// Cleanup agent resources
-						if (agentRegistry) {
-							await agentRegistry.dispose()
+				const stopAgentCommand = vscode.commands.registerCommand(
+					"kilo-code.societyStopAgent",
+					async () => {
+						const answer = await vscode.window.showWarningMessage(
+							`Stop ${role} agent and close this window?`,
+							{ modal: true },
+							"Stop Agent",
+							"Cancel"
+						)
+						
+						if (answer === "Stop Agent") {
+							outputChannel.appendLine(`[Society Agent] Stopping ${role} agent`)
+							
+							// Cleanup agent resources
+							if (agentRegistry) {
+								await agentRegistry.dispose()
+							}
+							
+							// Close this VS Code window
+							await vscode.commands.executeCommand("workbench.action.closeWindow")
 						}
-
-						// Close this VS Code window
-						await vscode.commands.executeCommand("workbench.action.closeWindow")
 					}
-				})
+				)
 				context.subscriptions.push(stopAgentCommand)
 				// kilocode_change end
 
@@ -486,7 +500,8 @@ export async function activate(context: vscode.ExtensionContext) {
 						for (const msg of messages) {
 							await agentRegistry?.markDelivered(msg.id) // kilocode_change - null safety
 							const sender = msg.from === "user" ? "User" : msg.from
-							const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)
+							const content =
+								typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)
 
 							// Show in chat
 							const { ClineProvider } = await import("./core/webview/ClineProvider")
@@ -508,38 +523,32 @@ export async function activate(context: vscode.ExtensionContext) {
 				// This allows the supervisor in the main window to receive messages from workers
 				const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
 				const isMainWorkspace = workspacePath && !workspacePath.includes("-worker")
-
+				
 				if (isMainWorkspace) {
 					outputChannel.appendLine(`[Society Agent] Setting up supervisor inbox for main workspace`)
-
+					
 					// Create simple agent registry for supervisor
 					agentRegistry = new AgentRegistry(sharedDir, "supervisor")
 					await agentRegistry.initialize()
-
+					
 					// Start supervisor agent loop
 					const { SimpleAgentLoop } = await import("./services/society-agent/simple-agent-loop")
-					const supervisorLoop = new SimpleAgentLoop(
-						agentRegistry,
-						"supervisor",
-						"Supervisor",
-						["coordination"],
-						sharedDir,
-					)
+					const supervisorLoop = new SimpleAgentLoop(agentRegistry, "supervisor", "Supervisor", ["coordination"], sharedDir)
 					await supervisorLoop.start()
-
+					
 					context.subscriptions.push({
 						dispose: () => supervisorLoop.stop(),
 					})
-
+					
 					// kilocode_change start - Add Stop All Agents button for supervisor
 					const stopAllButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99)
 					stopAllButton.text = `$(debug-stop) Stop All Agents`
 					stopAllButton.tooltip = `Stop all worker agents and close supervisor`
 					stopAllButton.command = "kilo-code.societyStopAllAgents"
-					stopAllButton.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground")
+					stopAllButton.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
 					stopAllButton.show()
 					context.subscriptions.push(stopAllButton)
-
+					
 					// Register stop all agents command
 					const stopAllCommand = vscode.commands.registerCommand(
 						"kilo-code.societyStopAllAgents",
@@ -548,17 +557,17 @@ export async function activate(context: vscode.ExtensionContext) {
 								`Stop all agents and close all windows?\n\nThis will:\n• Close all worker agent windows\n• Close supervisor window\n• Stop all agent processes`,
 								{ modal: true },
 								"Stop All",
-								"Cancel",
+								"Cancel"
 							)
-
+							
 							if (answer === "Stop All") {
 								outputChannel.appendLine(`[Society Agent] Stopping all agents`)
-
+								
 								// Kill all VS Code windows with "-worker" in their path
 								const { exec } = await import("child_process")
 								const util = await import("util")
 								const execAsync = util.promisify(exec)
-
+								
 								try {
 									// Close worker windows
 									if (process.platform === "win32") {
@@ -568,25 +577,25 @@ export async function activate(context: vscode.ExtensionContext) {
 										// Linux/Mac: pkill
 										await execAsync('pkill -f "code.*-worker"')
 									}
-
+									
 									outputChannel.appendLine(`[Society Agent] Worker windows closed`)
 								} catch (error) {
 									outputChannel.appendLine(`[Society Agent] Note: Some workers may already be closed`)
 								}
-
+								
 								// Cleanup supervisor resources
 								if (agentRegistry) {
 									await agentRegistry.dispose()
 								}
-
+								
 								// Close supervisor window
 								await vscode.commands.executeCommand("workbench.action.closeWindow")
 							}
-						},
+						}
 					)
 					context.subscriptions.push(stopAllCommand)
 					// kilocode_change end
-
+					
 					outputChannel.appendLine(`[Society Agent] Supervisor inbox polling started`)
 				} else {
 					outputChannel.appendLine("[Society Agent] Discovered .society-agent/ but no agent configured")

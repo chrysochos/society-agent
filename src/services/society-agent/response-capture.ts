@@ -51,13 +51,11 @@ export class ResponseCapture {
 				// Check ResponseHandler context for default recipient
 				const { ResponseHandler } = await import("./response-handler")
 				const handler = new ResponseHandler(this.registry, this.agentId) // kilocode_change - no getInstance
-				const context = (handler as any).responseContext as
-					| { lastSender?: string; replyTo?: string }
-					| undefined // kilocode_change - access private field
+				const context = (handler as any).responseContext as { lastSender?: string } | undefined // kilocode_change
 
-				if (context?.lastSender && context.replyTo !== "user") {
+				if (context?.lastSender && context.lastSender !== "user") {
 					// Reply to the agent who sent the original message
-					await this.sendResponse(context.lastSender!, response) // kilocode_change
+					await this.sendResponse(context.lastSender, response)
 				} else if (context?.lastSender === "user") {
 					// Notify user
 					vscode.window.showInformationMessage(

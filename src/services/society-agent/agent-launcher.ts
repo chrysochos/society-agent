@@ -3,11 +3,17 @@ import * as child_process from "child_process"
 import * as path from "path"
 import * as fs from "fs/promises"
 import { promisify } from "util"
+import { AgentIdentityManager } from "./agent-identity"
 
 const exec = promisify(child_process.exec)
 
 /**
- * Agent Launcher - Automatically launch VS Code instances for agents
+ * Agent Launcher - Creates workspace folders, generates Ed25519 identity,
+ * and launches VS Code instances for agents.
+ *
+ * Lifecycle modes:
+ * - Ephemeral: workspace in os.tmpdir(), auto-cleanup on completion
+ * - Persistent: workspace in project tree, survives restarts
  */
 
 export interface LaunchConfig {
@@ -15,6 +21,10 @@ export interface LaunchConfig {
 	role: string
 	workspace: string
 	autoLaunch: boolean
+	/** Agent capabilities (used in identity file) */
+	capabilities?: string[]
+	/** Lifecycle mode: ephemeral agents get temp dirs, persistent get project dirs */
+	lifecycle?: "ephemeral" | "persistent"
 }
 
 export interface ProjectPlan {
@@ -24,26 +34,46 @@ export interface ProjectPlan {
 		folders: Array<{ path: string; purpose: string }>
 	}
 	agents: LaunchConfig[]
+	/** Team ID for identity system */
+	teamId?: string
 }
 
 export class AgentLauncher {
+	private identityManager: AgentIdentityManager | null = null
+
 	/**
-	 * Launch all agents defined in project plan
+	 * Launch all agents defined in project plan.
+	 * Creates workspace folders, generates identity keypairs, then launches.
 	 */
 	async launchAll(projectRoot: string, planPath?: string): Promise<LaunchResult[]> {
 		// Load project plan
 		const plan = await this.loadPlan(projectRoot, planPath)
 
+		// Ensure shared directory structure
+		const sharedDir = path.join(projectRoot, ".society-agent")
+		await this.ensureDirectoryStructure(sharedDir)
+
+		// Create identity manager for keypair generation
+		this.identityManager = new AgentIdentityManager(sharedDir)
+
+		const teamId = plan.teamId || `team-${Date.now()}`
 		const results: LaunchResult[] = []
 
-		// Launch each agent that has autoLaunch: true
+		// Phase 1: Create all folders + identities before launching anything
 		for (const agent of plan.agents) {
 			if (!agent.autoLaunch) {
 				console.log(`[AgentLauncher] Skipping ${agent.agentId} (autoLaunch: false)`)
 				continue
 			}
 
-			const result = await this.launchAgent(projectRoot, agent)
+			await this.prepareAgent(projectRoot, sharedDir, agent, teamId)
+		}
+
+		// Phase 2: Launch VS Code windows
+		for (const agent of plan.agents) {
+			if (!agent.autoLaunch) continue
+
+			const result = await this.launchAgent(projectRoot, agent, sharedDir)
 			results.push(result)
 
 			// Delay between launches to avoid conflicts
@@ -54,15 +84,76 @@ export class AgentLauncher {
 	}
 
 	/**
-	 * Launch a single agent in its workspace
+	 * Ensure .society-agent/ has the required subdirectories
 	 */
-	async launchAgent(projectRoot: string, agent: LaunchConfig): Promise<LaunchResult> {
+	private async ensureDirectoryStructure(sharedDir: string): Promise<void> {
+		const dirs = [
+			sharedDir,
+			path.join(sharedDir, "agents"),
+			path.join(sharedDir, "keys"),
+			path.join(sharedDir, "inbox"),
+			path.join(sharedDir, "attachments"),
+			path.join(sharedDir, "logs"),
+		]
+
+		for (const dir of dirs) {
+			await fs.mkdir(dir, { recursive: true })
+		}
+
+		console.log(`[AgentLauncher] Directory structure ready at ${sharedDir}`)
+	}
+
+	/**
+	 * Prepare agent: create workspace folder, generate identity, create inbox
+	 */
+	private async prepareAgent(
+		projectRoot: string,
+		sharedDir: string,
+		agent: LaunchConfig,
+		teamId: string,
+	): Promise<void> {
+		const workspacePath = path.join(projectRoot, agent.workspace)
+
+		// Create workspace folder (no longer fails if missing!)
+		await fs.mkdir(workspacePath, { recursive: true })
+		console.log(`[AgentLauncher] Created workspace: ${workspacePath}`)
+
+		// Create inbox directory for this agent
+		const inboxDir = path.join(sharedDir, "inbox", agent.agentId)
+		await fs.mkdir(inboxDir, { recursive: true })
+
+		// Generate Ed25519 identity (keypair + identity.json)
+		if (this.identityManager) {
+			const { publicKeyPem } = await this.identityManager.createAgentIdentity(
+				agent.agentId,
+				agent.role,
+				agent.capabilities || [],
+				teamId,
+				agent.workspace,
+				agent.role, // domain defaults to role
+			)
+
+			// Register public key so other agents can verify
+			await this.identityManager.registerPublicKey(agent.agentId, publicKeyPem)
+
+			console.log(`[AgentLauncher] Identity created for ${agent.agentId} (Ed25519)`)
+		}
+
+		// Create README with agent context
+		await this.createAgentReadme(workspacePath, agent)
+	}
+
+	/**
+	 * Launch a single agent in its workspace.
+	 * Sets SOCIETY_AGENT_IDENTITY env var so extension.ts picks up the identity.
+	 */
+	async launchAgent(projectRoot: string, agent: LaunchConfig, sharedDir?: string): Promise<LaunchResult> {
 		const workspacePath = path.join(projectRoot, agent.workspace)
 
 		console.log(`[AgentLauncher] Launching ${agent.agentId} in ${workspacePath}`)
 
 		try {
-			// Check if folder exists
+			// Verify workspace exists
 			const exists = await fs
 				.stat(workspacePath)
 				.then(() => true)
@@ -76,8 +167,19 @@ export class AgentLauncher {
 				}
 			}
 
-			// Create README with agent context if it doesn't exist
-			await this.createAgentReadme(workspacePath, agent)
+			// Build identity path for this agent
+			const resolvedSharedDir = sharedDir || path.join(projectRoot, ".society-agent")
+			const identityPath = path.join(resolvedSharedDir, "agents", agent.agentId, "identity.json")
+
+			// Check identity file exists
+			const identityExists = await fs
+				.stat(identityPath)
+				.then(() => true)
+				.catch(() => false)
+
+			if (!identityExists) {
+				console.warn(`[AgentLauncher] No identity file for ${agent.agentId} — launching without identity`)
+			}
 
 			// kilocode_change start - Launch with extension dev mode if in development
 			const isDevelopment = process.env.VSCODE_DEBUG_MODE === "true" || process.env.NODE_ENV === "development"
@@ -97,9 +199,13 @@ export class AgentLauncher {
 				cwd: projectRoot,
 				env: {
 					...process.env,
-					// Pass agent info as environment variables (VS Code can read these)
+					// Identity file path — extension.ts reads this on startup
+					SOCIETY_AGENT_IDENTITY: identityExists ? identityPath : "",
+					// Legacy env vars (backward compat)
 					SOCIETY_AGENT_ID: agent.agentId,
 					SOCIETY_AGENT_ROLE: agent.role,
+					// Shared dir for registry/inbox/keys
+					SOCIETY_AGENT_SHARED_DIR: resolvedSharedDir,
 				},
 			})
 
@@ -107,6 +213,7 @@ export class AgentLauncher {
 				agentId: agent.agentId,
 				success: true,
 				workspace: workspacePath,
+				identityPath: identityExists ? identityPath : undefined,
 			}
 		} catch (error) {
 			return {
@@ -120,20 +227,34 @@ export class AgentLauncher {
 	/**
 	 * Launch agents with custom VS Code executable path
 	 */
-	async launchAgentCustom(projectRoot: string, agent: LaunchConfig, vscodePath: string): Promise<LaunchResult> {
+	async launchAgentCustom(
+		projectRoot: string,
+		agent: LaunchConfig,
+		vscodePath: string,
+		sharedDir?: string,
+	): Promise<LaunchResult> {
 		const workspacePath = path.join(projectRoot, agent.workspace)
+		const resolvedSharedDir = sharedDir || path.join(projectRoot, ".society-agent")
+		const identityPath = path.join(resolvedSharedDir, "agents", agent.agentId, "identity.json")
 
 		console.log(`[AgentLauncher] Launching ${agent.agentId} with custom VS Code: ${vscodePath}`)
 
 		try {
 			const command = `"${vscodePath}" "${workspacePath}"`
 
+			const identityExists = await fs
+				.stat(identityPath)
+				.then(() => true)
+				.catch(() => false)
+
 			await exec(command, {
 				cwd: projectRoot,
 				env: {
 					...process.env,
+					SOCIETY_AGENT_IDENTITY: identityExists ? identityPath : "",
 					SOCIETY_AGENT_ID: agent.agentId,
 					SOCIETY_AGENT_ROLE: agent.role,
+					SOCIETY_AGENT_SHARED_DIR: resolvedSharedDir,
 				},
 			})
 
@@ -141,6 +262,7 @@ export class AgentLauncher {
 				agentId: agent.agentId,
 				success: true,
 				workspace: workspacePath,
+				identityPath: identityExists ? identityPath : undefined,
 			}
 		} catch (error) {
 			return {
@@ -154,12 +276,19 @@ export class AgentLauncher {
 	/**
 	 * Launch agents in new window (not reuse existing)
 	 */
-	async launchAgentNewWindow(projectRoot: string, agent: LaunchConfig): Promise<LaunchResult> {
+	async launchAgentNewWindow(projectRoot: string, agent: LaunchConfig, sharedDir?: string): Promise<LaunchResult> {
 		const workspacePath = path.join(projectRoot, agent.workspace)
+		const resolvedSharedDir = sharedDir || path.join(projectRoot, ".society-agent")
+		const identityPath = path.join(resolvedSharedDir, "agents", agent.agentId, "identity.json")
 
 		console.log(`[AgentLauncher] Launching ${agent.agentId} in new window`)
 
 		try {
+			const identityExists = await fs
+				.stat(identityPath)
+				.then(() => true)
+				.catch(() => false)
+
 			// --new-window flag forces new VS Code window
 			const command = `code --new-window "${workspacePath}"`
 
@@ -167,8 +296,10 @@ export class AgentLauncher {
 				cwd: projectRoot,
 				env: {
 					...process.env,
+					SOCIETY_AGENT_IDENTITY: identityExists ? identityPath : "",
 					SOCIETY_AGENT_ID: agent.agentId,
 					SOCIETY_AGENT_ROLE: agent.role,
+					SOCIETY_AGENT_SHARED_DIR: resolvedSharedDir,
 				},
 			})
 
@@ -176,6 +307,7 @@ export class AgentLauncher {
 				agentId: agent.agentId,
 				success: true,
 				workspace: workspacePath,
+				identityPath: identityExists ? identityPath : undefined,
 			}
 		} catch (error) {
 			return {
@@ -201,7 +333,7 @@ export class AgentLauncher {
 		if (exists) return // Don't overwrite existing README
 
 		const capabilities = (agent as any).capabilities || [] // kilocode_change
-		const content = `# ${agent.agentId} Workspace
+	const content = `# ${agent.agentId} Workspace
 
 **Role**: ${agent.role}  
 **Capabilities**: ${Array.isArray(capabilities) ? capabilities.join(", ") : "N/A"}
@@ -310,26 +442,45 @@ This workspace starts empty. You'll create files and folders as needed based on 
 		const plan = await this.loadPlan(projectRoot)
 		const agentsToLaunch = plan.agents.filter((a) => a.autoLaunch)
 
+		// Ensure shared directory structure
+		const sharedDir = path.join(projectRoot, ".society-agent")
+		await this.ensureDirectoryStructure(sharedDir)
+		this.identityManager = new AgentIdentityManager(sharedDir)
+
+		const teamId = plan.teamId || `team-${Date.now()}`
+
 		onProgress({
 			type: "start",
 			total: agentsToLaunch.length,
-			message: `Launching ${agentsToLaunch.length} agents...`,
+			message: `Preparing ${agentsToLaunch.length} agents (folders + identity)...`,
+		})
+
+		// Phase 1: Prepare all agents (create folders + identity)
+		for (const agent of agentsToLaunch) {
+			await this.prepareAgent(projectRoot, sharedDir, agent, teamId)
+		}
+
+		onProgress({
+			type: "progress",
+			total: agentsToLaunch.length,
+			message: `All identities created. Launching VS Code windows...`,
 		})
 
 		const results: LaunchResult[] = []
 
+		// Phase 2: Launch VS Code windows
 		for (let i = 0; i < agentsToLaunch.length; i++) {
 			const agent = agentsToLaunch[i]
-			if (!agent) continue // kilocode_change - type safety
+		if (!agent) continue // kilocode_change - type safety
 
-			onProgress({
+		onProgress({
 				type: "progress", // kilocode_change - ProgressUpdate requires type field
 				total: agentsToLaunch.length,
 				agentId: agent.agentId,
 				message: `Launching ${agent.agentId}...`,
 			})
 
-			const result = await this.launchAgent(projectRoot, agent)
+			const result = await this.launchAgent(projectRoot, agent, sharedDir)
 			results.push(result)
 
 			if (result.success) {
@@ -364,12 +515,37 @@ This workspace starts empty. You'll create files and folders as needed based on 
 
 		return results
 	}
+
+	/**
+	 * Cleanup ephemeral agent workspaces after purpose completion
+	 */
+	async cleanupEphemeral(projectRoot: string, planPath?: string): Promise<string[]> {
+		const plan = await this.loadPlan(projectRoot, planPath)
+		const cleaned: string[] = []
+
+		for (const agent of plan.agents) {
+			if (agent.lifecycle !== "ephemeral") continue
+
+			const workspacePath = path.join(projectRoot, agent.workspace)
+
+			try {
+				await fs.rm(workspacePath, { recursive: true, force: true })
+				cleaned.push(agent.agentId)
+				console.log(`[AgentLauncher] Cleaned up ephemeral workspace for ${agent.agentId}`)
+			} catch (error) {
+				console.warn(`[AgentLauncher] Failed to clean up ${agent.agentId}: ${error}`)
+			}
+		}
+
+		return cleaned
+	}
 }
 
 export interface LaunchResult {
 	agentId: string
 	success: boolean
 	workspace?: string
+	identityPath?: string
 	error?: string
 }
 

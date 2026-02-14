@@ -3,11 +3,16 @@
  * AgentTeam - Manages lifecycle of agent teams for a purpose
  *
  * Creates supervisor and workers, coordinates communication, manages state.
+ * Supports two modes:
+ *   - In-process: ConversationAgent objects (LLM threads in same extension process)
+ *   - Multi-window: Launches real VS Code windows via AgentLauncher with Ed25519 identity
  */
 
 import { ConversationAgent, AgentIdentity } from "./conversation-agent"
 import { SupervisorAgent, Purpose, WorkerSpec } from "./supervisor-agent"
 import { ApiHandler } from "../../api"
+import { AgentIdentityManager } from "./agent-identity"
+import { AgentLauncher, LaunchConfig } from "./agent-launcher"
 
 // kilocode_change start
 export interface TeamMember {
@@ -20,6 +25,10 @@ export interface AgentTeamConfig {
 	purpose: Purpose
 	apiHandler: ApiHandler
 	workspacePath?: string
+	/** Shared directory for .society-agent/ (identity, inbox, keys) */
+	sharedDir?: string
+	/** Launch workers as separate VS Code windows (multi-window mode) */
+	multiWindow?: boolean
 	onMessage?: (agentId: string, content: string) => void
 	onStatusChange?: (agentId: string, status: string) => void
 	onProgressUpdate?: (progress: number) => void
@@ -42,6 +51,9 @@ export class AgentTeam {
 	private state: TeamState
 	private config: AgentTeamConfig
 	private apiHandler: ApiHandler
+	private identityManager: AgentIdentityManager | null = null
+	private launcher: AgentLauncher | null = null
+	private teamId: string
 	private onMessage?: (agentId: string, content: string) => void
 	private onStatusChange?: (agentId: string, status: string) => void
 	private onProgressUpdate?: (progress: number) => void
@@ -50,6 +62,17 @@ export class AgentTeam {
 	constructor(config: AgentTeamConfig) {
 		// kilocode_change start
 		this.config = config
+		this.teamId = `team-${Date.now()}`
+
+		// Set up identity system if sharedDir provided
+		if (config.sharedDir) {
+			this.identityManager = new AgentIdentityManager(config.sharedDir)
+		}
+
+		// Set up launcher for multi-window mode
+		if (config.multiWindow) {
+			this.launcher = new AgentLauncher()
+		}
 
 		const supervisorIdentity: AgentIdentity = {
 			id: `supervisor-${Date.now()}`,
@@ -127,9 +150,31 @@ export class AgentTeam {
 		// kilocode_change start
 		this.state.status = "forming"
 
+		// Generate Ed25519 identity for supervisor if identity manager available
+		if (this.identityManager) {
+			const supervisorId = this.state.supervisor.getIdentity().id
+			try {
+				const { publicKeyPem } = await this.identityManager.createAgentIdentity(
+					supervisorId,
+					"supervisor",
+					["analyze", "plan", "delegate", "monitor", "escalate"],
+					this.teamId,
+				)
+				await this.identityManager.registerPublicKey(supervisorId, publicKeyPem)
+				console.log(`[AgentTeam] Ed25519 identity created for supervisor ${supervisorId}`)
+			} catch (err) {
+				console.warn(`[AgentTeam] Failed to create supervisor identity:`, err)
+			}
+		}
+
 		// Supervisor analyzes purpose and determines team composition
 		await this.state.supervisor.analyzePurpose()
 		// Workers are created in the callback
+
+		// If multi-window mode, launch VS Code windows for workers
+		if (this.launcher && this.config.workspacePath) {
+			await this.launchWorkerWindows()
+		}
 
 		this.state.status = "executing"
 
@@ -139,19 +184,68 @@ export class AgentTeam {
 	}
 
 	/**
-	 * Create worker agents based on team specification
+	 * Launch worker agents as separate VS Code windows (multi-window mode)
+	 */
+	private async launchWorkerWindows(): Promise<void> {
+		// kilocode_change start
+		if (!this.launcher || !this.config.workspacePath) return
+
+		const projectRoot = this.config.workspacePath
+		const sharedDir = this.config.sharedDir || require("path").join(projectRoot, ".society-agent")
+
+		for (const [workerId, worker] of this.state.workers) {
+			const identity = worker.getIdentity()
+			const launchConfig: LaunchConfig = {
+				agentId: workerId,
+				role: identity.workerType || identity.role,
+				workspace: `workspaces/${workerId}`,
+				autoLaunch: true,
+				capabilities: identity.capabilities,
+				lifecycle: "ephemeral",
+			}
+
+			const result = await this.launcher.launchAgent(projectRoot, launchConfig, sharedDir)
+			if (result.success) {
+				console.log(`[AgentTeam] Launched VS Code window for ${workerId}`)
+			} else {
+				console.warn(`[AgentTeam] Failed to launch ${workerId}: ${result.error}`)
+			}
+
+			// Delay between launches
+			await new Promise((resolve) => setTimeout(resolve, 2000))
+		}
+		// kilocode_change end
+	}
+
+	/**
+	 * Create worker agents based on team specification.
+	 * In multi-window mode: generates Ed25519 identity + launches VS Code windows.
+	 * In in-process mode: creates ConversationAgent objects in same process.
 	 */
 	private createWorkers(teamSpec: WorkerSpec[]): void {
 		// kilocode_change start
 		for (const spec of teamSpec) {
 			for (let i = 0; i < spec.count; i++) {
 				const workerId = `${spec.workerType}-${Date.now()}-${i}`
+				const capabilities = this.getWorkerCapabilities(spec.workerType)
+
 				const workerIdentity: AgentIdentity = {
 					id: workerId,
 					role: "worker",
 					workerType: spec.workerType,
-					capabilities: this.getWorkerCapabilities(spec.workerType),
+					capabilities,
 					createdAt: Date.now(),
+				}
+
+				// Generate Ed25519 identity if identity manager available
+				if (this.identityManager) {
+					// Fire-and-forget: create identity files on disk
+					// (async but we don't await — workers can start before keys are written)
+					this.identityManager
+						.createAgentIdentity(workerId, spec.workerType, capabilities, this.teamId, undefined, spec.workerType)
+						.then(({ publicKeyPem }) => this.identityManager!.registerPublicKey(workerId, publicKeyPem))
+						.then(() => console.log(`[AgentTeam] Ed25519 identity created for ${workerId}`))
+						.catch((err) => console.warn(`[AgentTeam] Failed to create identity for ${workerId}:`, err))
 				}
 
 				const worker = new ConversationAgent({

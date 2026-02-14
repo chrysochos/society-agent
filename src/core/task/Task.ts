@@ -1960,11 +1960,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		// Check if task should use multi-agent system
 		// Only check on first iteration (not already a worker agent)
-		if (!this.agentMetadata && (await this.shouldUseSocietyAgent(userContent))) {
+		if (!this.agentMetadata && await this.shouldUseSocietyAgent(userContent)) {
 			const provider = this.providerRef.deref()
 			if (provider) {
 				provider.log(`[Society Agent] Task complexity requires multi-agent system`)
-
+				
 				// Initialize society manager if not already done
 				if (!this.societyManager) {
 					// kilocode_change start - Read working directory from settings
@@ -1972,7 +1972,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					const customWorkDir = config.get<string>("societyAgent.workingDirectory")
 					const workspacePath = customWorkDir || this.cwd
 					// kilocode_change end
-
+					
 					this.societyManager = new SocietyManager({
 						apiHandler: this.api,
 						workspacePath: workspacePath, // kilocode_change
@@ -1986,7 +1986,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								timestamp: Date.now(),
 							} as any)
 						},
-						onStatusChange: (purposeId: string, agentId: string, status: string, task: string) => {
+						onStatusChange: (purposeId: string, agentId: string, status: string, task?: string) => {
 							// Forward status updates to webview
 							provider.postMessageToWebview({
 								type: "society-agent-status" as any, // kilocode_change
@@ -2003,17 +2003,14 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				// Extract task text from userContent
 				const taskText = userContent
 					.filter((block): block is { type: "text"; text: string } => block.type === "text")
-					.map((block) => block.text)
+					.map(block => block.text)
 					.join("\n")
 
 				// Delegate to Society Agent system
 				provider.log(`[Society Agent] Delegating to multi-agent system: "${taskText.slice(0, 100)}..."`)
-
-				await this.say(
-					"text",
-					"🤖 **Multi-Agent Mode Activated**\n\nThis task requires specialized agents. Creating team...",
-				)
-
+				
+				await this.say("text", "🤖 **Multi-Agent Mode Activated**\n\nThis task requires specialized agents. Creating team...")
+				
 				try {
 					const result = await this.societyManager.startPurpose({
 						description: taskText,
@@ -2023,13 +2020,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 					await this.say("text", `✅ **Multi-Agent Execution Complete**\n\n${result}`)
 					await this.say("completion_result", result)
-
+					
 					return true
 				} catch (error) {
-					await this.say(
-						"error",
-						`Multi-agent execution failed: ${error instanceof Error ? error.message : String(error)}`,
-					)
+					await this.say("error", `Multi-agent execution failed: ${error instanceof Error ? error.message : String(error)}`)
 					return false
 				}
 			}

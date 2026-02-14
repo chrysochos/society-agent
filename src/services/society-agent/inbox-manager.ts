@@ -1,15 +1,15 @@
 // kilocode_change - new file
 /**
  * Inbox Manager - Persistent message queue for society agents
- *
+ * 
  * Messages are stored as files in .society-agent/inbox/<agent-id>/ until acknowledged.
  * This ensures guaranteed delivery regardless of agent state.
  */
 
-import * as fs from "fs/promises"
-import * as path from "path"
-import { AgentMessage } from "./types"
-import { MessageSecurity } from "./message-security" // kilocode_change
+import * as fs from 'fs/promises'
+import * as path from 'path'
+import { AgentMessage } from './types'
+import { MessageSecurity } from './message-security' // kilocode_change
 
 export interface InboxMessage extends AgentMessage {
 	/** File path where message is stored */
@@ -25,7 +25,7 @@ export class InboxManager {
 	private security: MessageSecurity // kilocode_change
 
 	constructor(projectRoot: string) {
-		this.inboxRoot = path.join(projectRoot, ".society-agent", "inbox")
+		this.inboxRoot = path.join(projectRoot, '.society-agent', 'inbox')
 		this.security = new MessageSecurity(projectRoot) // kilocode_change
 	}
 
@@ -51,7 +51,7 @@ export class InboxManager {
 		const fileName = `${message.id}.json`
 		const filePath = path.join(agentInbox, fileName)
 
-		await fs.writeFile(filePath, JSON.stringify(inboxMessage, null, 2), "utf-8")
+		await fs.writeFile(filePath, JSON.stringify(inboxMessage, null, 2), 'utf-8')
 		console.log(`[InboxManager] Queued message ${message.id} for ${agentId}`)
 	}
 
@@ -73,35 +73,30 @@ export class InboxManager {
 		const messages: InboxMessage[] = []
 
 		for (const file of files) {
-			if (!file.endsWith(".json")) continue
+			if (!file.endsWith('.json')) continue
 
 			const filePath = path.join(agentInbox, file)
 			try {
-				const content = await fs.readFile(filePath, "utf-8")
+				const content = await fs.readFile(filePath, 'utf-8')
 				const message: InboxMessage = JSON.parse(content)
-
+				
 				// kilocode_change start - Verify message signature
-				if (message.signature) {
-					// kilocode_change - signature is now in AgentMessage type
+				if (message.signature) { // kilocode_change - signature is now in AgentMessage type
 					const isValid = await this.security.verifyMessage(message, message.from)
 					if (!isValid) {
-						console.warn(
-							`[InboxManager] ⚠️ INVALID SIGNATURE on message ${file} from ${message.from} - REJECTED`,
-						)
+						console.warn(`[InboxManager] ⚠️ INVALID SIGNATURE on message ${file} from ${message.from} - REJECTED`)
 						// Move to quarantine instead of delivering
-						const quarantineDir = path.join(path.dirname(this.inboxRoot), "quarantine")
+						const quarantineDir = path.join(path.dirname(this.inboxRoot), 'quarantine')
 						await fs.mkdir(quarantineDir, { recursive: true })
 						await fs.rename(filePath, path.join(quarantineDir, file))
 						continue
 					}
 					console.log(`[InboxManager] ✅ Verified signature for message ${file} from ${message.from}`)
 				} else {
-					console.warn(
-						`[InboxManager] Message ${file} missing signature - accepting for backward compatibility`,
-					)
+					console.warn(`[InboxManager] Message ${file} missing signature - accepting for backward compatibility`)
 				}
 				// kilocode_change end
-
+				
 				message.filePath = filePath
 				messages.push(message)
 			} catch (error) {
@@ -110,7 +105,9 @@ export class InboxManager {
 		}
 
 		// Sort by timestamp (oldest first)
-		return messages.sort((a, b) => new Date(a.queuedAt).getTime() - new Date(b.queuedAt).getTime())
+		return messages.sort((a, b) => 
+			new Date(a.queuedAt).getTime() - new Date(b.queuedAt).getTime()
+		)
 	}
 
 	/**
@@ -118,7 +115,7 @@ export class InboxManager {
 	 */
 	async acknowledge(message: InboxMessage): Promise<void> {
 		if (!message.filePath) {
-			console.warn("[InboxManager] Cannot acknowledge message without filePath")
+			console.warn('[InboxManager] Cannot acknowledge message without filePath')
 			return
 		}
 
@@ -139,7 +136,7 @@ export class InboxManager {
 		message.attempts = (message.attempts || 0) + 1
 
 		try {
-			await fs.writeFile(message.filePath, JSON.stringify(message, null, 2), "utf-8")
+			await fs.writeFile(message.filePath, JSON.stringify(message, null, 2), 'utf-8')
 		} catch (error) {
 			console.error(`[InboxManager] Failed to update attempt count:`, error)
 		}

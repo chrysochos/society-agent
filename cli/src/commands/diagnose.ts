@@ -90,10 +90,10 @@ export function createDiagnoseCommand(): Command {
 					for (const [agentId, agent] of agents) {
 						const agentData = agent as any // eslint-disable-line @typescript-eslint/no-explicit-any -- kilocode_change
 						const status = agentData.status || "unknown"
-						const lastSeen = agentData.lastHeartbeat
-							? new Date(agentData.lastHeartbeat as string).toLocaleTimeString()
-							: "never"
-						console.log(`     - ${agentId} (${agentData.role}) - ${status} - last seen: ${lastSeen}`)
+					const lastSeen = agentData.lastHeartbeat
+						? new Date(agentData.lastHeartbeat as string).toLocaleTimeString()
+						: "never"
+					console.log(`     - ${agentId} (${agentData.role}) - ${status} - last seen: ${lastSeen}`)
 					}
 				} else {
 					console.log("  ⚠️  No agents registered")

@@ -376,8 +376,7 @@ Respond with ONLY the JSON:`
 		await agent.assignTask(purpose.description)
 
 		// Wait for completion (poll status)
-		await new Promise<void>((resolve) => {
-			// kilocode_change - typed Promise
+		await new Promise<void>((resolve) => { // kilocode_change - typed Promise
 			const checkInterval = setInterval(() => {
 				if (agent.getState().status === "completed") {
 					clearInterval(checkInterval)
