@@ -634,18 +634,31 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 			return
 		}
 
-		// kilocode_change start - route to persistent agent if agentId specified
+		// kilocode_change start - route to persistent/project agent if agentId specified
 		if (agentId) {
-			const profile = agentStore.get(agentId)
-			if (!profile) {
-				res.status(404).json({ error: `Agent "${agentId}" not found` })
-				return
+			// Try project store first, then legacy store
+			const found = projectStore.findAgentProject(agentId)
+			let agent: ConversationAgent
+			let agentName: string
+			let agentProjectId: string | undefined
+
+			if (found) {
+				agent = getOrCreateProjectAgent(found.agent, found.project, apiKey)
+				projectStore.recordActivity(found.project.id, agentId)
+				agentName = found.agent.name
+				agentProjectId = found.project.id
+				log.info(`[${found.agent.name}@${found.project.name}] purpose: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
+			} else {
+				const profile = agentStore.get(agentId)
+				if (!profile) {
+					res.status(404).json({ error: `Agent "${agentId}" not found` })
+					return
+				}
+				agent = getOrCreateAgent(profile, apiKey)
+				agentStore.recordActivity(agentId)
+				agentName = profile.name
+				log.info(`[${profile.name}] handling: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
 			}
-
-			const agent = getOrCreateAgent(profile, apiKey)
-			agentStore.recordActivity(agentId)
-
-			log.info(`[${profile.name}] handling: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
 
 			const content = attachments && attachments.length > 0 ? attachments : description
 
@@ -653,8 +666,9 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 			for await (const chunk of agent.sendMessageStream(content)) {
 				fullResponse += chunk
 				io.emit("agent-message", {
-					agentId: profile.id,
-					agentName: profile.name,
+					agentId,
+					agentName,
+					projectId: agentProjectId,
 					message: chunk,
 					timestamp: Date.now(),
 					isStreaming: true,
@@ -662,28 +676,57 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 			}
 
 			io.emit("agent-message", {
-				agentId: profile.id,
-				agentName: profile.name,
+				agentId,
+				agentName,
+				projectId: agentProjectId,
 				message: "",
 				timestamp: Date.now(),
 				isStreaming: false,
 				isDone: true,
 			})
 
+			// kilocode_change start - Auto-extract and create files from project agent responses
+			let filesCreated = 0
+			if (agentProjectId && fullResponse.length > 0) {
+				try {
+					filesCreated = await agent.extractAndCreateFiles(fullResponse)
+					if (filesCreated > 0) {
+						log.info(`[${agentName}] Auto-created ${filesCreated} files from chat response`)
+						io.emit("system-event", {
+							type: "files-created",
+							agentId,
+							projectId: agentProjectId,
+							count: filesCreated,
+							message: `${agentName} created ${filesCreated} file(s) in project folder`,
+							timestamp: Date.now(),
+						})
+					}
+				} catch (err) {
+					log.warn(`[${agentName}] File extraction failed:`, err)
+				}
+			}
+			// kilocode_change end
+
 			// Update memory periodically (every 10 messages)
 			const history = agent.getHistory()
 			if (history.length > 0 && history.length % 10 === 0) {
 				const lastMessages = history.slice(-6).map((m: any) => `${m.role}: ${typeof m.content === 'string' ? m.content.substring(0, 200) : '[structured]'}`).join('\n')
-				agentStore.updateMemory(agentId, `Recent context (${history.length} messages):\n${lastMessages}`)
+				if (found) {
+					projectStore.updateAgentMemory(found.project.id, agentId, `Recent context (${history.length} messages):\n${lastMessages}`)
+				} else {
+					agentStore.updateMemory(agentId, `Recent context (${history.length} messages):\n${lastMessages}`)
+				}
 			}
 
 			res.json({
 				type: "chat",
-				agentId: profile.id,
-				agentName: profile.name,
+				agentId,
+				agentName,
+				projectId: agentProjectId,
 				response: fullResponse,
 				status: "completed",
 				historyLength: history.length,
+				filesCreated, // kilocode_change - report files created
 			})
 			return
 		}
@@ -1493,8 +1536,24 @@ function getOrCreateProjectAgent(
 		},
 	} as any
 
-	// Build system prompt with project + agent context
+	// Resolve project workspace path
+	const projectDir = projectStore.agentHomeDir(project.id, agentConfig.id)
+
+	// Build system prompt with project + agent context + file creation instructions
 	let fullPrompt = agentConfig.systemPrompt
+	// kilocode_change start - Tell the agent where its project folder is so it creates files there
+	fullPrompt += `\n\n## File Creation Instructions
+You are working in project "${project.name}". Your project folder is: ${projectDir}
+When asked to create files, code, or any project artifacts, ALWAYS include the files in your response using this JSON format:
+\`\`\`json
+{
+  "files": [
+    {"name": "relative/path/filename.ext", "content": "full file content here"}
+  ]
+}
+\`\`\`
+This ensures files are automatically saved in your project folder. Do NOT just describe the files — include the actual content so they can be created.`
+	// kilocode_change end
 	if (project.knowledge) {
 		fullPrompt += `\n\n## Project Knowledge (${project.name})\n${project.knowledge}`
 	}
@@ -1514,6 +1573,7 @@ function getOrCreateProjectAgent(
 		},
 		apiHandler,
 		systemPrompt: fullPrompt,
+		workspacePath: projectDir, // kilocode_change - files go to project folder
 		onMessage: (message) => {
 			io.emit("agent-message", {
 				agentId: agentConfig.id,
@@ -1523,7 +1583,7 @@ function getOrCreateProjectAgent(
 			})
 		},
 		onFileCreated: (relativePath, fullPath, size) => {
-			log.info(`[${agentConfig.name}] File created: ${fullPath} (${size} bytes)`)
+			log.info(`[${agentConfig.name}@${project.name}] File created: ${fullPath} (${size} bytes)`)
 			io.emit("file-created", {
 				agentId: agentConfig.id,
 				projectId: project.id,
@@ -1536,7 +1596,7 @@ function getOrCreateProjectAgent(
 	})
 
 	activeAgents.set(agentConfig.id, agent)
-	log.info(`Activated project agent: ${agentConfig.name} in ${project.name}`)
+	log.info(`Activated project agent: ${agentConfig.name} in ${project.name} (workspace: ${projectDir})`)
 	return agent
 }
 
@@ -1593,6 +1653,28 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 				isDone: true,
 			})
 
+			// kilocode_change start - Auto-extract and create files from project agent responses
+			let filesCreated = 0
+			if (fullResponse.length > 0) {
+				try {
+					filesCreated = await agent.extractAndCreateFiles(fullResponse)
+					if (filesCreated > 0) {
+						log.info(`[${found.agent.name}@${found.project.name}] Auto-created ${filesCreated} files from chat`)
+						io.emit("system-event", {
+							type: "files-created",
+							agentId: found.agent.id,
+							projectId: found.project.id,
+							count: filesCreated,
+							message: `${found.agent.name} created ${filesCreated} file(s) in project folder`,
+							timestamp: Date.now(),
+						})
+					}
+				} catch (err) {
+					log.warn(`[${found.agent.name}] File extraction failed:`, err)
+				}
+			}
+			// kilocode_change end
+
 			const history = agent.getHistory()
 			if (history.length > 0 && history.length % 10 === 0) {
 				const lastMessages = history.slice(-6).map((m: any) =>
@@ -1610,6 +1692,7 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 				response: fullResponse,
 				status: "completed",
 				historyLength: history.length,
+				filesCreated, // kilocode_change - report files created
 			})
 			return
 		}

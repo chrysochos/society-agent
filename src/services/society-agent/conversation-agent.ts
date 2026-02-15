@@ -525,6 +525,65 @@ Respond with the complete JSON now:`
 		// kilocode_change end
 	}
 
+	// kilocode_change start - Extract files from a chat response and create them
+	/**
+	 * After a chat response, scan for file blocks and create them in the workspace.
+	 * Detects:
+	 *   1. JSON { "files": [...] } blocks
+	 *   2. Markdown code blocks with filenames (```filename or ```lang // filename)
+	 * Returns the number of files created.
+	 */
+	async extractAndCreateFiles(response: string): Promise<number> {
+		let filesCreated = 0
+
+		// Strategy 1: Look for JSON {"files": [...]} block (possibly inside ```json code block)
+		// First strip markdown code block wrapping if present
+		let searchText = response
+		const codeBlockJsonMatch = response.match(/```json\s*\n([\s\S]*?)```/)
+		if (codeBlockJsonMatch) {
+			searchText = codeBlockJsonMatch[1]
+		}
+		const jsonMatch = searchText.match(/\{[\s\S]*?"files"\s*:\s*\[[\s\S]*\]\s*\}/)
+		if (jsonMatch) {
+			try {
+				const parsed = JSON.parse(jsonMatch[0])
+				if (Array.isArray(parsed.files) && parsed.files.length > 0) {
+					for (const file of parsed.files) {
+						const name = file.name || file.path || file.filename
+						if (name && file.content) {
+							await this.createFile(name, file.content)
+							filesCreated++
+						}
+					}
+					if (filesCreated > 0) return filesCreated
+				}
+			} catch {
+				// Not valid JSON, try other strategies
+			}
+		}
+
+		// Strategy 2: Look for markdown code blocks with filenames
+		// Patterns: ```filename.ext, ```lang:filename.ext, <!-- filename.ext -->
+		const codeBlockRegex = /(?:<!--\s*(\S+\.\w+)\s*-->|#+\s*`?(\S+\.\w+)`?)\s*\n```[\w]*\n([\s\S]*?)```/g
+		let match
+		while ((match = codeBlockRegex.exec(response)) !== null) {
+			const filename = match[1] || match[2]
+			const content = match[3].trim()
+			if (filename && content) {
+				await this.createFile(filename, content)
+				filesCreated++
+			}
+		}
+
+		return filesCreated
+	}
+	// kilocode_change end
+
+	/**
+	 * Get the workspace path for this agent
+	 */
+	getWorkspacePath(): string { return this.workspacePath } // kilocode_change
+
 	/**
 	 * Create a file in the workspace
 	 */
