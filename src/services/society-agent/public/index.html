@@ -52,18 +52,54 @@
   .agent-card .status-badge.completed { background: rgba(63,185,80,0.2); color: var(--green); }
   .agent-card .status-badge.error { background: rgba(248,81,73,0.2); color: var(--red); }
 
+  /* Sidebar resizable */
+  .sidebar { min-width: 180px; max-width: 600px; position: relative; }
+  .sidebar-resize { position: absolute; top: 0; right: -3px; width: 6px; height: 100%;
+    cursor: col-resize; z-index: 10; }
+  .sidebar-resize:hover, .sidebar-resize.active { background: var(--accent); opacity: 0.5; }
+
   /* File tree */
-  .file-tree { font-size: 12px; }
-  .file-item { padding: 4px 16px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
-  .file-item:hover { background: rgba(88,166,255,0.08); }
-  .file-item.dir { color: var(--accent); font-weight: 500; }
-  .file-item.file { color: var(--text); padding-left: 28px; }
-  .file-item .size { color: var(--muted); font-size: 10px; margin-left: auto; }
-  .file-item .icon { width: 14px; text-align: center; }
-  .file-item .del-btn { color: var(--muted); cursor: pointer; margin-left: 6px; font-size: 11px;
-    opacity: 0; transition: opacity 0.15s; }
-  .file-item:hover .del-btn { opacity: 1; }
-  .file-item .del-btn:hover { color: var(--red); }
+  .file-tree { font-size: 12px; user-select: none; overflow-y: auto; flex: 1; }
+  .tree-node { }
+  .tree-row { display: flex; align-items: center; gap: 4px; padding: 3px 8px; cursor: pointer;
+    white-space: nowrap; border: 2px solid transparent; transition: background 0.1s; }
+  .tree-row:hover { background: rgba(88,166,255,0.08); }
+  .tree-row.selected { background: rgba(88,166,255,0.15); }
+  .tree-row.drag-over { border-color: var(--accent); background: rgba(88,166,255,0.12); }
+  .tree-row .chevron { width: 16px; text-align: center; font-size: 10px; color: var(--muted);
+    transition: transform 0.15s; flex-shrink: 0; }
+  .tree-row .chevron.open { transform: rotate(90deg); }
+  .tree-row .chevron.empty { visibility: hidden; }
+  .tree-row .icon { width: 16px; text-align: center; flex-shrink: 0; font-size: 13px; }
+  .tree-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+  .tree-row .size { color: var(--muted); font-size: 10px; margin-left: auto; flex-shrink: 0; }
+  .tree-row .actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; margin-left: 4px; }
+  .tree-row:hover .actions { opacity: 1; }
+  .tree-row .act-btn { background: none; border: none; color: var(--muted); cursor: pointer;
+    font-size: 11px; padding: 0 2px; line-height: 1; }
+  .tree-row .act-btn:hover { color: var(--text); }
+  .tree-children { }
+  .tree-children.collapsed { display: none; }
+  .tree-row.dir-row .name { color: var(--accent); font-weight: 500; }
+  /* Drag ghost */
+  .drag-ghost { position: fixed; pointer-events: none; z-index: 1000; background: var(--surface);
+    border: 1px solid var(--accent); border-radius: 4px; padding: 3px 10px; font-size: 12px;
+    color: var(--text); opacity: 0.9; }
+
+  /* Context menu */
+  .ctx-menu { position: fixed; z-index: 200; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 0; min-width: 160px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+  .ctx-menu .ctx-item { padding: 6px 14px; font-size: 12px; cursor: pointer; display: flex;
+    align-items: center; gap: 8px; }
+  .ctx-menu .ctx-item:hover { background: rgba(88,166,255,0.12); }
+  .ctx-menu .ctx-sep { height: 1px; background: var(--border); margin: 4px 0; }
+  .ctx-menu .ctx-item .shortcut { margin-left: auto; color: var(--muted); font-size: 10px; }
+  .ctx-menu .ctx-item.danger { color: var(--red); }
+  .ctx-menu .ctx-item.danger:hover { background: rgba(248,81,73,0.12); }
+
+  /* Inline rename input */
+  .rename-input { background: var(--bg); border: 1px solid var(--accent); color: var(--text);
+    font-size: 12px; padding: 1px 4px; border-radius: 3px; outline: none; width: 100%; font-family: inherit; }
 
   /* Upload area */
   .upload-area { border: 2px dashed var(--border); border-radius: 8px; padding: 16px; margin: 8px 12px;
@@ -205,33 +241,36 @@
 </header>
 
 <div class="main">
-  <div class="sidebar">
+  <div class="sidebar" id="sidebar" style="width:280px">
+    <div class="sidebar-resize" id="sidebarResize"></div>
+    <!-- System Info -->
     <h2>System</h2>
     <div class="stat-row"><span class="label">Status</span><span class="value" id="sysStatus">-</span></div>
     <div class="stat-row"><span class="label">Messages</span><span class="value" id="msgCount">0</span></div>
     <div class="stat-row"><span class="label">API Key</span><span class="value" id="apiKeyStatus">-</span></div>
-
-    <h2 style="margin-top:16px">Workspace</h2>
-    <div class="stat-row"><span class="label">Output Dir</span><span class="value expandable" id="outputDir" title="" onclick="this.classList.toggle('expanded')">projects/</span></div>
-    <div style="padding:2px 16px"><button class="btn btn-secondary" onclick="changeOutputDir()" style="font-size:10px;padding:2px 8px;width:100%">&#9998; Change Output Dir</button></div>
+    <div class="stat-row"><span class="label">Output</span><span class="value expandable" id="outputDir" title="" onclick="this.classList.toggle('expanded')">projects/</span></div>
     <div class="stat-row"><span class="label">Files</span><span class="value" id="fileCount">0</span></div>
 
-    <h2 style="margin-top:16px">Files <button class="btn btn-secondary" onclick="refreshFiles()" style="font-size:10px;padding:2px 8px;margin-left:8px">&#8635;</button></h2>
-    <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
-      &#128228; Drop files here or click to upload
+    <!-- File Explorer -->
+    <h2 style="margin-top:12px;display:flex;align-items:center;gap:6px">
+      Explorer
+      <span style="flex:1"></span>
+      <button class="act-btn" onclick="promptNewFileInTree()" title="New File" style="font-size:14px;background:none;border:none;color:var(--muted);cursor:pointer">&#128196;+</button>
+      <button class="act-btn" onclick="promptNewFolderInTree()" title="New Folder" style="font-size:14px;background:none;border:none;color:var(--muted);cursor:pointer">&#128193;+</button>
+      <button class="act-btn" onclick="refreshFiles()" title="Refresh" style="font-size:13px;background:none;border:none;color:var(--muted);cursor:pointer">&#8635;</button>
+    </h2>
+    <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()" style="margin:4px 8px;padding:8px">
+      &#128228; Drop files or click
       <input type="file" id="fileInput" multiple onchange="handleFileSelect(event)">
-    </div>
-    <div class="upload-row">
-      <button class="btn btn-secondary" onclick="promptNewFolder()">&#128193; New Folder</button>
-      <button class="btn btn-secondary" onclick="promptPasteFile()">&#128203; Paste Text</button>
     </div>
     <div id="fileTree" class="file-tree">
       <div style="padding:16px;color:var(--muted);font-size:12px">No files yet</div>
     </div>
 
-    <h2 style="margin-top:16px">Agents</h2>
+    <!-- Agents -->
+    <h2 style="margin-top:8px">Agents</h2>
     <div id="agentList">
-      <div style="padding:16px;color:var(--muted);font-size:12px">No active agents</div>
+      <div style="padding:8px 16px;color:var(--muted);font-size:12px">No active agents</div>
     </div>
   </div>
 
@@ -570,146 +609,387 @@ async function refreshAgents() {
   } catch (e) {}
 }
 
+// ============================================================================
+// File Explorer - Tree with expand/collapse, drag-drop, context menu
+// ============================================================================
+
+let fileData = [];       // flat list from server
+let expandedDirs = new Set(['']);  // track open folders ('' = root always open)
+let selectedPath = null; // currently selected item
+let dragSrc = null;      // path being dragged
+
+// Build nested tree from flat file list
+function buildTree(files) {
+  const root = { children: {}, path: '', isDir: true };
+  for (const f of files) {
+    const parts = f.path.split('/');
+    let node = root;
+    let pathSoFar = '';
+    for (let i = 0; i < parts.length; i++) {
+      pathSoFar = pathSoFar ? pathSoFar + '/' + parts[i] : parts[i];
+      if (!node.children[parts[i]]) {
+        node.children[parts[i]] = {
+          name: parts[i], path: pathSoFar,
+          isDir: i < parts.length - 1 || f.isDir,
+          size: f.isDir ? 0 : f.size,
+          children: {},
+        };
+      }
+      node = node.children[parts[i]];
+    }
+    if (!f.isDir) { node.size = f.size; node.isDir = false; }
+  }
+  return root;
+}
+
+function fileIcon(name, isDir) {
+  if (isDir) return '&#128193;';
+  const ext = name.split('.').pop().toLowerCase();
+  const icons = {
+    js:'&#128312;', ts:'&#128309;', py:'&#128013;', html:'&#127760;', css:'&#127912;',
+    json:'&#123;&#125;', md:'&#128221;', txt:'&#128196;', sh:'&#9000;', sql:'&#128451;',
+    yaml:'&#9881;', yml:'&#9881;', xml:'&#128220;', csv:'&#128202;', log:'&#128203;',
+    png:'&#127912;', jpg:'&#127912;', jpeg:'&#127912;', gif:'&#127912;', svg:'&#127912;',
+    pdf:'&#128213;', zip:'&#128230;', tar:'&#128230;', gz:'&#128230;',
+  };
+  return icons[ext] || '&#128196;';
+}
+
+function renderTree(node, depth = 0) {
+  const entries = Object.values(node.children);
+  // Sort: dirs first, then alpha
+  entries.sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  return entries.map(e => {
+    const indent = depth * 16;
+    const isOpen = expandedDirs.has(e.path);
+    const sel = selectedPath === e.path ? ' selected' : '';
+
+    if (e.isDir) {
+      const hasKids = Object.keys(e.children).length > 0;
+      const chevCls = hasKids ? (isOpen ? 'chevron open' : 'chevron') : 'chevron empty';
+      let html = `<div class="tree-node" data-path="${escapeHtml(e.path)}" data-dir="true">
+        <div class="tree-row dir-row${sel}" style="padding-left:${indent + 8}px"
+             draggable="true" data-path="${escapeHtml(e.path)}" data-dir="true">
+          <span class="${chevCls}">&#9654;</span>
+          <span class="icon">${fileIcon(e.name, true)}</span>
+          <span class="name">${escapeHtml(e.name)}</span>
+          <span class="actions">
+            <button class="act-btn" title="New file here" onclick="event.stopPropagation();promptNewFileInDir('${escapeAttr(e.path)}')">+&#128196;</button>
+            <button class="act-btn" title="New folder here" onclick="event.stopPropagation();promptNewFolderInDir('${escapeAttr(e.path)}')">+&#128193;</button>
+          </span>
+        </div>
+        <div class="tree-children ${isOpen ? '' : 'collapsed'}">
+          ${hasKids ? renderTree(e, depth + 1) : ''}
+        </div>
+      </div>`;
+      return html;
+    } else {
+      return `<div class="tree-node" data-path="${escapeHtml(e.path)}">
+        <div class="tree-row${sel}" style="padding-left:${indent + 24}px"
+             draggable="true" data-path="${escapeHtml(e.path)}" data-dir="false">
+          <span class="icon">${fileIcon(e.name, false)}</span>
+          <span class="name">${escapeHtml(e.name)}</span>
+          <span class="size">${formatSize(e.size)}</span>
+        </div>
+      </div>`;
+    }
+  }).join('');
+}
+
 async function refreshFiles() {
   try {
     const res = await fetch(`${API}/api/workspace/files`);
     const data = await res.json();
+    fileData = data.files || [];
     document.getElementById('fileCount').textContent = `${data.totalFiles} files, ${data.totalDirs} dirs`;
 
     const tree = document.getElementById('fileTree');
-    if (!data.files || data.files.length === 0) {
+    if (fileData.length === 0) {
       tree.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">No files yet &mdash; ask the agent to create something</div>';
       return;
     }
 
-    tree.innerHTML = data.files.map(f => {
-      if (f.isDir) {
-        return `<div class="file-item dir"><span class="icon">&#128193;</span>${f.path}<span class="del-btn" onclick="event.stopPropagation();deleteFile('${escapeAttr(f.path)}',true)" title="Delete folder">&#10005;</span></div>`;
-      } else {
-        return `<div class="file-item file" onclick="viewFile('${escapeAttr(f.path)}')"><span class="icon">&#128196;</span>${f.path.split('/').pop()}<span class="size">${formatSize(f.size)}</span><span class="del-btn" onclick="event.stopPropagation();deleteFile('${escapeAttr(f.path)}',false)" title="Delete file">&#10005;</span></div>`;
-      }
-    }).join('');
+    const root = buildTree(fileData);
+    tree.innerHTML = renderTree(root);
+    attachTreeHandlers();
   } catch (e) {
     addLog('warn', 'Failed to refresh files');
   }
 }
 
-async function viewFile(filePath) {
-  try {
-    const res = await fetch(`${API}/api/workspace/file?path=${encodeURIComponent(filePath)}`);
-    const data = await res.json();
-    if (!res.ok) { addLog('error', data.error); return; }
+function attachTreeHandlers() {
+  const tree = document.getElementById('fileTree');
 
-    // Show in overlay panel
-    let viewer = document.getElementById('fileViewer');
-    if (!viewer) {
-      viewer = document.createElement('div');
-      viewer.id = 'fileViewer';
-      viewer.className = 'file-viewer';
-      viewer.onclick = (e) => { if (e.target === viewer) closeFileViewer(); };
-      document.body.appendChild(viewer);
-    }
-    viewer.innerHTML = `
-      <div class="file-viewer-panel">
-        <div class="file-viewer-header">
-          <span class="title">&#128196; ${escapeHtml(filePath)}</span>
-          <span class="meta">${formatSize(data.size)}</span>
-          <button class="close-btn" onclick="closeFileViewer()" title="Close">&times;</button>
-        </div>
-        <div class="file-viewer-body"><pre>${escapeHtml(data.content)}</pre></div>
-      </div>`;
-    viewer.style.display = 'flex';
-  } catch (e) {
-    addLog('error', 'Failed to read file');
-  }
-}
+  // Click handlers
+  tree.addEventListener('click', (e) => {
+    const row = e.target.closest('.tree-row');
+    if (!row) return;
 
-function closeFileViewer() {
-  const v = document.getElementById('fileViewer');
-  if (v) v.style.display = 'none';
-}
+    const nodePath = row.dataset.path;
+    const isDir = row.dataset.dir === 'true';
 
-function formatSize(bytes) {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-}
-
-function escapeAttr(s) {
-  return s.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-}
-
-// ============================================================================
-// File Upload / Delete
-// ============================================================================
-
-// Drag and drop
-const uploadArea = document.getElementById('uploadArea');
-['dragenter', 'dragover'].forEach(ev => {
-  uploadArea.addEventListener(ev, (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
-});
-['dragleave', 'drop'].forEach(ev => {
-  uploadArea.addEventListener(ev, (e) => { e.preventDefault(); uploadArea.classList.remove('dragover'); });
-});
-uploadArea.addEventListener('drop', (e) => {
-  const files = e.dataTransfer.files;
-  if (files.length) uploadFiles(files);
-});
-
-function handleFileSelect(event) {
-  const files = event.target.files;
-  if (files.length) uploadFiles(files);
-  event.target.value = ''; // reset so same file can be selected again
-}
-
-async function uploadFiles(files, targetDir = '') {
-  for (const file of files) {
-    const filePath = targetDir ? `${targetDir}/${file.name}` : file.name;
-    addLog('info', `Uploading: ${filePath} (${formatSize(file.size)})...`);
-
-    try {
-      const content = await readFileAsBase64(file);
-      const res = await fetch(`${API}/api/workspace/file`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: filePath, content, encoding: 'base64' }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        addLog('info', `Uploaded: ${filePath} (${formatSize(data.size)})`);
-      } else {
-        addLog('error', `Upload failed: ${data.error}`);
+    // Toggle folder expand/collapse
+    if (isDir) {
+      const chevron = row.querySelector('.chevron');
+      if (chevron && !chevron.classList.contains('empty')) {
+        if (expandedDirs.has(nodePath)) {
+          expandedDirs.delete(nodePath);
+        } else {
+          expandedDirs.add(nodePath);
+        }
+        refreshFiles(); // re-render tree preserving state
+        return;
       }
-    } catch (e) {
-      addLog('error', `Upload error: ${e.message}`);
     }
-  }
-  refreshFiles();
+
+    // Select / view file
+    selectedPath = nodePath;
+    tree.querySelectorAll('.tree-row').forEach(r => r.classList.remove('selected'));
+    row.classList.add('selected');
+
+    if (!isDir) {
+      viewFile(nodePath);
+    }
+  });
+
+  // Double-click to rename
+  tree.addEventListener('dblclick', (e) => {
+    const row = e.target.closest('.tree-row');
+    if (!row) return;
+    e.preventDefault();
+    startRename(row.dataset.path, row.dataset.dir === 'true');
+  });
+
+  // Right-click context menu
+  tree.addEventListener('contextmenu', (e) => {
+    const row = e.target.closest('.tree-row');
+    if (!row) return;
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, row.dataset.path, row.dataset.dir === 'true');
+  });
+
+  // Drag-and-drop
+  tree.querySelectorAll('.tree-row[draggable]').forEach(row => {
+    row.addEventListener('dragstart', (e) => {
+      dragSrc = row.dataset.path;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', row.dataset.path);
+      // Custom ghost
+      const ghost = document.createElement('div');
+      ghost.className = 'drag-ghost';
+      ghost.textContent = row.dataset.path.split('/').pop();
+      document.body.appendChild(ghost);
+      e.dataTransfer.setDragImage(ghost, 0, 0);
+      setTimeout(() => ghost.remove(), 0);
+      row.style.opacity = '0.4';
+    });
+
+    row.addEventListener('dragend', () => {
+      dragSrc = null;
+      row.style.opacity = '';
+      tree.querySelectorAll('.tree-row.drag-over').forEach(r => r.classList.remove('drag-over'));
+    });
+
+    // Only dirs receive drops
+    if (row.dataset.dir === 'true') {
+      row.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        row.classList.add('drag-over');
+      });
+      row.addEventListener('dragleave', () => {
+        row.classList.remove('drag-over');
+      });
+      row.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        row.classList.remove('drag-over');
+        const from = e.dataTransfer.getData('text/plain');
+        const toDir = row.dataset.path;
+        if (!from || from === toDir) return;
+        // Don't drop into self
+        if (toDir.startsWith(from + '/')) return;
+        const fileName = from.split('/').pop();
+        const to = toDir + '/' + fileName;
+        await moveFile(from, to);
+      });
+    }
+  });
+
+  // Also allow drop on root (file tree container) — drop at root level
+  tree.addEventListener('dragover', (e) => {
+    if (e.target === tree) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    }
+  });
+  tree.addEventListener('drop', async (e) => {
+    if (e.target !== tree) return;
+    e.preventDefault();
+    const from = e.dataTransfer.getData('text/plain');
+    if (!from) return;
+    const fileName = from.split('/').pop();
+    await moveFile(from, fileName);
+  });
+
+  // Also support file upload drag-drop onto folder rows
+  tree.querySelectorAll('.tree-row[data-dir="true"]').forEach(row => {
+    row.addEventListener('dragover', (e) => {
+      // Check if it's an external file (not internal drag)
+      if (e.dataTransfer.types.includes('Files')) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        row.classList.add('drag-over');
+      }
+    });
+    row.addEventListener('drop', (e) => {
+      row.classList.remove('drag-over');
+      if (e.dataTransfer.files.length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        uploadFiles(e.dataTransfer.files, row.dataset.path);
+      }
+    });
+  });
 }
 
-function readFileAsBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      // Strip the data:...;base64, prefix
-      const b64 = reader.result.split(',')[1];
-      resolve(b64);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+// ============================================================================
+// Context Menu
+// ============================================================================
+
+function showContextMenu(x, y, filePath, isDir) {
+  hideContextMenu();
+  selectedPath = filePath;
+
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'ctxMenu';
+
+  const items = [];
+  if (isDir) {
+    items.push({ label: '&#128196;+ New File', action: () => promptNewFileInDir(filePath) });
+    items.push({ label: '&#128193;+ New Folder', action: () => promptNewFolderInDir(filePath) });
+    items.push({ type: 'sep' });
+    items.push({ label: '&#128228; Upload Here', action: () => uploadToDir(filePath) });
+    items.push({ type: 'sep' });
+  } else {
+    items.push({ label: '&#128065; View', action: () => viewFile(filePath) });
+    items.push({ type: 'sep' });
+  }
+  items.push({ label: '&#9998; Rename', action: () => startRename(filePath, isDir), shortcut: 'F2' });
+  items.push({ type: 'sep' });
+  items.push({ label: '&#128465; Delete', action: () => deleteFile(filePath, isDir), cls: 'danger', shortcut: 'Del' });
+
+  menu.innerHTML = items.map(it => {
+    if (it.type === 'sep') return '<div class="ctx-sep"></div>';
+    return `<div class="ctx-item ${it.cls || ''}" data-idx="${items.indexOf(it)}">${it.label}${it.shortcut ? `<span class="shortcut">${it.shortcut}</span>` : ''}</div>`;
+  }).join('');
+
+  // Attach click handlers
+  menu.querySelectorAll('.ctx-item').forEach(el => {
+    const idx = parseInt(el.dataset.idx);
+    el.addEventListener('click', () => { hideContextMenu(); items[idx].action(); });
   });
+
+  // Position (keep on screen)
+  document.body.appendChild(menu);
+  const rect = menu.getBoundingClientRect();
+  if (x + rect.width > window.innerWidth) x = window.innerWidth - rect.width - 8;
+  if (y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - 8;
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+
+  // Close on click outside
+  setTimeout(() => {
+    document.addEventListener('click', hideContextMenu, { once: true });
+    document.addEventListener('contextmenu', hideContextMenu, { once: true });
+  }, 0);
+}
+
+function hideContextMenu() {
+  const m = document.getElementById('ctxMenu');
+  if (m) m.remove();
+}
+
+// ============================================================================
+// Rename (inline editing)
+// ============================================================================
+
+function startRename(filePath, isDir) {
+  const tree = document.getElementById('fileTree');
+  const row = tree.querySelector(`.tree-row[data-path="${CSS.escape(filePath)}"]`);
+  if (!row) return;
+
+  const nameSpan = row.querySelector('.name');
+  const oldName = filePath.split('/').pop();
+  const origHTML = nameSpan.innerHTML;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'rename-input';
+  input.value = oldName;
+  nameSpan.innerHTML = '';
+  nameSpan.appendChild(input);
+  input.focus();
+  // Select name without extension for files
+  if (!isDir) {
+    const dotIdx = oldName.lastIndexOf('.');
+    input.setSelectionRange(0, dotIdx > 0 ? dotIdx : oldName.length);
+  } else {
+    input.select();
+  }
+
+  function finish(commit) {
+    const newName = input.value.trim();
+    nameSpan.innerHTML = origHTML;
+    if (commit && newName && newName !== oldName) {
+      const parentPath = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : '';
+      const newPath = parentPath ? parentPath + '/' + newName : newName;
+      moveFile(filePath, newPath);
+    }
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    e.stopPropagation();
+  });
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('click', (e) => e.stopPropagation());
+}
+
+// ============================================================================
+// File Operations (move, delete, upload, create)
+// ============================================================================
+
+async function moveFile(from, to) {
+  if (from === to) return;
+  try {
+    const res = await fetch(`${API}/api/workspace/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      addLog('info', `Moved: ${from} → ${to}`);
+      refreshFiles();
+    } else {
+      addLog('error', `Move failed: ${data.error}`);
+    }
+  } catch (e) {
+    addLog('error', `Move error: ${e.message}`);
+  }
 }
 
 async function deleteFile(filePath, isDir) {
   const kind = isDir ? 'directory and all its contents' : 'file';
   if (!confirm(`Delete ${kind}?\n${filePath}`)) return;
-
   try {
-    const res = await fetch(`${API}/api/workspace/file?path=${encodeURIComponent(filePath)}`, {
-      method: 'DELETE',
-    });
+    const res = await fetch(`${API}/api/workspace/file?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
     const data = await res.json();
     if (data.success) {
       addLog('info', `Deleted: ${filePath}`);
@@ -722,75 +1002,188 @@ async function deleteFile(filePath, isDir) {
   }
 }
 
-async function promptNewFolder() {
-  const name = prompt('New folder name (under projects/):');
-  if (!name) return;
-  try {
-    const res = await fetch(`${API}/api/workspace/dir`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: name }),
-    });
-    const data = await res.json();
-    if (data.success) {
-      addLog('info', `Folder created: ${name}`);
-      refreshFiles();
-    } else {
-      addLog('error', data.error);
+async function uploadFiles(files, targetDir = '') {
+  for (const file of files) {
+    const filePath = targetDir ? `${targetDir}/${file.name}` : file.name;
+    addLog('info', `Uploading: ${filePath} (${formatSize(file.size)})...`);
+    try {
+      const content = await readFileAsBase64(file);
+      const res = await fetch(`${API}/api/workspace/file`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath, content, encoding: 'base64' }),
+      });
+      const data = await res.json();
+      if (data.success) addLog('info', `Uploaded: ${filePath} (${formatSize(data.size)})`);
+      else addLog('error', `Upload failed: ${data.error}`);
+    } catch (e) {
+      addLog('error', `Upload error: ${e.message}`);
     }
-  } catch (e) {
-    addLog('error', `Error: ${e.message}`);
   }
+  refreshFiles();
 }
 
-async function promptPasteFile() {
-  const name = prompt('File name (e.g. notes.txt):');
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function uploadToDir(dirPath) {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.multiple = true;
+  inp.onchange = () => { if (inp.files.length) uploadFiles(inp.files, dirPath); };
+  inp.click();
+}
+
+function handleFileSelect(event) {
+  const files = event.target.files;
+  if (files.length) uploadFiles(files);
+  event.target.value = '';
+}
+
+// Upload area drag-drop
+const uploadArea = document.getElementById('uploadArea');
+['dragenter', 'dragover'].forEach(ev => {
+  uploadArea.addEventListener(ev, (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+});
+['dragleave', 'drop'].forEach(ev => {
+  uploadArea.addEventListener(ev, (e) => { e.preventDefault(); uploadArea.classList.remove('dragover'); });
+});
+uploadArea.addEventListener('drop', (e) => {
+  if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+});
+
+// Prompt helpers
+async function promptNewFileInTree() { promptNewFileInDir(''); }
+async function promptNewFolderInTree() { promptNewFolderInDir(''); }
+
+async function promptNewFileInDir(dirPath) {
+  const name = prompt(`New file name${dirPath ? ' in ' + dirPath : ''}:`);
   if (!name) return;
-  const content = prompt('Paste file content:');
-  if (content === null) return;
+  const fullPath = dirPath ? dirPath + '/' + name : name;
   try {
     const res = await fetch(`${API}/api/workspace/file`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: name, content }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: fullPath, content: '' }),
     });
     const data = await res.json();
     if (data.success) {
-      addLog('info', `File created: ${name} (${formatSize(data.size)})`);
+      addLog('info', `Created: ${fullPath}`);
+      if (dirPath) expandedDirs.add(dirPath);
       refreshFiles();
-    } else {
-      addLog('error', data.error);
-    }
-  } catch (e) {
-    addLog('error', `Error: ${e.message}`);
-  }
+    } else addLog('error', data.error);
+  } catch (e) { addLog('error', `Error: ${e.message}`); }
 }
 
-async function changeOutputDir() {
-  const current = document.getElementById('outputDir').title || '';
-  const newPath = prompt('Set workspace root path (files go to <path>/projects/):', current);
-  if (!newPath) return;
+async function promptNewFolderInDir(dirPath) {
+  const name = prompt(`New folder name${dirPath ? ' in ' + dirPath : ''}:`);
+  if (!name) return;
+  const fullPath = dirPath ? dirPath + '/' + name : name;
   try {
-    const res = await fetch(`${API}/api/config/workspace-path`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: newPath }),
+    const res = await fetch(`${API}/api/workspace/dir`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: fullPath }),
     });
     const data = await res.json();
     if (data.success) {
-      const el = document.getElementById('outputDir');
-      const short = data.outputDir.replace(/^\/workspace\//, '');
-      el.textContent = short;
-      el.title = data.outputDir;
-      addLog('info', `Output dir changed to: ${data.outputDir}`);
+      addLog('info', `Folder created: ${fullPath}`);
+      if (dirPath) expandedDirs.add(dirPath);
+      expandedDirs.add(fullPath);
       refreshFiles();
-    } else {
-      alert(data.error || 'Failed to change path');
-    }
-  } catch (e) {
-    alert('Error: ' + e.message);
-  }
+    } else addLog('error', data.error);
+  } catch (e) { addLog('error', `Error: ${e.message}`); }
 }
+
+// ============================================================================
+// File Viewer Overlay
+// ============================================================================
+
+async function viewFile(filePath) {
+  try {
+    const res = await fetch(`${API}/api/workspace/file?path=${encodeURIComponent(filePath)}`);
+    const data = await res.json();
+    if (!res.ok) { addLog('error', data.error); return; }
+    let viewer = document.getElementById('fileViewer');
+    if (!viewer) {
+      viewer = document.createElement('div');
+      viewer.id = 'fileViewer';
+      viewer.className = 'file-viewer';
+      viewer.onclick = (e) => { if (e.target === viewer) closeFileViewer(); };
+      document.body.appendChild(viewer);
+    }
+    viewer.innerHTML = `<div class="file-viewer-panel">
+      <div class="file-viewer-header">
+        <span class="title">&#128196; ${escapeHtml(filePath)}</span>
+        <span class="meta">${formatSize(data.size)}</span>
+        <button class="close-btn" onclick="closeFileViewer()" title="Close">&times;</button>
+      </div>
+      <div class="file-viewer-body"><pre>${escapeHtml(data.content)}</pre></div>
+    </div>`;
+    viewer.style.display = 'flex';
+  } catch (e) { addLog('error', 'Failed to read file'); }
+}
+
+function closeFileViewer() {
+  const v = document.getElementById('fileViewer');
+  if (v) v.style.display = 'none';
+}
+
+function formatSize(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function escapeAttr(s) {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+// ============================================================================
+// Sidebar Resize Handle
+// ============================================================================
+
+(function initSidebarResize() {
+  const sidebar = document.getElementById('sidebar');
+  const handle = document.getElementById('sidebarResize');
+  let startX, startWidth;
+
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    startX = e.clientX;
+    startWidth = sidebar.offsetWidth;
+    handle.classList.add('active');
+    document.addEventListener('mousemove', onDrag);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  function onDrag(e) {
+    const w = startWidth + (e.clientX - startX);
+    sidebar.style.width = Math.max(180, Math.min(600, w)) + 'px';
+  }
+
+  function onUp() {
+    handle.classList.remove('active');
+    document.removeEventListener('mousemove', onDrag);
+    document.removeEventListener('mouseup', onUp);
+    // Persist sidebar width
+    try { localStorage.setItem('sidebar-width', sidebar.style.width); } catch {}
+  }
+
+  // Restore saved width
+  try {
+    const saved = localStorage.getItem('sidebar-width');
+    if (saved) sidebar.style.width = saved;
+  } catch {}
+})();
+
+// Listen for file-moved events from server
+socket.on('file-moved', () => refreshFiles());
 
 // ============================================================================
 // UI Helpers
@@ -975,9 +1368,21 @@ document.getElementById('input').addEventListener('keydown', (e) => {
   }
 });
 
-// Close file viewer with Escape
+// Close file viewer with Escape; F2 to rename; Delete to delete
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeFileViewer();
+  if (e.key === 'Escape') { closeFileViewer(); hideContextMenu(); }
+  // F2 to rename selected file
+  if (e.key === 'F2' && selectedPath) {
+    e.preventDefault();
+    const isDir = fileData.some(f => f.path === selectedPath && f.isDir);
+    startRename(selectedPath, isDir);
+  }
+  // Delete key to delete selected file
+  if (e.key === 'Delete' && selectedPath && !document.querySelector('.rename-input')) {
+    e.preventDefault();
+    const isDir = fileData.some(f => f.path === selectedPath && f.isDir);
+    deleteFile(selectedPath, isDir);
+  }
 });
 
 // Auto-resize textarea

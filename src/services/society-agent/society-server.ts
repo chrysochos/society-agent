@@ -420,6 +420,52 @@ app.post("/api/workspace/dir", async (req, res): Promise<void> => {
 		res.status(500).json({ error: String(error) })
 	}
 })
+
+/**
+ * POST /api/workspace/move - Move or rename a file/directory
+ * Body: { from: string, to: string }
+ */
+app.post("/api/workspace/move", async (req, res): Promise<void> => {
+	try {
+		const { from, to } = req.body
+		if (!from || !to) {
+			res.status(400).json({ error: "'from' and 'to' paths are required" })
+			return
+		}
+
+		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		const projectsDir = path.join(workspacePath, "projects")
+		const fromFull = path.join(projectsDir, from)
+		const toFull = path.join(projectsDir, to)
+
+		// Security: ensure both paths are within projects directory
+		const projectsResolved = path.resolve(projectsDir)
+		if (!path.resolve(fromFull).startsWith(projectsResolved) || !path.resolve(toFull).startsWith(projectsResolved)) {
+			res.status(403).json({ error: "Access denied: path outside projects directory" })
+			return
+		}
+
+		// Check source exists
+		if (!fs.existsSync(fromFull)) {
+			res.status(404).json({ error: "Source not found" })
+			return
+		}
+
+		// Ensure destination parent directory exists
+		await fs.promises.mkdir(path.dirname(toFull), { recursive: true })
+
+		// Move/rename
+		await fs.promises.rename(fromFull, toFull)
+		log.info(`Moved: ${from} → ${to}`)
+
+		io.emit("file-moved", { from, to })
+
+		res.json({ success: true, from, to })
+	} catch (error) {
+		log.error("Error moving file:", error)
+		res.status(500).json({ error: String(error) })
+	}
+})
 // kilocode_change end
 
 /**
