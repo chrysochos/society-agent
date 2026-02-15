@@ -578,6 +578,17 @@ async function sendMessage() {
     }
     // kilocode_change end
 
+    // kilocode_change start - show delegation results
+    if (data.delegations && data.delegations.length > 0) {
+      const delegationInfo = data.delegations.map(d =>
+        `&#9889; <strong>${d.agentName}</strong>: ${d.filesCreated} file(s) created (${Math.round(d.responseLength / 1000)}k chars)`
+      ).join('<br>');
+      const el = addMessage('system', '');
+      el.querySelector('.content').innerHTML = `&#128101; <strong>Delegation complete</strong> (${data.delegations.length} agent(s)):<br>${delegationInfo}`;
+      refreshFiles();
+    }
+    // kilocode_change end
+
     // Refresh agent stats
     loadAgent();
   } catch (e) {

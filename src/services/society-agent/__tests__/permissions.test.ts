@@ -19,7 +19,7 @@ function makeAgent(capabilities: AgentCapability[], overrides?: Partial<AgentIde
 		name: "Test Agent",
 		role: "worker",
 		capabilities,
-		publicKey: "test-key",
+		createdAt: new Date(),
 		...overrides,
 	}
 }

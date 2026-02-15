@@ -1560,6 +1560,355 @@ function securePath(agentDir: string, relativePath: string): { ok: boolean; full
 	return { ok: true, fullPath }
 }
 
+// kilocode_change start - Tool-use supervisor delegation with agentic loop
+
+/**
+ * Anthropic tool definitions for supervisor agents.
+ * These let the supervisor organically decide when to delegate, list team, or propose new agents.
+ */
+const SUPERVISOR_TOOLS: Anthropic.Tool[] = [
+	{
+		name: "list_team",
+		description: "List all agents in your project team with their IDs, names, roles, and current status. Use this to see who is available before delegating.",
+		input_schema: {
+			type: "object" as const,
+			properties: {},
+			required: [],
+		},
+	},
+	{
+		name: "delegate_task",
+		description: "Delegate a specific task to one of your team agents. The agent will execute the task autonomously and return results including any files created. Use this when work needs to be done by a specialist.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				agent_id: { type: "string", description: "The ID of the agent to delegate to (from list_team)" },
+				task: { type: "string", description: "Detailed task instructions. Be specific — include requirements, technology choices, file names, expected output format. The agent has no prior context." },
+			},
+			required: ["agent_id", "task"],
+		},
+	},
+	{
+		name: "propose_new_agent",
+		description: "Propose creating a new agent for the project when the existing team lacks needed expertise. The agent will be created and added to the project.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				name: { type: "string", description: "Human-readable name for the agent (e.g. 'Security Reviewer')" },
+				role: { type: "string", description: "One-line role description (e.g. 'Reviews code for security vulnerabilities')" },
+				system_prompt: { type: "string", description: "System prompt defining the agent's expertise and behavior" },
+			},
+			required: ["name", "role"],
+		},
+	},
+]
+
+/**
+ * Execute a single tool call for suprevisor agents.
+ * Returns the tool result as a string.
+ */
+async function executeSupervisorTool(
+	toolName: string,
+	toolInput: any,
+	project: Project,
+	supervisorId: string,
+	apiKey: string,
+	io: SocketIOServer,
+): Promise<{ result: string; filesCreated: number }> {
+	switch (toolName) {
+		case "list_team": {
+			const agents = project.agents.filter(a => a.id !== supervisorId)
+			const teamInfo = agents.map(a => {
+				const active = activeAgents.has(a.id)
+				return `- ID: "${a.id}" | Name: ${a.name} | Role: ${a.role} | Status: ${active ? "active" : "idle"}`
+			}).join("\n")
+			return {
+				result: `Project "${project.name}" team (${agents.length} agent(s)):\n${teamInfo}`,
+				filesCreated: 0,
+			}
+		}
+
+		case "delegate_task": {
+			const { agent_id, task } = toolInput as { agent_id: string; task: string }
+			const targetConfig = project.agents.find(a => a.id === agent_id)
+			if (!targetConfig) {
+				return {
+					result: `Error: Agent "${agent_id}" not found in project. Use list_team to see available agents.`,
+					filesCreated: 0,
+				}
+			}
+
+			log.info(`[Supervisor] Delegating to ${targetConfig.name} (${targetConfig.id}): ${task.substring(0, 120)}...`)
+
+			// Notify UI
+			io.emit("agent-message", {
+				agentId: supervisorId,
+				projectId: project.id,
+				message: `\n⚡ **Delegating task to ${targetConfig.name}...**\n`,
+				timestamp: Date.now(),
+				isStreaming: true,
+			})
+
+			const agent = getOrCreateProjectAgent(targetConfig, project, apiKey)
+			projectStore.recordActivity(project.id, targetConfig.id)
+
+			// Stream the delegated task
+			let fullResponse = ""
+			for await (const chunk of agent.sendMessageStream(task)) {
+				fullResponse += chunk
+				io.emit("agent-message", {
+					agentId: targetConfig.id,
+					agentName: targetConfig.name,
+					projectId: project.id,
+					message: chunk,
+					timestamp: Date.now(),
+					isStreaming: true,
+					isDelegated: true,
+				})
+			}
+
+			io.emit("agent-message", {
+				agentId: targetConfig.id,
+				agentName: targetConfig.name,
+				projectId: project.id,
+				message: "",
+				timestamp: Date.now(),
+				isStreaming: false,
+				isDone: true,
+				isDelegated: true,
+			})
+
+			// Extract files from worker response
+			let filesCreated = 0
+			try {
+				filesCreated = await agent.extractAndCreateFiles(fullResponse)
+				if (filesCreated > 0) {
+					log.info(`[Delegation] ${targetConfig.name} created ${filesCreated} files`)
+					io.emit("system-event", {
+						type: "files-created",
+						agentId: targetConfig.id,
+						projectId: project.id,
+						count: filesCreated,
+						message: `${targetConfig.name} created ${filesCreated} file(s) in project folder`,
+						timestamp: Date.now(),
+					})
+				}
+			} catch (err) {
+				log.warn(`[Delegation] ${targetConfig.name} file extraction failed:`, err)
+			}
+
+			log.info(`[Delegation] ${targetConfig.name} completed (${fullResponse.length} chars, ${filesCreated} files)`)
+
+			const truncated = fullResponse.length > 4000
+				? fullResponse.substring(0, 4000) + "\n...(truncated)"
+				: fullResponse
+			return {
+				result: `Agent "${targetConfig.name}" completed the task.\nFiles created: ${filesCreated}\n\nResponse:\n${truncated}`,
+				filesCreated,
+			}
+		}
+
+		case "propose_new_agent": {
+			const { name, role, system_prompt } = toolInput as { name: string; role: string; system_prompt?: string }
+			const newId = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+
+			// Check if agent with this ID already exists
+			if (project.agents.find(a => a.id === newId)) {
+				return {
+					result: `Agent "${newId}" already exists in the project.`,
+					filesCreated: 0,
+				}
+			}
+
+			const created = projectStore.addAgent(project.id, {
+				id: newId,
+				name,
+				role,
+				systemPrompt: system_prompt || `You are ${name}. Your role: ${role}. Follow instructions carefully and produce high-quality work.`,
+				canSpawnWorkers: false,
+				capabilities: [],
+				homeFolder: newId,
+			})
+
+			if (!created) {
+				return { result: `Failed to create agent "${newId}" — project not found or save failed.`, filesCreated: 0 }
+			}
+
+			log.info(`[Supervisor] Created new agent: ${name} (${newId}) in project ${project.name}`)
+
+			io.emit("system-event", {
+				type: "agent-created",
+				agentId: newId,
+				projectId: project.id,
+				message: `New agent "${name}" (${role}) added to project ${project.name}`,
+				timestamp: Date.now(),
+			})
+
+			return {
+				result: `Successfully created agent "${name}" (ID: "${newId}", Role: ${role}). The agent is now available for task delegation.`,
+				filesCreated: 0,
+			}
+		}
+
+		default:
+			return { result: `Unknown tool: ${toolName}`, filesCreated: 0 }
+	}
+}
+
+/**
+ * Handle supervisor chat with an agentic tool-use loop.
+ * The LLM decides when to delegate, list team, or propose agents via tool calls.
+ * Returns the final text response and delegation results.
+ */
+async function handleSupervisorChat(
+	userMessage: string,
+	supervisorConfig: ProjectAgentConfig,
+	project: Project,
+	apiKey: string,
+	io: SocketIOServer,
+): Promise<{
+	fullResponse: string
+	delegationResults: Array<{ agentId: string; agentName: string; filesCreated: number; responseLength: number }>
+	totalFilesCreated: number
+}> {
+	const anthropic = new Anthropic({ apiKey })
+	const model = supervisorConfig.model || process.env.API_MODEL_ID || "claude-sonnet-4-20250514"
+	const agent = getOrCreateProjectAgent(supervisorConfig, project, apiKey)
+
+	// Access the agent's system prompt (private field, accessed via cast)
+	const systemPrompt = (agent as any).systemPrompt || supervisorConfig.systemPrompt
+
+	// Add user message to agent history
+	await (agent as any).addMessage("user", userMessage)
+
+	// Build messages from agent history
+	const history = agent.getHistory()
+	const messages: Anthropic.MessageParam[] = history.map((msg: any) => ({
+		role: msg.role === "user" ? "user" as const : "assistant" as const,
+		content: msg.content,
+	}))
+
+	let fullResponse = ""
+	const delegationResults: Array<{ agentId: string; agentName: string; filesCreated: number; responseLength: number }> = []
+	let totalFilesCreated = 0
+	const MAX_TOOL_ITERATIONS = 10
+
+	for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+		log.info(`[Supervisor] ${supervisorConfig.name} iteration ${iteration + 1}, ${messages.length} messages`)
+
+		const stream = await anthropic.messages.stream({
+			model,
+			max_tokens: 8096,
+			system: systemPrompt,
+			messages,
+			tools: SUPERVISOR_TOOLS,
+		})
+
+		// Collect response blocks
+		let textContent = ""
+		const finalMessage = await stream.finalMessage()
+
+		for (const block of finalMessage.content) {
+			if (block.type === "text") {
+				textContent += block.text
+				// Stream text to UI
+				io.emit("agent-message", {
+					agentId: supervisorConfig.id,
+					agentName: supervisorConfig.name,
+					projectId: project.id,
+					message: block.text,
+					timestamp: Date.now(),
+					isStreaming: true,
+				})
+			}
+		}
+
+		fullResponse += textContent
+
+		// Check if the LLM wants to use tools
+		const toolBlocks = finalMessage.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use")
+
+		if (toolBlocks.length === 0 || finalMessage.stop_reason === "end_turn") {
+			// No tool calls — we're done
+			break
+		}
+
+		// Add the assistant's message (with tool_use blocks) to conversation
+		messages.push({ role: "assistant", content: finalMessage.content })
+
+		// Execute each tool call and build results
+		const toolResults: Anthropic.ToolResultBlockParam[] = []
+		for (const toolBlock of toolBlocks) {
+			log.info(`[Supervisor] Tool call: ${toolBlock.name}(${JSON.stringify(toolBlock.input).substring(0, 200)})`)
+
+			io.emit("agent-message", {
+				agentId: supervisorConfig.id,
+				agentName: supervisorConfig.name,
+				projectId: project.id,
+				message: `\n🔧 *Using tool: ${toolBlock.name}*\n`,
+				timestamp: Date.now(),
+				isStreaming: true,
+			})
+
+			const { result, filesCreated } = await executeSupervisorTool(
+				toolBlock.name,
+				toolBlock.input,
+				project,
+				supervisorConfig.id,
+				apiKey,
+				io,
+			)
+
+			totalFilesCreated += filesCreated
+
+			if (toolBlock.name === "delegate_task") {
+				const input = toolBlock.input as { agent_id: string; task: string }
+				const targetConfig = project.agents.find(a => a.id === input.agent_id)
+				delegationResults.push({
+					agentId: input.agent_id,
+					agentName: targetConfig?.name || input.agent_id,
+					filesCreated,
+					responseLength: result.length,
+				})
+			}
+
+			toolResults.push({
+				type: "tool_result",
+				tool_use_id: toolBlock.id,
+				content: result,
+			})
+		}
+
+		// Add tool results as user message
+		messages.push({ role: "user", content: toolResults })
+	}
+
+	// Signal streaming done
+	io.emit("agent-message", {
+		agentId: supervisorConfig.id,
+		agentName: supervisorConfig.name,
+		projectId: project.id,
+		message: "",
+		timestamp: Date.now(),
+		isStreaming: false,
+		isDone: true,
+	})
+
+	// Store the full assistant response in agent history
+	await (agent as any).addMessage("assistant", fullResponse)
+
+	// Extract files from supervisor's own response
+	try {
+		const supervisorFiles = await agent.extractAndCreateFiles(fullResponse)
+		if (supervisorFiles > 0) {
+			totalFilesCreated += supervisorFiles
+		}
+	} catch (_) { /* ignore */ }
+
+	return { fullResponse, delegationResults, totalFilesCreated }
+}
+// kilocode_change end
+
 /**
  * Helper: create a ConversationAgent from a ProjectAgentConfig + project context
  */
@@ -1612,6 +1961,38 @@ When asked to create files, code, or any project artifacts, ALWAYS include the f
 \`\`\`
 This ensures files are automatically saved in your project folder. Do NOT just describe the files — include the actual content so they can be created.`
 	// kilocode_change end
+
+	// kilocode_change start - Supervisor agents get tool-use awareness
+	if (agentConfig.canSpawnWorkers) {
+		const siblingAgents = project.agents.filter(a => a.id !== agentConfig.id)
+		fullPrompt += `\n\n## You Are a Supervisor
+
+You lead a project team and have tools to manage and delegate work:
+
+**Available Tools:**
+- \`list_team\` — See your current team members, their roles, and status
+- \`delegate_task\` — Assign a task to a specific team member. They work autonomously and return results.
+- \`propose_new_agent\` — Suggest creating a new specialist agent if your team lacks needed expertise
+
+**Current Team (${siblingAgents.length} agent(s)):**
+${siblingAgents.length > 0 ? siblingAgents.map(a => `- "${a.id}": ${a.name} — ${a.role}`).join("\n") : "(No agents yet — use propose_new_agent to build your team)"}
+
+**Your Workflow:**
+1. Analyze the user's request
+2. Decide if you can handle it yourself or if it should be delegated
+3. For work that needs delegation, use \`delegate_task\` with detailed instructions
+4. Review results from workers and provide a synthesis to the user
+5. If your team lacks needed expertise, use \`propose_new_agent\` to add specialists
+
+**Guidelines:**
+- For simple questions or follow-ups, respond directly without delegating
+- For implementation tasks, delegate to appropriate team members
+- Be specific in your task instructions — agents have no prior context
+- You can delegate to multiple agents for parallel work
+- After receiving results, provide a quality review and summary`
+	}
+	// kilocode_change end
+
 	if (project.knowledge) {
 		fullPrompt += `\n\n## Project Knowledge (${project.name})\n${project.knowledge}`
 	}
@@ -1681,11 +2062,46 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 		// Try project store first
 		const found = projectStore.findAgentProject(agentId)
 		if (found) {
-			const agent = getOrCreateProjectAgent(found.agent, found.project, apiKey)
 			projectStore.recordActivity(found.project.id, agentId)
-
 			log.info(`[${found.agent.name}@${found.project.name}] chat: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
 
+			// kilocode_change start - Supervisor agents use tool-based agentic loop
+			if (found.agent.canSpawnWorkers) {
+				const result = await handleSupervisorChat(
+					description,
+					found.agent,
+					found.project,
+					apiKey,
+					io,
+				)
+
+				const agent = getOrCreateProjectAgent(found.agent, found.project, apiKey)
+				const history = agent.getHistory()
+				if (history.length > 0 && history.length % 10 === 0) {
+					const lastMessages = history.slice(-6).map((m: any) =>
+						`${m.role}: ${typeof m.content === 'string' ? m.content.substring(0, 200) : '[structured]'}`
+					).join('\n')
+					projectStore.updateAgentMemory(found.project.id, agentId, `Recent context (${history.length} messages):\n${lastMessages}`)
+				}
+
+				res.json({
+					type: "chat",
+					agentId: found.agent.id,
+					agentName: found.agent.name,
+					projectId: found.project.id,
+					projectName: found.project.name,
+					response: result.fullResponse,
+					status: "completed",
+					historyLength: history.length,
+					filesCreated: result.totalFilesCreated,
+					delegations: result.delegationResults.length > 0 ? result.delegationResults : undefined,
+				})
+				return
+			}
+			// kilocode_change end
+
+			// Non-supervisor agents: regular streaming chat
+			const agent = getOrCreateProjectAgent(found.agent, found.project, apiKey)
 			const content = attachments && attachments.length > 0 ? attachments : description
 
 			let fullResponse = ""
@@ -1711,7 +2127,7 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 				isDone: true,
 			})
 
-			// kilocode_change start - Auto-extract and create files from project agent responses
+			// kilocode_change start - Auto-extract and create files
 			let filesCreated = 0
 			if (fullResponse.length > 0) {
 				try {
@@ -1750,7 +2166,7 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 				response: fullResponse,
 				status: "completed",
 				historyLength: history.length,
-				filesCreated, // kilocode_change - report files created
+				filesCreated,
 			})
 			return
 		}

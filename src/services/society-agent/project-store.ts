@@ -15,7 +15,7 @@ import * as fs from "fs"
 import * as path from "path"
 import { getLog } from "./logger"
 
-const log = getLog("project-store")
+const log = getLog()
 
 /**
  * An agent's configuration within a project.

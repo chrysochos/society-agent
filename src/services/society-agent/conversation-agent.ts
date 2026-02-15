@@ -596,6 +596,23 @@ Respond with the complete JSON now:`
 			}
 		}
 
+		// kilocode_change start - Strategy 3: Code blocks preceded by filename mentions
+		// Matches patterns like "**`hello.html`**:\n```html" or "File: hello.html\n```" or "### `hello.html`\n```"
+		if (filesCreated === 0) {
+			const flexibleRegex = /(?:\*{0,2}`?([a-zA-Z0-9_/.-]+\.[a-zA-Z]{1,10})`?\*{0,2}[:\s]*)\n```[\w]*\n([\s\S]*?)```/g
+			let flexMatch
+			while ((flexMatch = flexibleRegex.exec(response)) !== null) {
+				const filename = flexMatch[1].trim()
+				const content = flexMatch[2].trim()
+				// Filter out false positives — filename must look like a path
+				if (filename && content && /\.(html|css|js|ts|py|json|md|tsx|jsx|svg|xml|yaml|yml|sh|sql|txt|cfg|ini|toml|rs|go|java|c|cpp|h|rb|php)$/i.test(filename)) {
+					await this.createFile(filename, content)
+					filesCreated++
+				}
+			}
+		}
+		// kilocode_change end
+
 		return filesCreated
 	}
 	// kilocode_change end

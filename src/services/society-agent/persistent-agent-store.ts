@@ -14,7 +14,7 @@ import * as fs from "fs"
 import * as path from "path"
 import { getLog } from "./logger"
 
-const log = getLog("persistent-agent-store")
+const log = getLog()
 
 export interface PersistentAgentProfile {
 	/** Unique ID */

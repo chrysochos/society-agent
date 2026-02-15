@@ -56,10 +56,8 @@ describe("SupervisorAgent", () => {
 				identity: {
 					id: "supervisor-1",
 					role: "supervisor",
-					publicKey: "test-key",
-					secretKey: "test-secret",
-					fingerprint: "test-fp",
-					createdAt: new Date().toISOString(),
+					capabilities: [],
+					createdAt: Date.now(),
 				},
 				apiHandler: {} as any,
 				purpose: {
