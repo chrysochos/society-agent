@@ -98,7 +98,7 @@ async function initializeSocietyManager(apiKey?: string) {
 			},
 		} as any
 
-		const workspacePath = getWorkspacePath()
+		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 
 		societyManager = new SocietyManager({
 			apiHandler,
@@ -179,7 +179,7 @@ function getTeamAgents(purposeId: string) {
  * GET /api/status - Server health check
  */
 app.get("/api/status", (req, res) => {
-	const workspacePath = getWorkspacePath()
+	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 	res.json({
 		status: "ok",
 		environment: NODE_ENV,
@@ -197,7 +197,7 @@ app.get("/api/status", (req, res) => {
  */
 app.get("/api/workspace/files", async (req, res): Promise<void> => {
 	try {
-		const workspacePath = getWorkspacePath()
+		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 		const projectsDir = path.join(workspacePath, "projects")
 
 		const files: { path: string; fullPath: string; size: number; modified: string; isDir: boolean }[] = []
@@ -254,7 +254,7 @@ app.get("/api/workspace/file", async (req, res): Promise<void> => {
 			return
 		}
 
-		const workspacePath = getWorkspacePath()
+		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 		const fullPath = path.join(workspacePath, "projects", filePath)
 
 		// Security: ensure path is within projects directory
@@ -296,7 +296,7 @@ app.post("/api/workspace/file", async (req, res): Promise<void> => {
 			return
 		}
 
-		const workspacePath = getWorkspacePath()
+		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 		const fullPath = path.join(workspacePath, "projects", filePath)
 
 		// Security: ensure path is within projects directory
@@ -348,7 +348,7 @@ app.delete("/api/workspace/file", async (req, res): Promise<void> => {
 			return
 		}
 
-		const workspacePath = getWorkspacePath()
+		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 		const fullPath = path.join(workspacePath, "projects", filePath)
 
 		// Security: ensure path is within projects directory
@@ -400,7 +400,7 @@ app.post("/api/workspace/dir", async (req, res): Promise<void> => {
 			return
 		}
 
-		const workspacePath = getWorkspacePath()
+		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 		const fullPath = path.join(workspacePath, "projects", dirPath)
 
 		// Security: ensure path is within projects directory
@@ -440,7 +440,10 @@ app.post("/api/config/api-key", async (req, res): Promise<void> => {
 			return
 		}
 
-		const envPath = path.join(__dirname, "../../.env")
+		// Save to workspace root .env (where dotenv auto-loads from)
+		const envPath = path.resolve(process.cwd(), ".env")
+		// Also save to src/.env as fallback (where KiloCode reads it)
+		const srcEnvPath = path.join(__dirname, "../../.env")
 		let envContent = ""
 
 		// Read existing .env file
@@ -455,8 +458,19 @@ app.post("/api/config/api-key", async (req, res): Promise<void> => {
 			envContent += `\nANTHROPIC_API_KEY=${apiKey}\n`
 		}
 
-		// Write updated .env file
+		// Write updated .env file to workspace root
 		fs.writeFileSync(envPath, envContent, "utf-8")
+
+		// Also update src/.env if it exists (keeps KiloCode in sync)
+		if (fs.existsSync(srcEnvPath) && srcEnvPath !== envPath) {
+			let srcContent = fs.readFileSync(srcEnvPath, "utf-8")
+			if (srcContent.includes("ANTHROPIC_API_KEY=")) {
+				srcContent = srcContent.replace(/ANTHROPIC_API_KEY=.*/, `ANTHROPIC_API_KEY=${apiKey}`)
+			} else {
+				srcContent += `\nANTHROPIC_API_KEY=${apiKey}\n`
+			}
+			fs.writeFileSync(srcEnvPath, srcContent, "utf-8")
+		}
 
 		// Update process.env immediately
 		process.env.ANTHROPIC_API_KEY = apiKey
@@ -1079,7 +1093,7 @@ io.on("connection", (socket) => {
 		}
 
 		const shell = opts.shell || process.env.SHELL || "/bin/bash"
-		const workspacePath = getWorkspacePath()
+		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 		const cols = opts.cols || 80
 		const rows = opts.rows || 24
 

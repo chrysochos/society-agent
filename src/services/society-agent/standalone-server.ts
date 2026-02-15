@@ -12,6 +12,17 @@
  */
 
 // ============================================================================
+// Ensure API key is loaded from known .env locations
+// ============================================================================
+// `-r dotenv/config` loads from cwd (workspace root). If key is empty there,
+// also check /workspace/src/.env (where KiloCode extension writes it).
+const path = require("path")
+if (!process.env.ANTHROPIC_API_KEY) {
+	const fallbackEnv = path.join(__dirname, "../../.env") // /workspace/src/.env
+	require("dotenv").config({ path: fallbackEnv, override: true })
+}
+
+// ============================================================================
 // Shim 'vscode' module before any imports touch it
 // ============================================================================
 const Module = require("module")
