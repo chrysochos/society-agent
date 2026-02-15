@@ -33,6 +33,16 @@ const PORT = process.env.PORT || 3000
 const NODE_ENV = process.env.NODE_ENV || "development"
 const log = getLog()
 
+// kilocode_change start - centralized workspace path with stable default
+function getWorkspacePath(): string {
+	return process.env.WORKSPACE_PATH || "/workspace"
+}
+
+function getOutputDir(): string {
+	return path.join(getWorkspacePath(), "projects")
+}
+// kilocode_change end
+
 // Middleware
 app.use(express.json({ limit: "50mb" })) // kilocode_change - support file uploads
 app.use(express.static(path.join(__dirname, "public")))  // kilocode_change - serve standalone frontend
@@ -88,7 +98,7 @@ async function initializeSocietyManager(apiKey?: string) {
 			},
 		} as any
 
-		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		const workspacePath = getWorkspacePath()
 
 		societyManager = new SocietyManager({
 			apiHandler,
@@ -169,7 +179,7 @@ function getTeamAgents(purposeId: string) {
  * GET /api/status - Server health check
  */
 app.get("/api/status", (req, res) => {
-	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+	const workspacePath = getWorkspacePath()
 	res.json({
 		status: "ok",
 		environment: NODE_ENV,
@@ -187,7 +197,7 @@ app.get("/api/status", (req, res) => {
  */
 app.get("/api/workspace/files", async (req, res): Promise<void> => {
 	try {
-		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		const workspacePath = getWorkspacePath()
 		const projectsDir = path.join(workspacePath, "projects")
 
 		const files: { path: string; fullPath: string; size: number; modified: string; isDir: boolean }[] = []
@@ -244,7 +254,7 @@ app.get("/api/workspace/file", async (req, res): Promise<void> => {
 			return
 		}
 
-		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		const workspacePath = getWorkspacePath()
 		const fullPath = path.join(workspacePath, "projects", filePath)
 
 		// Security: ensure path is within projects directory
@@ -286,7 +296,7 @@ app.post("/api/workspace/file", async (req, res): Promise<void> => {
 			return
 		}
 
-		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		const workspacePath = getWorkspacePath()
 		const fullPath = path.join(workspacePath, "projects", filePath)
 
 		// Security: ensure path is within projects directory
@@ -338,7 +348,7 @@ app.delete("/api/workspace/file", async (req, res): Promise<void> => {
 			return
 		}
 
-		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		const workspacePath = getWorkspacePath()
 		const fullPath = path.join(workspacePath, "projects", filePath)
 
 		// Security: ensure path is within projects directory
@@ -390,7 +400,7 @@ app.post("/api/workspace/dir", async (req, res): Promise<void> => {
 			return
 		}
 
-		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		const workspacePath = getWorkspacePath()
 		const fullPath = path.join(workspacePath, "projects", dirPath)
 
 		// Security: ensure path is within projects directory
@@ -1069,7 +1079,7 @@ io.on("connection", (socket) => {
 		}
 
 		const shell = opts.shell || process.env.SHELL || "/bin/bash"
-		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		const workspacePath = getWorkspacePath()
 		const cols = opts.cols || 80
 		const rows = opts.rows || 24
 
