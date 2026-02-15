@@ -279,11 +279,19 @@
 
 <script>
 // ============================================================================
-// Extract agent ID from URL: /agent/:agentId
+// Extract agent ID from URL: /agent/:agentId or /project/:projectId/agent/:agentId
 // ============================================================================
 const pathParts = window.location.pathname.split('/');
 const AGENT_ID = pathParts[pathParts.indexOf('agent') + 1];
+const PROJECT_ID = pathParts.includes('project') ? pathParts[pathParts.indexOf('project') + 1] : null;
 if (!AGENT_ID) { document.body.innerHTML = '<h2 style="padding:40px;color:#f85149">No agent ID in URL</h2>'; }
+
+// Update back link for project context
+if (PROJECT_ID) {
+  const backLink = document.querySelector('.back-link');
+  backLink.href = `/project/${PROJECT_ID}`;
+  backLink.textContent = '\u2190 Project';
+}
 
 const API = window.location.origin;
 const socket = io(API);
@@ -299,13 +307,32 @@ let chatAttachments = [];
 // ============================================================================
 async function loadAgent() {
   try {
-    const res = await fetch(`${API}/api/persistent-agents/${AGENT_ID}`);
-    if (!res.ok) {
-      document.body.innerHTML = `<h2 style="padding:40px;color:#f85149">Agent "${AGENT_ID}" not found</h2>`;
-      return;
+    let res;
+    // Try project-scoped agent first, then fall back to legacy persistent-agents
+    if (PROJECT_ID) {
+      res = await fetch(`${API}/api/projects/${PROJECT_ID}`);
+      if (res.ok) {
+        const project = await res.json();
+        const agentConfig = (project.agents || []).find(a => a.id === AGENT_ID);
+        if (agentConfig) {
+          agentProfile = {
+            ...agentConfig,
+            projectId: project.id,
+            projectName: project.name,
+            workspaceFolder: project.folder || project.id,
+          };
+        }
+      }
     }
-    agentProfile = await res.json();
-    document.title = `${agentProfile.name} — Society Agent`;
+    if (!agentProfile) {
+      res = await fetch(`${API}/api/persistent-agents/${AGENT_ID}`);
+      if (!res.ok) {
+        document.body.innerHTML = `<h2 style="padding:40px;color:#f85149">Agent "${AGENT_ID}" not found</h2>`;
+        return;
+      }
+      agentProfile = await res.json();
+    }
+    document.title = `${agentProfile.name}${agentProfile.projectName ? ' — ' + agentProfile.projectName : ''} — Society Agent`;
 
     // Header
     document.getElementById('agentAvatar').innerHTML = agentProfile.canSpawnWorkers ? '&#128081;' : '&#129302;';

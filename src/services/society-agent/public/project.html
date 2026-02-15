@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Project</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+
+  /* Header */
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 24px;
+    display: flex; align-items: center; gap: 14px; }
+  header .back-link { color: var(--muted); text-decoration: none; font-size: 14px; }
+  header .back-link:hover { color: var(--accent); }
+  header .project-icon { width: 36px; height: 36px; border-radius: 10px; display: flex;
+    align-items: center; justify-content: center; font-size: 20px; background: rgba(88,166,255,0.15); }
+  header .project-info { flex: 1; }
+  header .project-name { font-size: 18px; font-weight: 600; }
+  header .project-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  header .project-folder { font-size: 11px; color: var(--accent); font-family: monospace; }
+  header .header-actions { display: flex; gap: 8px; }
+
+  /* Buttons */
+  .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border); cursor: pointer;
+    font-size: 13px; transition: all 0.15s; background: var(--surface); color: var(--text); }
+  .btn:hover { border-color: var(--accent); }
+  .btn-primary { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+  .btn-primary:hover { opacity: 0.9; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+  /* Main content */
+  .main { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 24px; }
+
+  /* Section cards */
+  .section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .section-header { padding: 14px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px; }
+  .section-header h3 { font-size: 14px; font-weight: 600; flex: 1; }
+  .section-header .count { font-size: 12px; color: var(--muted); }
+  .section-body { padding: 16px 20px; }
+
+  /* Agent grid */
+  .agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+  .agent-card { background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; display: flex; flex-direction: column; gap: 8px; cursor: pointer;
+    transition: border-color 0.2s, background 0.2s; }
+  .agent-card:hover { border-color: var(--accent); background: rgba(88,166,255,0.04); }
+  .agent-card .agent-header { display: flex; align-items: center; gap: 10px; }
+  .agent-card .agent-avatar { width: 32px; height: 32px; border-radius: 8px; display: flex;
+    align-items: center; justify-content: center; font-size: 16px; background: rgba(88,166,255,0.12); }
+  .agent-card .agent-meta { flex: 1; }
+  .agent-card .agent-name { font-size: 13px; font-weight: 600; }
+  .agent-card .agent-role { font-size: 11px; color: var(--muted); }
+  .agent-card .agent-home { font-size: 10px; color: var(--accent); font-family: monospace; }
+  .agent-card .agent-caps { display: flex; flex-wrap: wrap; gap: 4px; }
+  .agent-card .cap-tag { font-size: 10px; padding: 1px 6px; border-radius: 8px;
+    background: rgba(88,166,255,0.1); color: var(--accent); border: 1px solid rgba(88,166,255,0.2); }
+  .agent-card .agent-stats { display: flex; gap: 10px; font-size: 11px; color: var(--muted); }
+  .agent-card .agent-actions { display: flex; gap: 6px; }
+  .agent-card .agent-actions .btn { font-size: 11px; padding: 3px 8px; }
+  .agent-add-card { border: 2px dashed var(--border); border-radius: 10px; padding: 24px;
+    display: flex; align-items: center; justify-content: center; color: var(--muted);
+    cursor: pointer; transition: border-color 0.2s, color 0.2s; font-size: 13px; }
+  .agent-add-card:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Knowledge section */
+  .knowledge-display { white-space: pre-wrap; font-size: 13px; color: var(--text); line-height: 1.6;
+    max-height: 200px; overflow-y: auto; }
+  .knowledge-display.empty { color: var(--muted); font-style: italic; }
+  .knowledge-edit { width: 100%; min-height: 100px; background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); padding: 10px; border-radius: 6px; font-size: 13px; line-height: 1.5;
+    font-family: inherit; resize: vertical; }
+
+  /* File tree */
+  .file-list { max-height: 400px; overflow-y: auto; }
+  .file-row { display: flex; align-items: center; gap: 6px; padding: 5px 0; font-size: 13px;
+    border-bottom: 1px solid rgba(48,54,61,0.5); }
+  .file-row:last-child { border-bottom: none; }
+  .file-row .file-icon { width: 16px; text-align: center; font-size: 12px; }
+  .file-row .file-name { flex: 1; font-family: monospace; font-size: 12px; }
+  .file-row .file-size { color: var(--muted); font-size: 11px; }
+  .file-row.dir .file-name { color: var(--accent); font-weight: 500; }
+
+  /* Status badge */
+  .status-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; text-transform: uppercase;
+    letter-spacing: 0.5px; font-weight: 600; }
+  .status-badge.active { background: rgba(63,185,80,0.15); color: var(--green); }
+  .status-badge.idle { background: rgba(139,148,158,0.15); color: var(--muted); }
+
+  /* Modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex;
+    align-items: center; justify-content: center; z-index: 100; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 24px; width: 480px; max-width: 90vw; max-height: 80vh; overflow-y: auto; }
+  .modal h2 { font-size: 16px; margin-bottom: 4px; }
+  .modal .form-group { margin-bottom: 12px; }
+  .modal .form-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .modal .form-group input, .modal .form-group textarea, .modal .form-group select {
+    width: 100%; padding: 8px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 13px; }
+  .modal .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .modal .checkbox-row { display: flex; align-items: center; gap: 8px; }
+  .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+  /* Toast */
+  .toast { position: fixed; bottom: 20px; right: 20px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; font-size: 13px;
+    z-index: 200; animation: fadeIn 0.2s; }
+  .toast.success { border-color: var(--green); }
+  .toast.error { border-color: var(--red); }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</head>
+<body>
+
+<header>
+  <a href="/" class="back-link">&#8592; Dashboard</a>
+  <div class="project-icon">&#128193;</div>
+  <div class="project-info">
+    <div class="project-name" id="projectName">Loading...</div>
+    <div class="project-desc" id="projectDesc"></div>
+    <div class="project-folder" id="projectFolder"></div>
+  </div>
+  <div class="header-actions">
+    <button class="btn btn-sm" onclick="editProjectSettings()">&#9881; Settings</button>
+  </div>
+</header>
+
+<div class="main">
+  <!-- Agents section -->
+  <div class="section">
+    <div class="section-header">
+      <h3>&#129302; Agents</h3>
+      <span class="count" id="agentCount">0 agents</span>
+    </div>
+    <div class="section-body">
+      <div class="agent-grid" id="agentGrid">
+        <div style="color:var(--muted);font-size:13px">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Knowledge section -->
+  <div class="section">
+    <div class="section-header">
+      <h3>&#128218; Project Knowledge</h3>
+      <button class="btn btn-sm" id="knowledgeToggle" onclick="toggleKnowledgeEdit()">&#9998; Edit</button>
+    </div>
+    <div class="section-body">
+      <div class="knowledge-display" id="knowledgeDisplay">No project knowledge defined yet.</div>
+      <div id="knowledgeEditArea" style="display:none">
+        <textarea class="knowledge-edit" id="knowledgeInput" placeholder="Add project context, conventions, tech stack info..."></textarea>
+        <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end">
+          <button class="btn btn-sm" onclick="cancelKnowledgeEdit()">Cancel</button>
+          <button class="btn btn-sm btn-primary" onclick="saveKnowledge()">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Files section -->
+  <div class="section">
+    <div class="section-header">
+      <h3>&#128194; Project Files</h3>
+      <span class="count" id="fileCount">-</span>
+      <button class="btn btn-sm" onclick="refreshFiles()">&#8635; Refresh</button>
+    </div>
+    <div class="section-body">
+      <div class="file-list" id="fileList">
+        <div style="color:var(--muted);font-size:13px">Loading...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Agent Modal -->
+<div class="modal-overlay" id="addAgentModal" style="display:none">
+  <div class="modal">
+    <h2 id="agentModalTitle">Add Agent</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px" id="agentModalDesc">Add an agent to this project.</p>
+    <div class="form-row">
+      <div class="form-group">
+        <label>ID (unique, lowercase)</label>
+        <input type="text" id="agentFormId" placeholder="coder">
+      </div>
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="agentFormName" placeholder="Coder">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Role / Specialty</label>
+      <input type="text" id="agentFormRole" placeholder="e.g. Full-Stack Developer">
+    </div>
+    <div class="form-group">
+      <label>Capabilities (comma-separated)</label>
+      <input type="text" id="agentFormCaps" placeholder="coding, debugging, testing">
+    </div>
+    <div class="form-group">
+      <label>Home Folder (relative to project root)</label>
+      <input type="text" id="agentFormHome" placeholder="/ (full project access)">
+    </div>
+    <div class="form-group">
+      <label>System Prompt</label>
+      <textarea id="agentFormPrompt" rows="4" placeholder="You are an expert..."></textarea>
+    </div>
+    <div class="form-group">
+      <div class="checkbox-row">
+        <input type="checkbox" id="agentFormSpawn">
+        <label for="agentFormSpawn" style="margin-bottom:0">Can spawn ephemeral workers (supervisor)</label>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="hideAgentModal()">Cancel</button>
+      <button class="btn btn-primary" id="agentFormSubmit" onclick="submitAgentForm()">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Project Modal -->
+<div class="modal-overlay" id="editProjectModal" style="display:none">
+  <div class="modal">
+    <h2>Project Settings</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Update project metadata.</p>
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" id="editProjectName">
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <input type="text" id="editProjectDesc">
+    </div>
+    <div class="form-group">
+      <label>Folder</label>
+      <input type="text" id="editProjectFolder">
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="hideEditProjectModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveProjectSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+const socket = io(API);
+
+// Extract project ID from URL: /project/:projectId
+const pathParts = window.location.pathname.split('/');
+const projectId = pathParts[2];
+
+let project = null;
+let editingAgentId = null;
+
+// ============================================================================
+// Load project data
+// ============================================================================
+
+async function loadProject() {
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}`);
+    if (!res.ok) {
+      document.getElementById('projectName').textContent = 'Project not found';
+      return;
+    }
+    project = await res.json();
+    renderProject();
+  } catch (e) {
+    document.getElementById('projectName').textContent = 'Error loading project';
+  }
+}
+
+function renderProject() {
+  document.title = `${project.name} - Project`;
+  document.getElementById('projectName').textContent = project.name;
+  document.getElementById('projectDesc').textContent = project.description || '';
+  document.getElementById('projectFolder').textContent = project.folder || '/';
+
+  renderAgents();
+  renderKnowledge();
+  refreshFiles();
+}
+
+// ============================================================================
+// Agents
+// ============================================================================
+
+function renderAgents() {
+  const grid = document.getElementById('agentGrid');
+  const count = document.getElementById('agentCount');
+  const agents = project.agents || [];
+  count.textContent = `${agents.length} agent${agents.length !== 1 ? 's' : ''}`;
+
+  let html = agents.map(a => {
+    const avatar = a.canSpawnWorkers ? '&#128081;' : '&#129302;';
+    const caps = (a.capabilities || []).map(c => `<span class="cap-tag">${escapeHtml(c)}</span>`).join('');
+    return `<div class="agent-card" onclick="openAgent('${escapeAttr(a.id)}')">
+      <div class="agent-header">
+        <div class="agent-avatar">${avatar}</div>
+        <div class="agent-meta">
+          <div class="agent-name">${escapeHtml(a.name)}</div>
+          <div class="agent-role">${escapeHtml(a.role)}${a.canSpawnWorkers ? ' · <span style="color:var(--accent)">Supervisor</span>' : ''}</div>
+        </div>
+      </div>
+      <div class="agent-home">&#127968; ${escapeHtml(a.homeFolder || '/')}</div>
+      <div class="agent-caps">${caps}</div>
+      <div class="agent-stats">
+        <span>&#128172; ${a.totalMessages || 0} msgs</span>
+        <span>&#9989; ${a.tasksCompleted || 0} tasks</span>
+      </div>
+      <div class="agent-actions" onclick="event.stopPropagation()">
+        <button class="btn btn-sm btn-primary" onclick="openAgent('${escapeAttr(a.id)}')">&#128279; Open</button>
+        <button class="btn btn-sm" onclick="editAgentInProject('${escapeAttr(a.id)}')">&#9998;</button>
+        <button class="btn btn-sm" onclick="resetAgentMemory('${escapeAttr(a.id)}')">&#8635;</button>
+        <button class="btn btn-sm" style="color:var(--red)" onclick="removeAgent('${escapeAttr(a.id)}','${escapeAttr(a.name)}')">&#128465;</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  html += `<div class="agent-add-card" onclick="showAddAgentModal()">+ Add Agent</div>`;
+  grid.innerHTML = html;
+}
+
+function openAgent(agentId) {
+  window.open(`/project/${projectId}/agent/${agentId}`, '_blank');
+}
+
+function showAddAgentModal() {
+  editingAgentId = null;
+  document.getElementById('agentModalTitle').textContent = 'Add Agent';
+  document.getElementById('agentModalDesc').textContent = 'Add a new agent to this project.';
+  document.getElementById('agentFormId').value = '';
+  document.getElementById('agentFormId').disabled = false;
+  document.getElementById('agentFormName').value = '';
+  document.getElementById('agentFormRole').value = '';
+  document.getElementById('agentFormCaps').value = '';
+  document.getElementById('agentFormHome').value = '/';
+  document.getElementById('agentFormPrompt').value = '';
+  document.getElementById('agentFormSpawn').checked = false;
+  document.getElementById('agentFormSubmit').textContent = 'Add';
+  document.getElementById('addAgentModal').style.display = 'flex';
+}
+
+function editAgentInProject(agentId) {
+  const agent = (project.agents || []).find(a => a.id === agentId);
+  if (!agent) return;
+  editingAgentId = agentId;
+  document.getElementById('agentModalTitle').textContent = `Edit: ${agent.name}`;
+  document.getElementById('agentModalDesc').textContent = 'Update agent configuration.';
+  document.getElementById('agentFormId').value = agent.id;
+  document.getElementById('agentFormId').disabled = true;
+  document.getElementById('agentFormName').value = agent.name;
+  document.getElementById('agentFormRole').value = agent.role;
+  document.getElementById('agentFormCaps').value = (agent.capabilities || []).join(', ');
+  document.getElementById('agentFormHome').value = agent.homeFolder || '/';
+  document.getElementById('agentFormPrompt').value = agent.systemPrompt || '';
+  document.getElementById('agentFormSpawn').checked = agent.canSpawnWorkers || false;
+  document.getElementById('agentFormSubmit').textContent = 'Save';
+  document.getElementById('addAgentModal').style.display = 'flex';
+}
+
+function hideAgentModal() {
+  document.getElementById('addAgentModal').style.display = 'none';
+  editingAgentId = null;
+}
+
+async function submitAgentForm() {
+  const id = document.getElementById('agentFormId').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  const name = document.getElementById('agentFormName').value.trim();
+  const role = document.getElementById('agentFormRole').value.trim();
+  const capabilities = document.getElementById('agentFormCaps').value.split(',').map(s => s.trim()).filter(Boolean);
+  const homeFolder = document.getElementById('agentFormHome').value.trim() || '/';
+  const systemPrompt = document.getElementById('agentFormPrompt').value.trim();
+  const canSpawnWorkers = document.getElementById('agentFormSpawn').checked;
+
+  if (!id || !name || !role) {
+    alert('Please fill in ID, Name, and Role');
+    return;
+  }
+
+  try {
+    let res;
+    if (editingAgentId) {
+      res = await fetch(`${API}/api/projects/${projectId}/agents/${editingAgentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, role, capabilities, homeFolder, systemPrompt, canSpawnWorkers }),
+      });
+    } else {
+      res = await fetch(`${API}/api/projects/${projectId}/agents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, name, role, capabilities, homeFolder, systemPrompt, canSpawnWorkers }),
+      });
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || 'Failed');
+      return;
+    }
+    hideAgentModal();
+    showToast(editingAgentId ? `${name} updated` : `${name} added`, 'success');
+    loadProject();
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+async function removeAgent(agentId, agentName) {
+  if (!confirm(`Remove ${agentName} from this project?`)) return;
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/agents/${agentId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`${agentName} removed`, 'success');
+      loadProject();
+    } else {
+      alert(data.error || 'Failed');
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+async function resetAgentMemory(agentId) {
+  const agent = (project.agents || []).find(a => a.id === agentId);
+  if (!agent) return;
+  if (!confirm(`Reset ${agent.name}'s memory? Conversation history will be cleared.`)) return;
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/agents/${agentId}/reset`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`${agent.name} memory reset`, 'success');
+      loadProject();
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+// ============================================================================
+// Knowledge
+// ============================================================================
+
+let knowledgeEditing = false;
+
+function renderKnowledge() {
+  const display = document.getElementById('knowledgeDisplay');
+  if (project.knowledge) {
+    display.textContent = project.knowledge;
+    display.classList.remove('empty');
+  } else {
+    display.textContent = 'No project knowledge defined yet. Click Edit to add context shared with all agents.';
+    display.classList.add('empty');
+  }
+}
+
+function toggleKnowledgeEdit() {
+  knowledgeEditing = !knowledgeEditing;
+  const display = document.getElementById('knowledgeDisplay');
+  const editArea = document.getElementById('knowledgeEditArea');
+  const toggle = document.getElementById('knowledgeToggle');
+
+  if (knowledgeEditing) {
+    display.style.display = 'none';
+    editArea.style.display = 'block';
+    document.getElementById('knowledgeInput').value = project.knowledge || '';
+    toggle.style.display = 'none';
+  } else {
+    display.style.display = 'block';
+    editArea.style.display = 'none';
+    toggle.style.display = '';
+  }
+}
+
+function cancelKnowledgeEdit() {
+  knowledgeEditing = false;
+  document.getElementById('knowledgeDisplay').style.display = 'block';
+  document.getElementById('knowledgeEditArea').style.display = 'none';
+  document.getElementById('knowledgeToggle').style.display = '';
+}
+
+async function saveKnowledge() {
+  const knowledge = document.getElementById('knowledgeInput').value.trim();
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ knowledge }),
+    });
+    if (res.ok) {
+      project.knowledge = knowledge;
+      cancelKnowledgeEdit();
+      renderKnowledge();
+      showToast('Knowledge saved', 'success');
+    } else {
+      alert('Failed to save knowledge');
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+// ============================================================================
+// Files
+// ============================================================================
+
+async function refreshFiles() {
+  const list = document.getElementById('fileList');
+  const count = document.getElementById('fileCount');
+  try {
+    // Use the project folder for workspace browsing
+    const folder = project.folder || '/';
+    const res = await fetch(`${API}/api/workspace?path=${encodeURIComponent(folder)}`);
+    const data = await res.json();
+    const entries = data.entries || [];
+    count.textContent = `${entries.length} items`;
+
+    if (entries.length === 0) {
+      list.innerHTML = '<div style="color:var(--muted);font-size:13px">No files yet</div>';
+      return;
+    }
+
+    // Sort: dirs first, then files
+    entries.sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    list.innerHTML = entries.map(e => {
+      const icon = e.isDir ? '&#128194;' : '&#128196;';
+      const cls = e.isDir ? ' dir' : '';
+      const size = e.isDir ? '' : formatSize(e.size || 0);
+      return `<div class="file-row${cls}">
+        <span class="file-icon">${icon}</span>
+        <span class="file-name">${escapeHtml(e.name)}</span>
+        <span class="file-size">${size}</span>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = '<div style="color:var(--red);font-size:13px">Error loading files</div>';
+  }
+}
+
+// ============================================================================
+// Project Settings
+// ============================================================================
+
+function editProjectSettings() {
+  document.getElementById('editProjectName').value = project.name;
+  document.getElementById('editProjectDesc').value = project.description || '';
+  document.getElementById('editProjectFolder').value = project.folder || '';
+  document.getElementById('editProjectModal').style.display = 'flex';
+}
+
+function hideEditProjectModal() {
+  document.getElementById('editProjectModal').style.display = 'none';
+}
+
+async function saveProjectSettings() {
+  const name = document.getElementById('editProjectName').value.trim();
+  const description = document.getElementById('editProjectDesc').value.trim();
+  const folder = document.getElementById('editProjectFolder').value.trim();
+
+  if (!name) { alert('Name is required'); return; }
+
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description, folder }),
+    });
+    if (res.ok) {
+      hideEditProjectModal();
+      showToast('Project updated', 'success');
+      loadProject();
+    } else {
+      const data = await res.json();
+      alert(data.error || 'Failed');
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+function escapeAttr(s) {
+  return (s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function showToast(msg, type = 'success') {
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+// ============================================================================
+// Init
+// ============================================================================
+
+loadProject();
+
+// Refresh on events
+socket.on('file-created', () => refreshFiles());
+socket.on('file-deleted', () => refreshFiles());
+</script>
+</body>
+</html>

@@ -22,6 +22,9 @@ import { getLog } from "./logger"
 // kilocode_change start - persistent agents
 import { PersistentAgentStore } from "./persistent-agent-store"
 // kilocode_change end
+// kilocode_change start - project system
+import { ProjectStore, ProjectAgentConfig, Project } from "./project-store"
+// kilocode_change end
 // kilocode_change start - terminal support
 import * as pty from "node-pty"
 // kilocode_change end
@@ -32,7 +35,7 @@ const io = new SocketIOServer(server, {
 	cors: { origin: "*" },
 })
 
-const PORT = process.env.PORT || 3000
+const PORT = process.env.PORT || 4000
 const NODE_ENV = process.env.NODE_ENV || "development"
 const log = getLog()
 
@@ -58,6 +61,9 @@ let userAgent: ConversationAgent | null = null // Single agent for user conversa
 // kilocode_change start - persistent agent system
 const agentStore = new PersistentAgentStore(getWorkspacePath())
 const activeAgents = new Map<string, ConversationAgent>() // agentId → live ConversationAgent
+// kilocode_change end
+// kilocode_change start - project system
+const projectStore = new ProjectStore(getWorkspacePath())
 // kilocode_change end
 
 /**
@@ -1236,12 +1242,205 @@ app.post("/api/persistent-agents/:id/reset", (req, res): void => {
 })
 // kilocode_change end
 
+// kilocode_change start - project CRUD endpoints
+
+/**
+ * GET /api/projects - List all projects
+ */
+app.get("/api/projects", (req, res): void => {
+	try {
+		const projects = projectStore.getAll().map((p) => ({
+			...p,
+			agents: p.agents.map((a) => ({
+				...a,
+				isActive: activeAgents.has(a.id),
+				historyLength: activeAgents.get(a.id)?.getHistory().length || 0,
+			})),
+		}))
+		res.json({ projects })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/projects/:id - Get a specific project
+ */
+app.get("/api/projects/:id", (req, res): void => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+		res.json({
+			...project,
+			agents: project.agents.map((a) => ({
+				...a,
+				isActive: activeAgents.has(a.id),
+				historyLength: activeAgents.get(a.id)?.getHistory().length || 0,
+			})),
+		})
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects - Create a new project
+ * Body: { id, name, description, folder?, agents?: [...] }
+ */
+app.post("/api/projects", (req, res): void => {
+	try {
+		const { id, name, description, folder, knowledge, agents } = req.body
+		if (!id || !name) {
+			res.status(400).json({ error: "id and name are required" })
+			return
+		}
+		const project = projectStore.create({ id, name, description: description || "", folder, knowledge, agents })
+		io.emit("system-event", { type: "project-created", projectId: id, name, timestamp: Date.now() })
+		res.status(201).json(project)
+	} catch (error) {
+		res.status(400).json({ error: String(error) })
+	}
+})
+
+/**
+ * PUT /api/projects/:id - Update project metadata
+ */
+app.put("/api/projects/:id", (req, res): void => {
+	try {
+		const updated = projectStore.update(req.params.id, req.body)
+		if (!updated) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+		res.json(updated)
+	} catch (error) {
+		res.status(400).json({ error: String(error) })
+	}
+})
+
+/**
+ * DELETE /api/projects/:id - Delete a project
+ */
+app.delete("/api/projects/:id", (req, res): void => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (project) {
+			for (const a of project.agents) activeAgents.delete(a.id)
+		}
+		const deleted = projectStore.delete(req.params.id)
+		if (!deleted) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+		io.emit("system-event", { type: "project-deleted", projectId: req.params.id, timestamp: Date.now() })
+		res.json({ success: true })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/agents - Add an agent to a project
+ */
+app.post("/api/projects/:id/agents", (req, res): void => {
+	try {
+		const { id, name, role, capabilities, systemPrompt, canSpawnWorkers, homeFolder, model } = req.body
+		if (!id || !name || !role || !systemPrompt) {
+			res.status(400).json({ error: "id, name, role, and systemPrompt are required" })
+			return
+		}
+		const agent = projectStore.addAgent(req.params.id, {
+			id, name, role,
+			capabilities: capabilities || [],
+			systemPrompt,
+			canSpawnWorkers: canSpawnWorkers || false,
+			homeFolder: homeFolder || "/",
+			model,
+		})
+		if (!agent) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+		io.emit("system-event", { type: "agent-added", projectId: req.params.id, agentId: id, timestamp: Date.now() })
+		res.status(201).json(agent)
+	} catch (error) {
+		res.status(400).json({ error: String(error) })
+	}
+})
+
+/**
+ * PUT /api/projects/:projectId/agents/:agentId - Update an agent within a project
+ */
+app.put("/api/projects/:projectId/agents/:agentId", (req, res): void => {
+	try {
+		const updated = projectStore.updateAgent(req.params.projectId, req.params.agentId, req.body)
+		if (!updated) {
+			res.status(404).json({ error: "Project or agent not found" })
+			return
+		}
+		if (activeAgents.has(req.params.agentId)) {
+			activeAgents.delete(req.params.agentId)
+		}
+		res.json(updated)
+	} catch (error) {
+		res.status(400).json({ error: String(error) })
+	}
+})
+
+/**
+ * DELETE /api/projects/:projectId/agents/:agentId - Remove agent from project
+ */
+app.delete("/api/projects/:projectId/agents/:agentId", (req, res): void => {
+	try {
+		activeAgents.delete(req.params.agentId)
+		const removed = projectStore.removeAgent(req.params.projectId, req.params.agentId)
+		if (!removed) {
+			res.status(404).json({ error: "Project or agent not found" })
+			return
+		}
+		io.emit("system-event", { type: "agent-removed", projectId: req.params.projectId, agentId: req.params.agentId, timestamp: Date.now() })
+		res.json({ success: true })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:projectId/agents/:agentId/reset - Reset agent memory
+ */
+app.post("/api/projects/:projectId/agents/:agentId/reset", (req, res): void => {
+	try {
+		const agent = projectStore.getAgent(req.params.projectId, req.params.agentId)
+		if (!agent) {
+			res.status(404).json({ error: "Project or agent not found" })
+			return
+		}
+		activeAgents.delete(req.params.agentId)
+		projectStore.resetAgentMemory(req.params.projectId, req.params.agentId)
+		res.json({ success: true, message: `Agent ${agent.name} memory cleared` })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+// kilocode_change end
+
 // kilocode_change start - agent-scoped workspace & chat routes (session-based, single port)
 
 /**
- * Helper: resolve agent's workspace directory
+ * Helper: resolve agent's workspace directory.
+ * Checks project store first (project-based agents), then falls back to legacy agent store.
  */
 function agentWorkspaceDir(agentId: string): string {
+	// New: look up via project store
+	const found = projectStore.findAgentProject(agentId)
+	if (found) {
+		return projectStore.agentHomeDir(found.project.id, agentId)
+	}
+	// Legacy fallback
 	const profile = agentStore.get(agentId)
 	const folder = profile?.workspaceFolder || agentId
 	return path.join(getWorkspacePath(), "projects", folder)
@@ -1261,7 +1460,89 @@ function securePath(agentDir: string, relativePath: string): { ok: boolean; full
 }
 
 /**
+ * Helper: create a ConversationAgent from a ProjectAgentConfig + project context
+ */
+function getOrCreateProjectAgent(
+	agentConfig: ProjectAgentConfig,
+	project: Project,
+	apiKey: string,
+): ConversationAgent {
+	const existing = activeAgents.get(agentConfig.id)
+	if (existing) return existing
+
+	const anthropic = new Anthropic({ apiKey })
+
+	const apiHandler: ApiHandler = {
+		createMessage: async function* (systemPrompt: string, messages: any[]) {
+			const stream = await anthropic.messages.stream({
+				model: agentConfig.model || process.env.API_MODEL_ID || "claude-sonnet-4-20250514",
+				max_tokens: 8096,
+				system: systemPrompt,
+				messages: messages.map((m) => ({
+					role: m.role === "assistant" ? "assistant" : "user",
+					content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+				})),
+			})
+			for await (const chunk of stream) {
+				if (chunk.type === "content_block_delta" && chunk.delta.type === "text_delta") {
+					yield { type: "text", text: chunk.delta.text }
+				}
+			}
+			const finalMessage = await stream.finalMessage()
+			return { stopReason: finalMessage.stop_reason || "end_turn" }
+		},
+	} as any
+
+	// Build system prompt with project + agent context
+	let fullPrompt = agentConfig.systemPrompt
+	if (project.knowledge) {
+		fullPrompt += `\n\n## Project Knowledge (${project.name})\n${project.knowledge}`
+	}
+	if (agentConfig.memorySummary) {
+		fullPrompt += `\n\n## Your Memory (from past conversations)\n${agentConfig.memorySummary}`
+	}
+	if (agentConfig.knowledgeSummary) {
+		fullPrompt += `\n\n## Your Knowledge\n${agentConfig.knowledgeSummary}`
+	}
+
+	const agent = new ConversationAgent({
+		identity: {
+			id: agentConfig.id,
+			role: agentConfig.canSpawnWorkers ? "supervisor" : "worker",
+			capabilities: agentConfig.capabilities,
+			createdAt: Date.now(),
+		},
+		apiHandler,
+		systemPrompt: fullPrompt,
+		onMessage: (message) => {
+			io.emit("agent-message", {
+				agentId: agentConfig.id,
+				message: message.content,
+				timestamp: message.timestamp,
+				isStreaming: false,
+			})
+		},
+		onFileCreated: (relativePath, fullPath, size) => {
+			log.info(`[${agentConfig.name}] File created: ${fullPath} (${size} bytes)`)
+			io.emit("file-created", {
+				agentId: agentConfig.id,
+				projectId: project.id,
+				relativePath,
+				fullPath,
+				size,
+				timestamp: Date.now(),
+			})
+		},
+	})
+
+	activeAgents.set(agentConfig.id, agent)
+	log.info(`Activated project agent: ${agentConfig.name} in ${project.name}`)
+	return agent
+}
+
+/**
  * POST /api/agent/:agentId/chat - Send a message to a specific agent
+ * Looks up agent in project store first, falls back to legacy store.
  * Body: { description: string, attachments?: any[] }
  */
 app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
@@ -1273,15 +1554,70 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 			return
 		}
 
-		const profile = agentStore.get(agentId)
-		if (!profile) {
-			res.status(404).json({ error: `Agent "${agentId}" not found` })
-			return
-		}
-
 		const { description, attachments } = req.body
 		if (!description && (!attachments || attachments.length === 0)) {
 			res.status(400).json({ error: "Message description or attachments required" })
+			return
+		}
+
+		// Try project store first
+		const found = projectStore.findAgentProject(agentId)
+		if (found) {
+			const agent = getOrCreateProjectAgent(found.agent, found.project, apiKey)
+			projectStore.recordActivity(found.project.id, agentId)
+
+			log.info(`[${found.agent.name}@${found.project.name}] chat: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
+
+			const content = attachments && attachments.length > 0 ? attachments : description
+
+			let fullResponse = ""
+			for await (const chunk of agent.sendMessageStream(content)) {
+				fullResponse += chunk
+				io.emit("agent-message", {
+					agentId: found.agent.id,
+					agentName: found.agent.name,
+					projectId: found.project.id,
+					message: chunk,
+					timestamp: Date.now(),
+					isStreaming: true,
+				})
+			}
+
+			io.emit("agent-message", {
+				agentId: found.agent.id,
+				agentName: found.agent.name,
+				projectId: found.project.id,
+				message: "",
+				timestamp: Date.now(),
+				isStreaming: false,
+				isDone: true,
+			})
+
+			const history = agent.getHistory()
+			if (history.length > 0 && history.length % 10 === 0) {
+				const lastMessages = history.slice(-6).map((m: any) =>
+					`${m.role}: ${typeof m.content === 'string' ? m.content.substring(0, 200) : '[structured]'}`
+				).join('\n')
+				projectStore.updateAgentMemory(found.project.id, agentId, `Recent context (${history.length} messages):\n${lastMessages}`)
+			}
+
+			res.json({
+				type: "chat",
+				agentId: found.agent.id,
+				agentName: found.agent.name,
+				projectId: found.project.id,
+				projectName: found.project.name,
+				response: fullResponse,
+				status: "completed",
+				historyLength: history.length,
+			})
+			return
+		}
+
+		// Legacy fallback: persistent agent store
+		const profile = agentStore.get(agentId)
+		if (!profile) {
+			res.status(404).json({ error: `Agent "${agentId}" not found` })
 			return
 		}
 
@@ -1313,7 +1649,6 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 			isDone: true,
 		})
 
-		// Update memory periodically
 		const history = agent.getHistory()
 		if (history.length > 0 && history.length % 10 === 0) {
 			const lastMessages = history.slice(-6).map((m: any) =>
@@ -1765,6 +2100,15 @@ io.on("connection", (socket) => {
 
 // kilocode_change start - serve agent-specific page
 app.get("/agent/:agentId", (req, res) => {
+	res.sendFile(path.join(__dirname, "public/agent.html"))
+})
+// kilocode_change end
+
+// kilocode_change start - serve project page
+app.get("/project/:projectId", (req, res) => {
+	res.sendFile(path.join(__dirname, "public/project.html"))
+})
+app.get("/project/:projectId/agent/:agentId", (req, res) => {
 	res.sendFile(path.join(__dirname, "public/agent.html"))
 })
 // kilocode_change end

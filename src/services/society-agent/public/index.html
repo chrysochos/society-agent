@@ -240,24 +240,33 @@
   .agent-selector .agent-indicator.idle { background: var(--yellow); }
   .agent-selector .agent-indicator.disabled { background: var(--red); }
 
-  /* Agent management panel (tab) */
-  .agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  /* Project management panel (tab) */
+  .projects-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 12px; padding: 16px 20px; overflow-y: auto; flex: 1; }
-  .agent-mgmt-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-    padding: 16px; display: flex; flex-direction: column; gap: 8px; }
-  .agent-mgmt-card .agent-header { display: flex; align-items: center; gap: 8px; }
-  .agent-mgmt-card .agent-avatar { width: 36px; height: 36px; border-radius: 8px;
-    display: flex; align-items: center; justify-content: center; font-size: 18px;
+  .project-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; display: flex; flex-direction: column; gap: 10px; transition: border-color 0.2s; }
+  .project-card:hover { border-color: var(--accent); }
+  .project-card .project-header { display: flex; align-items: center; gap: 10px; }
+  .project-card .project-icon { width: 40px; height: 40px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center; font-size: 20px;
     background: rgba(88,166,255,0.15); }
-  .agent-mgmt-card .agent-meta { flex: 1; }
-  .agent-mgmt-card .agent-name { font-size: 14px; font-weight: 600; }
-  .agent-mgmt-card .agent-role { font-size: 11px; color: var(--muted); }
-  .agent-mgmt-card .agent-caps { display: flex; flex-wrap: wrap; gap: 4px; }
-  .agent-mgmt-card .cap-tag { font-size: 10px; padding: 1px 6px; border-radius: 8px;
-    background: rgba(88,166,255,0.1); color: var(--accent); border: 1px solid rgba(88,166,255,0.2); }
-  .agent-mgmt-card .agent-stats { display: flex; gap: 12px; font-size: 11px; color: var(--muted); }
-  .agent-mgmt-card .agent-actions { display: flex; gap: 6px; margin-top: 4px; }
-  .agent-mgmt-card .agent-actions .btn { font-size: 11px; padding: 4px 10px; }
+  .project-card .project-meta { flex: 1; }
+  .project-card .project-name { font-size: 15px; font-weight: 600; }
+  .project-card .project-desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .project-card .project-folder { font-size: 11px; color: var(--accent); font-family: monospace; }
+  .project-card .project-agents { display: flex; flex-wrap: wrap; gap: 6px; }
+  .project-card .project-agent-chip { font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: rgba(88,166,255,0.08); color: var(--text); border: 1px solid var(--border); display: flex; align-items: center; gap: 4px; }
+  .project-card .project-agent-chip .chip-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .project-card .project-agent-chip .chip-dot.supervisor { background: var(--yellow); }
+  .project-card .project-agent-chip .chip-dot.worker { background: var(--green); }
+  .project-card .project-stats { display: flex; gap: 12px; font-size: 11px; color: var(--muted); }
+  .project-card .project-actions { display: flex; gap: 6px; margin-top: 4px; }
+  .project-card .project-actions .btn { font-size: 11px; padding: 4px 10px; }
+  .project-add-card { background: var(--surface); border: 2px dashed var(--border); border-radius: 10px;
+    padding: 30px 16px; display: flex; align-items: center; justify-content: center;
+    font-size: 14px; color: var(--muted); cursor: pointer; transition: border-color 0.2s, color 0.2s; }
+  .project-add-card:hover { border-color: var(--accent); color: var(--accent); }
   .agent-add-card { background: transparent; border: 2px dashed var(--border); border-radius: 10px;
     display: flex; align-items: center; justify-content: center; min-height: 140px;
     cursor: pointer; color: var(--muted); font-size: 14px; transition: border-color 0.2s; }
@@ -317,22 +326,22 @@
       <div style="padding:16px;color:var(--muted);font-size:12px">No files yet</div>
     </div>
 
-    <!-- Agents -->
-    <h2 style="margin-top:8px">Agents</h2>
-    <div id="agentList">
-      <div style="padding:8px 16px;color:var(--muted);font-size:12px">No active agents</div>
+    <!-- Projects -->
+    <h2 style="margin-top:8px">Projects</h2>
+    <div id="projectList">
+      <div style="padding:8px 16px;color:var(--muted);font-size:12px">No projects</div>
     </div>
   </div>
 
   <div class="chat-area">
     <div class="tab-bar">
       <div class="tab active" onclick="switchTab('chat')" id="tabChat">&#128172; Chat</div>
-      <div class="tab" onclick="switchTab('agents')" id="tabAgents">&#129302; Agents</div>
+      <div class="tab" onclick="switchTab('projects')" id="tabProjects">&#128193; Projects</div>
       <div class="tab" onclick="switchTab('terminal')" id="tabTerminal">&#9000; Terminal</div>
     </div>
 
     <div class="tab-content active" id="paneChat">
-    <!-- Agent selector bar -->
+    <!-- Agent selector bar (organized by project) -->
     <div class="agent-selector" id="agentSelector">
       <label>Agent:</label>
       <select id="agentSelect" onchange="onAgentChange()">
@@ -379,16 +388,16 @@
     <div class="log-panel" id="logPanel"></div>
   </div><!-- /paneChat -->
 
-    <!-- Agents management pane -->
-    <div class="tab-content" id="paneAgents">
+    <!-- Projects management pane -->
+    <div class="tab-content" id="paneProjects">
       <div style="padding:12px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
-        <h3 style="font-size:14px;font-weight:600;flex:1">Persistent Agents</h3>
-        <span style="font-size:12px;color:var(--muted)" id="agentCountInfo">-</span>
+        <h3 style="font-size:14px;font-weight:600;flex:1">Projects</h3>
+        <span style="font-size:12px;color:var(--muted)" id="projectCountInfo">-</span>
       </div>
-      <div class="agents-grid" id="agentsGrid">
-        <div style="padding:20px;color:var(--muted);font-size:13px">Loading agents...</div>
+      <div class="projects-grid" id="projectsGrid">
+        <div style="padding:20px;color:var(--muted);font-size:13px">Loading projects...</div>
       </div>
-    </div><!-- /paneAgents -->
+    </div><!-- /paneProjects -->
 
     <div class="tab-content" id="paneTerminal">
       <div class="terminal-toolbar">
@@ -421,41 +430,35 @@
 </div>
 
 <!-- Agent Edit/Create Modal -->
-<div class="modal-overlay" id="agentModal" style="display:none">
+<div class="modal-overlay" id="projectModal" style="display:none">
   <div class="modal wide">
-    <h2 id="agentModalTitle">Create Agent</h2>
-    <p style="font-size:12px;color:var(--muted);margin-bottom:12px" id="agentModalDesc">Define a new persistent agent with its own personality and expertise.</p>
+    <h2 id="projectModalTitle">Create Project</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px" id="projectModalDesc">Create a project to organize agents around a shared folder and knowledge base.</p>
     <div class="form-row">
       <div class="form-group">
         <label>ID (unique, lowercase)</label>
-        <input type="text" id="agentFormId" placeholder="my-agent" pattern="[a-z0-9-]+">
+        <input type="text" id="projectFormId" placeholder="my-project" pattern="[a-z0-9-]+">
       </div>
       <div class="form-group">
         <label>Name</label>
-        <input type="text" id="agentFormName" placeholder="My Agent">
+        <input type="text" id="projectFormName" placeholder="My Web App">
       </div>
     </div>
     <div class="form-group">
-      <label>Role / Specialty</label>
-      <input type="text" id="agentFormRole" placeholder="e.g. Security Reviewer, Data Analyst">
+      <label>Description</label>
+      <input type="text" id="projectFormDesc" placeholder="What is this project about?">
     </div>
     <div class="form-group">
-      <label>Capabilities (comma-separated)</label>
-      <input type="text" id="agentFormCaps" placeholder="coding, analysis, planning">
+      <label>Folder (relative to workspace, leave empty for default)</label>
+      <input type="text" id="projectFormFolder" placeholder="e.g. my-project/">
     </div>
     <div class="form-group">
-      <label>System Prompt</label>
-      <textarea id="agentFormPrompt" rows="5" placeholder="You are an expert in..."></textarea>
-    </div>
-    <div class="form-group">
-      <div class="checkbox-row">
-        <input type="checkbox" id="agentFormSpawn">
-        <label for="agentFormSpawn" style="margin-bottom:0">Can spawn ephemeral workers (supervisor capability)</label>
-      </div>
+      <label>Knowledge (project context shared with all agents)</label>
+      <textarea id="projectFormKnowledge" rows="4" placeholder="Key facts, conventions, tech stack..."></textarea>
     </div>
     <div class="actions">
-      <button class="btn btn-secondary" onclick="hideAgentModal()">Cancel</button>
-      <button class="btn btn-primary" id="agentFormSubmit" onclick="submitAgentForm()">Create</button>
+      <button class="btn btn-secondary" onclick="hideProjectModal()">Cancel</button>
+      <button class="btn btn-primary" id="projectFormSubmit" onclick="submitProjectForm()">Create</button>
     </div>
   </div>
 </div>
@@ -519,7 +522,7 @@ socket.on('purpose-started', (data) => {
 
 socket.on('team-formed', (data) => {
   addLog('info', `Team formed: ${data.teamSize} agents`);
-  refreshAgents();
+  loadProjects();
 });
 
 socket.on('progress-update', (data) => {
@@ -528,7 +531,7 @@ socket.on('progress-update', (data) => {
 
 socket.on('agent-status-change', (data) => {
   addLog('info', `Agent ${data.agentId}: ${data.status}`);
-  refreshAgents();
+  loadProjects();
 });
 
 // File creation events
@@ -642,7 +645,7 @@ async function sendMessage() {
 
   try {
     const agentId = selectedAgentId || undefined;
-    const agentName = selectedAgentId ? (persistentAgents.find(a => a.id === selectedAgentId)?.name || selectedAgentId) : undefined;
+    const agentName = selectedAgentId ? (allProjectAgents.find(a => a.id === selectedAgentId)?.name || selectedAgentId) : undefined;
 
     const res = await fetch(`${API}/api/purpose/start`, {
       method: 'POST',
@@ -1511,35 +1514,49 @@ document.getElementById('input').addEventListener('input', function() {
 });
 
 // ============================================================================
-// Persistent Agent Management
+// Project Management
 // ============================================================================
 
-let persistentAgents = [];
+let projects = [];
+let allProjectAgents = []; // flattened list of all agents across projects
 let selectedAgentId = ''; // '' means default society agent
-let editingAgentId = null; // null = create, string = editing
+let editingProjectId = null; // null = create, string = editing
 
-async function loadPersistentAgents() {
+async function loadProjects() {
   try {
-    const res = await fetch(`${API}/api/persistent-agents`);
+    const res = await fetch(`${API}/api/projects`);
     const data = await res.json();
-    persistentAgents = data.agents || [];
+    projects = data.projects || [];
+    // Flatten agents for the selector
+    allProjectAgents = [];
+    projects.forEach(p => {
+      (p.agents || []).forEach(a => {
+        allProjectAgents.push({ ...a, projectId: p.id, projectName: p.name });
+      });
+    });
     renderAgentSelector();
-    renderAgentsGrid();
-    renderSidebarAgents();
+    renderProjectsGrid();
+    renderSidebarProjects();
   } catch (e) {
-    addLog('warn', 'Failed to load persistent agents');
+    addLog('warn', 'Failed to load projects');
   }
 }
 
 function renderAgentSelector() {
   const sel = document.getElementById('agentSelect');
   const prev = sel.value;
-  sel.innerHTML = '<option value="">Default (Society Agent)</option>' +
-    persistentAgents.filter(a => a.status !== 'disabled').map(a =>
-      `<option value="${escapeHtml(a.id)}" ${a.id === prev ? 'selected' : ''}>${escapeHtml(a.name)} — ${escapeHtml(a.role)}</option>`
-    ).join('');
+  let html = '<option value="">Default (Society Agent)</option>';
+  projects.forEach(p => {
+    if (!p.agents || p.agents.length === 0) return;
+    html += `<optgroup label="${escapeHtml(p.name)}">`;
+    p.agents.forEach(a => {
+      html += `<option value="${escapeHtml(a.id)}" ${a.id === prev ? 'selected' : ''}>${escapeHtml(a.name)} — ${escapeHtml(a.role)}</option>`;
+    });
+    html += '</optgroup>';
+  });
+  sel.innerHTML = html;
   // Restore selection
-  if (prev && persistentAgents.some(a => a.id === prev)) {
+  if (prev && allProjectAgents.some(a => a.id === prev)) {
     sel.value = prev;
   }
   onAgentChange();
@@ -1553,140 +1570,132 @@ function onAgentChange() {
     info.innerHTML = '';
     return;
   }
-  const agent = persistentAgents.find(a => a.id === selectedAgentId);
+  const agent = allProjectAgents.find(a => a.id === selectedAgentId);
   if (agent) {
-    const statusCls = agent.status === 'active' ? 'active' : agent.status === 'idle' ? 'idle' : 'disabled';
-    info.innerHTML = `<span class="agent-indicator ${statusCls}"></span>${agent.capabilities.slice(0, 3).join(', ')}${agent.totalMessages > 0 ? ` · ${agent.totalMessages} msgs` : ''}`;
+    info.innerHTML = `<span style="color:var(--muted);font-size:10px">${escapeHtml(agent.projectName)}</span> · ${escapeHtml((agent.capabilities || []).slice(0, 3).join(', '))}`;
   }
 }
 
-function renderAgentsGrid() {
-  const grid = document.getElementById('agentsGrid');
-  const countEl = document.getElementById('agentCountInfo');
-  countEl.textContent = `${persistentAgents.length} agent${persistentAgents.length !== 1 ? 's' : ''}`;
+function renderProjectsGrid() {
+  const grid = document.getElementById('projectsGrid');
+  const countEl = document.getElementById('projectCountInfo');
+  countEl.textContent = `${projects.length} project${projects.length !== 1 ? 's' : ''}`;
 
-  let html = persistentAgents.map(a => {
-    const statusCls = a.status === 'active' ? 'active' : a.status === 'idle' ? 'idle' : 'disabled';
-    const avatar = a.canSpawnWorkers ? '&#128081;' : '&#129302;';
-    return `<div class="agent-mgmt-card">
-      <div class="agent-header">
-        <div class="agent-avatar">${avatar}</div>
-        <div class="agent-meta">
-          <div class="agent-name">${escapeHtml(a.name)}</div>
-          <div class="agent-role">${escapeHtml(a.role)}${a.canSpawnWorkers ? ' · <span style="color:var(--accent)">Supervisor</span>' : ''}</div>
+  let html = projects.map(p => {
+    const agentChips = (p.agents || []).map(a => {
+      const dotCls = a.canSpawnWorkers ? 'supervisor' : 'worker';
+      return `<span class="project-agent-chip"><span class="chip-dot ${dotCls}"></span>${escapeHtml(a.name)}</span>`;
+    }).join('');
+
+    const totalMsgs = (p.agents || []).reduce((sum, a) => sum + (a.totalMessages || 0), 0);
+    const totalTasks = (p.agents || []).reduce((sum, a) => sum + (a.tasksCompleted || 0), 0);
+
+    return `<div class="project-card">
+      <div class="project-header">
+        <div class="project-icon">&#128193;</div>
+        <div class="project-meta">
+          <div class="project-name">${escapeHtml(p.name)}</div>
+          <div class="project-desc">${escapeHtml(p.description || '')}</div>
         </div>
-        <span class="status-badge ${statusCls}">${a.status}</span>
+        <span class="status-badge ${p.status === 'active' ? 'active' : 'idle'}">${p.status || 'active'}</span>
       </div>
-      <div class="agent-caps">
-        ${a.capabilities.map(c => `<span class="cap-tag">${escapeHtml(c)}</span>`).join('')}
+      <div class="project-folder">&#128194; ${escapeHtml(p.folder || '/')}</div>
+      <div class="project-agents">${agentChips || '<span style="color:var(--muted);font-size:11px">No agents</span>'}</div>
+      <div class="project-stats">
+        <span>&#129302; ${(p.agents || []).length} agent${(p.agents || []).length !== 1 ? 's' : ''}</span>
+        <span>&#128172; ${totalMsgs} msgs</span>
+        <span>&#9989; ${totalTasks} tasks</span>
       </div>
-      <div class="agent-stats">
-        <span>&#128172; ${a.totalMessages} msgs</span>
-        <span>&#9989; ${a.tasksCompleted} tasks</span>
-        <span>${a.isActive ? '<span style="color:var(--green)">&#9679; Live</span>' : '<span style="color:var(--muted)">&#9675; Inactive</span>'}</span>
-        ${a.historyLength ? `<span>&#128203; ${a.historyLength} in memory</span>` : ''}
-      </div>
-      <div class="agent-actions">
-        <button class="btn btn-primary" onclick="window.open('/agent/${escapeAttr(a.id)}','_blank')" style="font-size:12px">&#128279; Open</button>
-        <button class="btn btn-secondary" onclick="editAgent('${escapeAttr(a.id)}')">&#9998; Edit</button>
-        <button class="btn btn-secondary" onclick="resetAgent('${escapeAttr(a.id)}')">&#8635; Reset</button>
-        <button class="btn btn-secondary" style="color:var(--red)" onclick="deleteAgent('${escapeAttr(a.id)}', '${escapeAttr(a.name)}')">&#128465;</button>
+      <div class="project-actions">
+        <button class="btn btn-primary" onclick="window.open('/project/${escapeAttr(p.id)}','_blank')" style="font-size:12px">&#128279; Open</button>
+        <button class="btn btn-secondary" onclick="editProject('${escapeAttr(p.id)}')">&#9998; Edit</button>
+        <button class="btn btn-secondary" style="color:var(--red)" onclick="deleteProject('${escapeAttr(p.id)}', '${escapeAttr(p.name)}')">&#128465;</button>
       </div>
     </div>`;
   }).join('');
 
-  html += `<div class="agent-add-card" onclick="showCreateAgentModal()">+ Create New Agent</div>`;
+  html += `<div class="project-add-card" onclick="showCreateProjectModal()">+ Create New Project</div>`;
   grid.innerHTML = html;
 }
 
-function renderSidebarAgents() {
-  const list = document.getElementById('agentList');
-  if (persistentAgents.length === 0) {
-    list.innerHTML = '<div style="padding:8px 16px;color:var(--muted);font-size:12px">No agents — go to Agents tab</div>';
+function renderSidebarProjects() {
+  const list = document.getElementById('projectList');
+  if (projects.length === 0) {
+    list.innerHTML = '<div style="padding:8px 16px;color:var(--muted);font-size:12px">No projects — go to Projects tab</div>';
     return;
   }
-  list.innerHTML = persistentAgents.map(a => {
-    const statusCls = a.status === 'active' ? 'working' : 'idle';
-    return `<div class="agent-card" onclick="window.open('/agent/${escapeAttr(a.id)}','_blank')" style="cursor:pointer" title="Open ${escapeHtml(a.name)} workspace">
-      <div class="name">${escapeHtml(a.name)}</div>
-      <div class="role">${escapeHtml(a.role)}</div>
-      <span class="status-badge ${statusCls}">${a.isActive ? 'live' : a.status}</span>
+  list.innerHTML = projects.map(p => {
+    const agentCount = (p.agents || []).length;
+    return `<div class="agent-card" onclick="window.open('/project/${escapeAttr(p.id)}','_blank')" style="cursor:pointer" title="Open ${escapeHtml(p.name)}">
+      <div class="name">${escapeHtml(p.name)}</div>
+      <div class="role">${agentCount} agent${agentCount !== 1 ? 's' : ''} · ${escapeHtml(p.folder || '/')}</div>
+      <span class="status-badge ${p.status === 'active' ? 'working' : 'idle'}">${p.status || 'active'}</span>
     </div>`;
   }).join('');
 }
 
-function selectAndChatAgent(agentId) {
-  document.getElementById('agentSelect').value = agentId;
-  onAgentChange();
-  switchTab('chat');
-  document.getElementById('input').focus();
+// Project CRUD
+
+function showCreateProjectModal() {
+  editingProjectId = null;
+  document.getElementById('projectModalTitle').textContent = 'Create Project';
+  document.getElementById('projectModalDesc').textContent = 'Create a project to organize agents around a shared folder and knowledge base.';
+  document.getElementById('projectFormId').value = '';
+  document.getElementById('projectFormId').disabled = false;
+  document.getElementById('projectFormName').value = '';
+  document.getElementById('projectFormDesc').value = '';
+  document.getElementById('projectFormFolder').value = '';
+  document.getElementById('projectFormKnowledge').value = '';
+  document.getElementById('projectFormSubmit').textContent = 'Create';
+  document.getElementById('projectModal').style.display = 'flex';
 }
 
-// Agent CRUD
-
-function showCreateAgentModal() {
-  editingAgentId = null;
-  document.getElementById('agentModalTitle').textContent = 'Create Agent';
-  document.getElementById('agentModalDesc').textContent = 'Define a new persistent agent with its own personality and expertise.';
-  document.getElementById('agentFormId').value = '';
-  document.getElementById('agentFormId').disabled = false;
-  document.getElementById('agentFormName').value = '';
-  document.getElementById('agentFormRole').value = '';
-  document.getElementById('agentFormCaps').value = '';
-  document.getElementById('agentFormPrompt').value = '';
-  document.getElementById('agentFormSpawn').checked = false;
-  document.getElementById('agentFormSubmit').textContent = 'Create';
-  document.getElementById('agentModal').style.display = 'flex';
+function editProject(id) {
+  const project = projects.find(p => p.id === id);
+  if (!project) return;
+  editingProjectId = id;
+  document.getElementById('projectModalTitle').textContent = `Edit: ${project.name}`;
+  document.getElementById('projectModalDesc').textContent = 'Update project settings. Agents are managed from the project page.';
+  document.getElementById('projectFormId').value = project.id;
+  document.getElementById('projectFormId').disabled = true;
+  document.getElementById('projectFormName').value = project.name;
+  document.getElementById('projectFormDesc').value = project.description || '';
+  document.getElementById('projectFormFolder').value = project.folder || '';
+  document.getElementById('projectFormKnowledge').value = project.knowledge || '';
+  document.getElementById('projectFormSubmit').textContent = 'Save';
+  document.getElementById('projectModal').style.display = 'flex';
 }
 
-function editAgent(id) {
-  const agent = persistentAgents.find(a => a.id === id);
-  if (!agent) return;
-  editingAgentId = id;
-  document.getElementById('agentModalTitle').textContent = `Edit: ${agent.name}`;
-  document.getElementById('agentModalDesc').textContent = 'Update this agent\'s configuration. Changes take effect on next message.';
-  document.getElementById('agentFormId').value = agent.id;
-  document.getElementById('agentFormId').disabled = true;
-  document.getElementById('agentFormName').value = agent.name;
-  document.getElementById('agentFormRole').value = agent.role;
-  document.getElementById('agentFormCaps').value = agent.capabilities.join(', ');
-  document.getElementById('agentFormPrompt').value = agent.systemPrompt;
-  document.getElementById('agentFormSpawn').checked = agent.canSpawnWorkers;
-  document.getElementById('agentFormSubmit').textContent = 'Save';
-  document.getElementById('agentModal').style.display = 'flex';
+function hideProjectModal() {
+  document.getElementById('projectModal').style.display = 'none';
+  editingProjectId = null;
 }
 
-function hideAgentModal() {
-  document.getElementById('agentModal').style.display = 'none';
-  editingAgentId = null;
-}
+async function submitProjectForm() {
+  const id = document.getElementById('projectFormId').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  const name = document.getElementById('projectFormName').value.trim();
+  const description = document.getElementById('projectFormDesc').value.trim();
+  const folder = document.getElementById('projectFormFolder').value.trim();
+  const knowledge = document.getElementById('projectFormKnowledge').value.trim();
 
-async function submitAgentForm() {
-  const id = document.getElementById('agentFormId').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
-  const name = document.getElementById('agentFormName').value.trim();
-  const role = document.getElementById('agentFormRole').value.trim();
-  const capabilities = document.getElementById('agentFormCaps').value.split(',').map(s => s.trim()).filter(Boolean);
-  const systemPrompt = document.getElementById('agentFormPrompt').value.trim();
-  const canSpawnWorkers = document.getElementById('agentFormSpawn').checked;
-
-  if (!id || !name || !role || !systemPrompt) {
-    alert('Please fill in all required fields (ID, Name, Role, System Prompt)');
+  if (!id || !name) {
+    alert('Please fill in ID and Name');
     return;
   }
 
   try {
     let res;
-    if (editingAgentId) {
-      res = await fetch(`${API}/api/persistent-agents/${editingAgentId}`, {
+    if (editingProjectId) {
+      res = await fetch(`${API}/api/projects/${editingProjectId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, role, capabilities, systemPrompt, canSpawnWorkers }),
+        body: JSON.stringify({ name, description, folder, knowledge }),
       });
     } else {
-      res = await fetch(`${API}/api/persistent-agents`, {
+      res = await fetch(`${API}/api/projects`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, name, role, capabilities, systemPrompt, canSpawnWorkers }),
+        body: JSON.stringify({ id, name, description, folder, knowledge }),
       });
     }
     const data = await res.json();
@@ -1694,23 +1703,25 @@ async function submitAgentForm() {
       alert(data.error || 'Failed');
       return;
     }
-    hideAgentModal();
-    addLog('info', editingAgentId ? `Agent ${name} updated` : `Agent ${name} created`);
-    loadPersistentAgents();
+    hideProjectModal();
+    addLog('info', editingProjectId ? `Project ${name} updated` : `Project ${name} created`);
+    loadProjects();
   } catch (e) {
     alert(`Error: ${e.message}`);
   }
 }
 
-async function deleteAgent(id, name) {
-  if (!confirm(`Delete agent "${name}"? This cannot be undone.`)) return;
+async function deleteProject(id, name) {
+  if (!confirm(`Delete project "${name}" and all its agents? This cannot be undone.`)) return;
   try {
-    const res = await fetch(`${API}/api/persistent-agents/${id}`, { method: 'DELETE' });
+    const res = await fetch(`${API}/api/projects/${id}`, { method: 'DELETE' });
     const data = await res.json();
     if (data.success) {
-      addLog('info', `Agent ${name} deleted`);
-      if (selectedAgentId === id) selectedAgentId = '';
-      loadPersistentAgents();
+      addLog('info', `Project ${name} deleted`);
+      if (allProjectAgents.some(a => a.projectId === id && a.id === selectedAgentId)) {
+        selectedAgentId = '';
+      }
+      loadProjects();
     } else {
       addLog('error', `Delete failed: ${data.error}`);
     }
@@ -1719,27 +1730,11 @@ async function deleteAgent(id, name) {
   }
 }
 
-async function resetAgent(id) {
-  const agent = persistentAgents.find(a => a.id === id);
-  if (!agent) return;
-  if (!confirm(`Reset ${agent.name}'s memory? Conversation history will be cleared.`)) return;
-  try {
-    const res = await fetch(`${API}/api/persistent-agents/${id}/reset`, { method: 'POST' });
-    const data = await res.json();
-    if (data.success) {
-      addLog('info', data.message);
-      loadPersistentAgents();
-    }
-  } catch (e) {
-    addLog('error', `Reset error: ${e.message}`);
-  }
-}
-
-// Load agents on startup
-socket.on('connect', () => { loadPersistentAgents(); });
+// Load projects on startup
+socket.on('connect', () => { loadProjects(); });
 // Refresh on agent events
 socket.on('system-event', (data) => {
-  if (data.type === 'agent-created' || data.type === 'agent-deleted') loadPersistentAgents();
+  if (data.type === 'agent-created' || data.type === 'agent-deleted') loadProjects();
 });
 
 // ============================================================================
@@ -1754,10 +1749,10 @@ function switchTab(tab) {
     document.getElementById('paneTerminal').classList.add('active');
     if (!term) initTerminal();
     else fitAddon.fit();
-  } else if (tab === 'agents') {
-    document.getElementById('tabAgents').classList.add('active');
-    document.getElementById('paneAgents').classList.add('active');
-    loadPersistentAgents(); // refresh when switching to tab
+  } else if (tab === 'projects') {
+    document.getElementById('tabProjects').classList.add('active');
+    document.getElementById('paneProjects').classList.add('active');
+    loadProjects(); // refresh when switching to tab
   } else {
     document.getElementById('tabChat').classList.add('active');
     document.getElementById('paneChat').classList.add('active');
