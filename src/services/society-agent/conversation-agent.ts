@@ -65,7 +65,8 @@ export class ConversationAgent {
 	private workspacePath: string
 	private onMessage?: (message: AgentMessage) => void
 	private onStatusChange?: (status: AgentState["status"]) => void
-	private onFileCreated?: (relativePath: string, fullPath: string, size: number) => void // kilocode_change - file tracking
+	private onFileCreated?: (relativePath: string, fullPath: string, size: number) => void // kilocode_change
+	private _pendingContent?: any[] // kilocode_change - structured content blocks for images - file tracking
 	private maxMessages: number // Kilocode: Max messages before summarization
 	private summaryThreshold: number // Kilocode: When to trigger summary
 	private conversationSummary: string = "" // Kilocode: Summarized older context
@@ -173,10 +174,19 @@ export class ConversationAgent {
 
 	/**
 	 * Send message and stream response (yields chunks as they arrive)
+	 * @param content - string or array of content blocks (text, image)
 	 */
-	async *sendMessageStream(content: string): AsyncGenerator<string, void, unknown> {
+	async *sendMessageStream(content: string | any[]): AsyncGenerator<string, void, unknown> {
 		// kilocode_change start
-		await this.addMessage("user", content)
+		const displayText = typeof content === "string" ? content : content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n") || "[attachments]"
+		await this.addMessage("user", displayText)
+
+		// If content is an array with images, we need to pass it as structured content
+		if (Array.isArray(content)) {
+			// Store the structured content for the LLM call
+			this._pendingContent = content
+		}
+
 		this.setStatus("working")
 
 		try {
@@ -672,10 +682,22 @@ Follow instructions provided by the supervisor for your specific role and capabi
 		getLog().info(`Streaming LLM call for ${this.state.identity.id}...`)
 
 		// Convert conversation history to Anthropic format
-		const messages: Anthropic.MessageParam[] = this.state.conversationHistory.map((msg) => ({
-			role: msg.role === "user" ? "user" : "assistant",
-			content: msg.content,
-		}))
+		const messages: Anthropic.MessageParam[] = this.state.conversationHistory.map((msg, i) => {
+			// If this is the last user message and we have pending structured content, use it
+			if (
+				this._pendingContent &&
+				msg.role === "user" &&
+				i === this.state.conversationHistory.length - 1
+			) {
+				const content = this._pendingContent
+				this._pendingContent = undefined
+				return { role: "user" as const, content }
+			}
+			return {
+				role: msg.role === "user" ? ("user" as const) : ("assistant" as const),
+				content: msg.content,
+			}
+		})
 
 		try {
 			// Kilocode: Prepend summary as system context if exists

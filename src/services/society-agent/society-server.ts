@@ -476,6 +476,58 @@ app.get("/api/config/api-key", (req, res) => {
 	})
 })
 
+// kilocode_change start - change workspace path from browser
+/**
+ * POST /api/config/workspace-path - Update WORKSPACE_PATH
+ * Body: { path: string }
+ */
+app.post("/api/config/workspace-path", async (req, res): Promise<void> => {
+	try {
+		const { path: newPath } = req.body
+		if (!newPath || typeof newPath !== "string") {
+			res.status(400).json({ error: "'path' is required" })
+			return
+		}
+
+		// Resolve to absolute path
+		const absPath = path.resolve(newPath)
+
+		// Verify directory exists (or create it)
+		await fs.promises.mkdir(absPath, { recursive: true })
+
+		// Also ensure the projects subdirectory exists
+		await fs.promises.mkdir(path.join(absPath, "projects"), { recursive: true })
+
+		// Update process.env
+		process.env.WORKSPACE_PATH = absPath
+
+		// Persist to .env file
+		const envPath = path.join(__dirname, "../../.env")
+		let envContent = ""
+		if (fs.existsSync(envPath)) {
+			envContent = fs.readFileSync(envPath, "utf-8")
+		}
+		if (envContent.includes("WORKSPACE_PATH=")) {
+			envContent = envContent.replace(/WORKSPACE_PATH=.*/, `WORKSPACE_PATH=${absPath}`)
+		} else {
+			envContent += `\nWORKSPACE_PATH=${absPath}\n`
+		}
+		fs.writeFileSync(envPath, envContent, "utf-8")
+
+		log.info(`Workspace path changed to: ${absPath}`)
+
+		res.json({
+			success: true,
+			workspacePath: absPath,
+			outputDir: path.join(absPath, "projects"),
+		})
+	} catch (error) {
+		log.error("Error changing workspace path:", error)
+		res.status(500).json({ error: String(error) })
+	}
+})
+// kilocode_change end
+
 /**
  * POST /api/purpose/start - Start a new purpose (Agent-driven with memory)
  */
@@ -491,10 +543,10 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 			return
 		}
 
-		const { description } = req.body
+		const { description, attachments } = req.body
 
-		if (!description) {
-			res.status(400).json({ error: "Purpose description required" })
+		if (!description && (!attachments || attachments.length === 0)) {
+			res.status(400).json({ error: "Purpose description or attachments required" })
 			return
 		}
 
@@ -580,9 +632,12 @@ Guidelines:
 
 		log.info("User agent handling:", description)
 
+		// Build content: plain string or content blocks with attachments
+		const content = attachments && attachments.length > 0 ? attachments : description
+
 		// Send message to agent (it maintains its own conversation history)
 		let fullResponse = ""
-		for await (const chunk of userAgent.sendMessageStream(description)) {
+		for await (const chunk of userAgent.sendMessageStream(content)) {
 			fullResponse += chunk
 			io.emit("agent-message", {
 				agentId: "user-agent",
