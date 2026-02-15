@@ -236,10 +236,17 @@
     <div class="tab-bar">
       <div class="tab active" onclick="switchTab('chat')" id="tabChat">&#128172; Chat</div>
       <div class="tab" onclick="switchTab('terminal')" id="tabTerminal">&#9000; Terminal</div>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" id="clearChatBtn" onclick="clearChat()" style="font-size:11px;padding:3px 10px;margin:4px 8px" title="Clear conversation history">&#128465; Clear Chat</button>
     </div>
 
     <!-- Chat pane -->
     <div class="tab-content active" id="paneChat">
+      <div id="summaryBanner" style="display:none;padding:8px 20px;background:rgba(88,166,255,0.08);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted)">
+        <strong style="color:var(--accent)">&#128203; Conversation Summary</strong>
+        <span id="summaryText"></span>
+        <button onclick="document.getElementById('summaryBanner').style.display='none'" style="float:right;background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px">&times;</button>
+      </div>
       <div class="messages" id="messages">
         <div class="welcome" id="welcome">
           <h2 id="welcomeTitle">Agent</h2>
@@ -370,9 +377,22 @@ socket.on('connect', () => {
   setStatus(true);
   addLog('info', 'Connected');
   loadAgent();
+  loadChatHistory();
 });
 
 socket.on('disconnect', () => { setStatus(false); addLog('warn', 'Disconnected'); });
+
+// kilocode_change start - listen for agent reset (from project page or other tabs)
+socket.on('agent-reset', (data) => {
+  if (data.agentId === AGENT_ID) {
+    addLog('info', 'Agent memory was cleared');
+    document.getElementById('messages').innerHTML =
+      `<div class="welcome" id="welcome"><h2>${esc(agentProfile?.name || 'Agent')}</h2><p>Memory cleared. Send a message to start fresh.</p></div>`;
+    document.getElementById('summaryBanner').style.display = 'none';
+    messageCount = 0;
+  }
+});
+// kilocode_change end
 
 let streamDidFire = false;
 socket.on('agent-message', (data) => {
@@ -409,12 +429,77 @@ socket.on('file-created', (data) => {
   }
 });
 
+// kilocode_change start - system-event for filesCreated from chat
+socket.on('system-event', (data) => {
+  if (data.type === 'files-created' && data.agentId === AGENT_ID) {
+    addMessage('system', `&#128230; ${data.message}`);
+    refreshFiles();
+  }
+});
+// kilocode_change end
+
 socket.on('file-deleted', () => refreshFiles());
 socket.on('file-moved', () => refreshFiles());
 
 // ============================================================================
 // Chat
 // ============================================================================
+
+// kilocode_change start - load history on page open
+async function loadChatHistory() {
+  try {
+    const res = await fetch(`${API}/api/agent/${AGENT_ID}/history`);
+    if (!res.ok) return;
+    const data = await res.json();
+
+    if (data.messages && data.messages.length > 0) {
+      // Hide welcome, show messages
+      const welcome = document.getElementById('welcome');
+      if (welcome) welcome.style.display = 'none';
+
+      for (const msg of data.messages) {
+        // Skip internal 'Created file:' messages from file creation
+        if (msg.role === 'assistant' && msg.content.startsWith('Created file:')) continue;
+        addMessage(msg.role === 'assistant' ? 'assistant' : 'user', msg.content, msg.role === 'assistant' ? (agentProfile?.name || 'Agent') : undefined);
+      }
+      addLog('info', `Loaded ${data.messages.length} messages from history`);
+      scrollToBottom();
+    }
+
+    // Show summary banner if available
+    if (data.summary) {
+      document.getElementById('summaryText').textContent = ` ${data.summary.substring(0, 300)}${data.summary.length > 300 ? '...' : ''}`;
+      document.getElementById('summaryBanner').style.display = 'block';
+    } else if (data.memorySummary) {
+      document.getElementById('summaryText').textContent = ` ${data.memorySummary.substring(0, 300)}${data.memorySummary.length > 300 ? '...' : ''}`;
+      document.getElementById('summaryBanner').style.display = 'block';
+    }
+  } catch (e) {
+    addLog('warn', `Could not load history: ${e.message}`);
+  }
+}
+
+async function clearChat() {
+  if (!confirm('Clear all conversation history for this agent?')) return;
+  try {
+    const res = await fetch(`${API}/api/agent/${AGENT_ID}/history`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      document.getElementById('messages').innerHTML =
+        `<div class="welcome" id="welcome"><h2>${esc(agentProfile?.name || 'Agent')}</h2><p>History cleared. Send a message to start fresh.</p></div>`;
+      document.getElementById('summaryBanner').style.display = 'none';
+      messageCount = 0;
+      addLog('info', 'Chat history cleared');
+      loadAgent(); // refresh stats
+    } else {
+      addLog('error', data.error || 'Failed to clear');
+    }
+  } catch (e) {
+    addLog('error', `Clear failed: ${e.message}`);
+  }
+}
+// kilocode_change end
+
 async function sendMessage() {
   const input = document.getElementById('input');
   const text = input.value.trim();
@@ -485,6 +570,14 @@ async function sendMessage() {
 
     messageCount++;
     addLog('info', `Response (history: ${data.historyLength} messages)`);
+
+    // kilocode_change start - show filesCreated notification in chat
+    if (data.filesCreated && data.filesCreated > 0) {
+      addMessage('system', `&#128230; Created ${data.filesCreated} file(s) in project folder`);
+      refreshFiles();
+    }
+    // kilocode_change end
+
     // Refresh agent stats
     loadAgent();
   } catch (e) {

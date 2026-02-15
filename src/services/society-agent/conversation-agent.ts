@@ -120,6 +120,27 @@ export class ConversationAgent {
 		// kilocode_change end
 	}
 
+	// kilocode_change start - expose conversation summary and clear history
+	/**
+	 * Get the auto-summarized conversation context (if any)
+	 */
+	getSummary(): string {
+		return this.conversationSummary
+	}
+
+	/**
+	 * Clear all conversation history and summary.
+	 * Agent becomes a blank slate but keeps its identity/config.
+	 */
+	clearHistory(): void {
+		this.state.conversationHistory = []
+		this.conversationSummary = ""
+		this.state.currentTask = undefined
+		this.setStatus("idle")
+		getLog().info(`${this.state.identity.id}: History cleared`)
+	}
+	// kilocode_change end
+
 	/**
 	 * Update agent status
 	 */

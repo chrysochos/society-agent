@@ -1278,6 +1278,8 @@ app.post("/api/persistent-agents/:id/reset", (req, res): void => {
 		// Clear memory but keep stats
 		agentStore.updateMemory(req.params.id, "")
 		log.info(`Reset agent memory: ${req.params.id}`)
+		// kilocode_change - notify open agent pages
+		io.emit("agent-reset", { agentId: req.params.id, timestamp: Date.now() })
 		res.json({ success: true, message: `Agent ${profile.name} memory cleared` })
 	} catch (error) {
 		res.status(500).json({ error: String(error) })
@@ -1463,12 +1465,68 @@ app.post("/api/projects/:projectId/agents/:agentId/reset", (req, res): void => {
 		}
 		activeAgents.delete(req.params.agentId)
 		projectStore.resetAgentMemory(req.params.projectId, req.params.agentId)
+		// kilocode_change - notify open agent pages
+		io.emit("agent-reset", { agentId: req.params.agentId, projectId: req.params.projectId, timestamp: Date.now() })
 		res.json({ success: true, message: `Agent ${agent.name} memory cleared` })
 	} catch (error) {
 		res.status(500).json({ error: String(error) })
 	}
 })
 
+// kilocode_change end
+
+// kilocode_change start - agent chat history endpoint
+/**
+ * GET /api/agent/:agentId/history - Get conversation history for an agent
+ * Returns messages from the live agent (if cached), plus summary if available.
+ */
+app.get("/api/agent/:agentId/history", (req, res): void => {
+	try {
+		const { agentId } = req.params
+		const agent = activeAgents.get(agentId)
+		if (!agent) {
+			// Agent not active — return empty with any persisted memory
+			const found = projectStore.findAgentProject(agentId)
+			const memorySummary = found?.agent.memorySummary || agentStore.get(agentId)?.memorySummary || ""
+			res.json({ messages: [], summary: "", memorySummary, active: false })
+			return
+		}
+		res.json({
+			messages: agent.getHistory(),
+			summary: agent.getSummary(),
+			memorySummary: "",
+			active: true,
+		})
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * DELETE /api/agent/:agentId/history - Clear conversation history for an agent
+ * Clears in-memory history and persisted memory summary.
+ */
+app.delete("/api/agent/:agentId/history", (req, res): void => {
+	try {
+		const { agentId } = req.params
+		const agent = activeAgents.get(agentId)
+		if (agent) {
+			agent.clearHistory()
+		}
+		// Also clear persisted memory
+		const found = projectStore.findAgentProject(agentId)
+		if (found) {
+			projectStore.resetAgentMemory(found.project.id, agentId)
+		} else {
+			agentStore.updateMemory(agentId, "")
+		}
+		io.emit("agent-reset", { agentId, timestamp: Date.now() })
+		log.info(`Cleared history for agent: ${agentId}`)
+		res.json({ success: true, message: "History cleared" })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
 // kilocode_change end
 
 // kilocode_change start - agent-scoped workspace & chat routes (session-based, single port)
