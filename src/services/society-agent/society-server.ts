@@ -19,6 +19,9 @@ import { Anthropic } from "@anthropic-ai/sdk"
 import { ApiHandler } from "../../api/index"
 import { commandExecutor } from "./command-executor"
 import { getLog } from "./logger"
+// kilocode_change start - persistent agents
+import { PersistentAgentStore } from "./persistent-agent-store"
+// kilocode_change end
 // kilocode_change start - terminal support
 import * as pty from "node-pty"
 // kilocode_change end
@@ -51,6 +54,11 @@ app.use(express.static(path.join(__dirname, "public")))  // kilocode_change - se
 let societyManager: SocietyManager | null = null
 const connectedClients = new Set<string>()
 let userAgent: ConversationAgent | null = null // Single agent for user conversations
+
+// kilocode_change start - persistent agent system
+const agentStore = new PersistentAgentStore(getWorkspacePath())
+const activeAgents = new Map<string, ConversationAgent>() // agentId → live ConversationAgent
+// kilocode_change end
 
 /**
  * Initialize Society Manager with callbacks
@@ -613,12 +621,67 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 			return
 		}
 
-		const { description, attachments } = req.body
+		const { description, attachments, agentId } = req.body // kilocode_change - added agentId
 
 		if (!description && (!attachments || attachments.length === 0)) {
 			res.status(400).json({ error: "Purpose description or attachments required" })
 			return
 		}
+
+		// kilocode_change start - route to persistent agent if agentId specified
+		if (agentId) {
+			const profile = agentStore.get(agentId)
+			if (!profile) {
+				res.status(404).json({ error: `Agent "${agentId}" not found` })
+				return
+			}
+
+			const agent = getOrCreateAgent(profile, apiKey)
+			agentStore.recordActivity(agentId)
+
+			log.info(`[${profile.name}] handling: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
+
+			const content = attachments && attachments.length > 0 ? attachments : description
+
+			let fullResponse = ""
+			for await (const chunk of agent.sendMessageStream(content)) {
+				fullResponse += chunk
+				io.emit("agent-message", {
+					agentId: profile.id,
+					agentName: profile.name,
+					message: chunk,
+					timestamp: Date.now(),
+					isStreaming: true,
+				})
+			}
+
+			io.emit("agent-message", {
+				agentId: profile.id,
+				agentName: profile.name,
+				message: "",
+				timestamp: Date.now(),
+				isStreaming: false,
+				isDone: true,
+			})
+
+			// Update memory periodically (every 10 messages)
+			const history = agent.getHistory()
+			if (history.length > 0 && history.length % 10 === 0) {
+				const lastMessages = history.slice(-6).map((m: any) => `${m.role}: ${typeof m.content === 'string' ? m.content.substring(0, 200) : '[structured]'}`).join('\n')
+				agentStore.updateMemory(agentId, `Recent context (${history.length} messages):\n${lastMessages}`)
+			}
+
+			res.json({
+				type: "chat",
+				agentId: profile.id,
+				agentName: profile.name,
+				response: fullResponse,
+				status: "completed",
+				historyLength: history.length,
+			})
+			return
+		}
+		// kilocode_change end
 
 		// Initialize user agent if not exists (maintains conversation memory)
 		if (!userAgent) {
@@ -974,6 +1037,471 @@ app.post("/api/agent/:agentId/stop", async (req, res) => {
 	}
 })
 
+// kilocode_change start - persistent agent CRUD endpoints
+/**
+ * Helper: get or create a live ConversationAgent from a persistent profile
+ */
+function getOrCreateAgent(profile: import("./persistent-agent-store").PersistentAgentProfile, apiKey: string): ConversationAgent {
+	const existing = activeAgents.get(profile.id)
+	if (existing) return existing
+
+	const anthropic = new Anthropic({ apiKey })
+
+	const apiHandler: ApiHandler = {
+		createMessage: async function* (systemPrompt: string, messages: any[]) {
+			const stream = await anthropic.messages.stream({
+				model: profile.model || process.env.API_MODEL_ID || "claude-sonnet-4-20250514",
+				max_tokens: 8096,
+				system: systemPrompt,
+				messages: messages.map((m) => ({
+					role: m.role === "assistant" ? "assistant" : "user",
+					content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+				})),
+			})
+
+			for await (const chunk of stream) {
+				if (chunk.type === "content_block_delta" && chunk.delta.type === "text_delta") {
+					yield { type: "text", text: chunk.delta.text }
+				}
+			}
+
+			const finalMessage = await stream.finalMessage()
+			return { stopReason: finalMessage.stop_reason || "end_turn" }
+		},
+	} as any
+
+	// Build system prompt with memory context
+	let fullPrompt = profile.systemPrompt
+	if (profile.memorySummary) {
+		fullPrompt += `\n\n## Your Memory (from past conversations)\n${profile.memorySummary}`
+	}
+	if (profile.knowledgeSummary) {
+		fullPrompt += `\n\n## Your Knowledge\n${profile.knowledgeSummary}`
+	}
+
+	const agent = new ConversationAgent({
+		identity: {
+			id: profile.id,
+			role: profile.canSpawnWorkers ? "supervisor" : "worker",
+			capabilities: profile.capabilities,
+			createdAt: Date.now(),
+		},
+		apiHandler,
+		systemPrompt: fullPrompt,
+		onMessage: (message) => {
+			io.emit("agent-message", {
+				agentId: profile.id,
+				message: message.content,
+				timestamp: message.timestamp,
+				isStreaming: false,
+			})
+		},
+		onFileCreated: (relativePath, fullPath, size) => {
+			log.info(`[${profile.name}] File created: ${fullPath} (${size} bytes)`)
+			io.emit("file-created", {
+				agentId: profile.id,
+				relativePath,
+				fullPath,
+				size,
+				timestamp: Date.now(),
+			})
+		},
+	})
+
+	activeAgents.set(profile.id, agent)
+	log.info(`Activated persistent agent: ${profile.name} (${profile.id})`)
+	return agent
+}
+
+/**
+ * GET /api/persistent-agents - List all persistent agents
+ */
+app.get("/api/persistent-agents", (req, res): void => {
+	try {
+		const agents = agentStore.getAll().map((a) => ({
+			...a,
+			isActive: activeAgents.has(a.id),
+			historyLength: activeAgents.get(a.id)?.getHistory().length || 0,
+		}))
+		res.json({ agents })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/persistent-agents/:id - Get a specific persistent agent
+ */
+app.get("/api/persistent-agents/:id", (req, res): void => {
+	try {
+		const agent = agentStore.get(req.params.id)
+		if (!agent) {
+			res.status(404).json({ error: "Agent not found" })
+			return
+		}
+		res.json({
+			...agent,
+			isActive: activeAgents.has(agent.id),
+			historyLength: activeAgents.get(agent.id)?.getHistory().length || 0,
+		})
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/persistent-agents - Create a new persistent agent
+ */
+app.post("/api/persistent-agents", (req, res): void => {
+	try {
+		const { id, name, role, capabilities, systemPrompt, canSpawnWorkers, model } = req.body
+		if (!id || !name || !role || !systemPrompt) {
+			res.status(400).json({ error: "id, name, role, and systemPrompt are required" })
+			return
+		}
+		const agent = agentStore.create({
+			id,
+			name,
+			role,
+			capabilities: capabilities || [],
+			systemPrompt,
+			canSpawnWorkers: canSpawnWorkers || false,
+			model,
+		})
+		io.emit("system-event", { type: "agent-created", agentId: id, name, timestamp: Date.now() })
+		res.status(201).json(agent)
+	} catch (error) {
+		res.status(400).json({ error: String(error) })
+	}
+})
+
+/**
+ * PUT /api/persistent-agents/:id - Update a persistent agent
+ */
+app.put("/api/persistent-agents/:id", (req, res): void => {
+	try {
+		const updated = agentStore.update(req.params.id, req.body)
+		if (!updated) {
+			res.status(404).json({ error: "Agent not found" })
+			return
+		}
+		// If agent is active, kill the cached instance so it picks up new config
+		if (activeAgents.has(req.params.id)) {
+			activeAgents.delete(req.params.id)
+			log.info(`Deactivated agent ${req.params.id} due to profile update — will recreate on next message`)
+		}
+		res.json(updated)
+	} catch (error) {
+		res.status(400).json({ error: String(error) })
+	}
+})
+
+/**
+ * DELETE /api/persistent-agents/:id - Delete a persistent agent
+ */
+app.delete("/api/persistent-agents/:id", (req, res): void => {
+	try {
+		activeAgents.delete(req.params.id)
+		const deleted = agentStore.delete(req.params.id)
+		if (!deleted) {
+			res.status(404).json({ error: "Agent not found" })
+			return
+		}
+		io.emit("system-event", { type: "agent-deleted", agentId: req.params.id, timestamp: Date.now() })
+		res.json({ success: true })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/persistent-agents/:id/reset - Reset agent memory (clear conversation history)
+ */
+app.post("/api/persistent-agents/:id/reset", (req, res): void => {
+	try {
+		const profile = agentStore.get(req.params.id)
+		if (!profile) {
+			res.status(404).json({ error: "Agent not found" })
+			return
+		}
+		// Kill cached instance
+		activeAgents.delete(req.params.id)
+		// Clear memory but keep stats
+		agentStore.updateMemory(req.params.id, "")
+		log.info(`Reset agent memory: ${req.params.id}`)
+		res.json({ success: true, message: `Agent ${profile.name} memory cleared` })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+// kilocode_change end
+
+// kilocode_change start - agent-scoped workspace & chat routes (session-based, single port)
+
+/**
+ * Helper: resolve agent's workspace directory
+ */
+function agentWorkspaceDir(agentId: string): string {
+	const profile = agentStore.get(agentId)
+	const folder = profile?.workspaceFolder || agentId
+	return path.join(getWorkspacePath(), "projects", folder)
+}
+
+/**
+ * Helper: security check — ensure resolved path is within agent's workspace
+ */
+function securePath(agentDir: string, relativePath: string): { ok: boolean; fullPath: string; error?: string } {
+	const fullPath = path.join(agentDir, relativePath)
+	const resolved = path.resolve(fullPath)
+	const dirResolved = path.resolve(agentDir)
+	if (!resolved.startsWith(dirResolved)) {
+		return { ok: false, fullPath, error: "Access denied: path outside agent workspace" }
+	}
+	return { ok: true, fullPath }
+}
+
+/**
+ * POST /api/agent/:agentId/chat - Send a message to a specific agent
+ * Body: { description: string, attachments?: any[] }
+ */
+app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
+	try {
+		const { agentId } = req.params
+		const apiKey = (req.headers["x-api-key"] as string) || process.env.ANTHROPIC_API_KEY
+		if (!apiKey) {
+			res.status(401).json({ error: "API key required" })
+			return
+		}
+
+		const profile = agentStore.get(agentId)
+		if (!profile) {
+			res.status(404).json({ error: `Agent "${agentId}" not found` })
+			return
+		}
+
+		const { description, attachments } = req.body
+		if (!description && (!attachments || attachments.length === 0)) {
+			res.status(400).json({ error: "Message description or attachments required" })
+			return
+		}
+
+		const agent = getOrCreateAgent(profile, apiKey)
+		agentStore.recordActivity(agentId)
+
+		log.info(`[${profile.name}] chat: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
+
+		const content = attachments && attachments.length > 0 ? attachments : description
+
+		let fullResponse = ""
+		for await (const chunk of agent.sendMessageStream(content)) {
+			fullResponse += chunk
+			io.emit("agent-message", {
+				agentId: profile.id,
+				agentName: profile.name,
+				message: chunk,
+				timestamp: Date.now(),
+				isStreaming: true,
+			})
+		}
+
+		io.emit("agent-message", {
+			agentId: profile.id,
+			agentName: profile.name,
+			message: "",
+			timestamp: Date.now(),
+			isStreaming: false,
+			isDone: true,
+		})
+
+		// Update memory periodically
+		const history = agent.getHistory()
+		if (history.length > 0 && history.length % 10 === 0) {
+			const lastMessages = history.slice(-6).map((m: any) =>
+				`${m.role}: ${typeof m.content === 'string' ? m.content.substring(0, 200) : '[structured]'}`
+			).join('\n')
+			agentStore.updateMemory(agentId, `Recent context (${history.length} messages):\n${lastMessages}`)
+		}
+
+		res.json({
+			type: "chat",
+			agentId: profile.id,
+			agentName: profile.name,
+			response: fullResponse,
+			status: "completed",
+			historyLength: history.length,
+		})
+	} catch (error) {
+		log.error("Error in agent chat:", error)
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/agent/:agentId/workspace/files - List files in agent's workspace folder
+ */
+app.get("/api/agent/:agentId/workspace/files", async (req, res): Promise<void> => {
+	try {
+		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const files: { path: string; size: number; modified: string; isDir: boolean }[] = []
+
+		async function walkDir(dir: string, prefix: string = "") {
+			try {
+				const entries = await fs.promises.readdir(dir, { withFileTypes: true })
+				for (const entry of entries) {
+					if (entry.name.startsWith(".")) continue
+					const fullPath = path.join(dir, entry.name)
+					const relPath = prefix ? `${prefix}/${entry.name}` : entry.name
+					if (entry.isDirectory()) {
+						files.push({ path: relPath, size: 0, modified: "", isDir: true })
+						await walkDir(fullPath, relPath)
+					} else {
+						const stat = await fs.promises.stat(fullPath)
+						files.push({ path: relPath, size: stat.size, modified: stat.mtime.toISOString(), isDir: false })
+					}
+				}
+			} catch { /* directory may not exist yet */ }
+		}
+
+		await fs.promises.mkdir(agentDir, { recursive: true })
+		await walkDir(agentDir)
+
+		res.json({
+			agentId: req.params.agentId,
+			workspaceDir: agentDir,
+			files,
+			totalFiles: files.filter(f => !f.isDir).length,
+			totalDirs: files.filter(f => f.isDir).length,
+		})
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/agent/:agentId/workspace/file - Read a file from agent's workspace
+ */
+app.get("/api/agent/:agentId/workspace/file", async (req, res): Promise<void> => {
+	try {
+		const filePath = req.query.path as string
+		if (!filePath) { res.status(400).json({ error: "path query parameter required" }); return }
+
+		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const check = securePath(agentDir, filePath)
+		if (!check.ok) { res.status(403).json({ error: check.error }); return }
+
+		const content = await fs.promises.readFile(check.fullPath, "utf-8")
+		const stat = await fs.promises.stat(check.fullPath)
+		res.json({ path: filePath, content, size: stat.size, modified: stat.mtime.toISOString() })
+	} catch (error: any) {
+		if (error.code === "ENOENT") res.status(404).json({ error: "File not found" })
+		else res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/agent/:agentId/workspace/file - Create/upload a file in agent's workspace
+ */
+app.post("/api/agent/:agentId/workspace/file", async (req, res): Promise<void> => {
+	try {
+		const { path: filePath, content, encoding } = req.body
+		if (!filePath || content === undefined) { res.status(400).json({ error: "'path' and 'content' required" }); return }
+
+		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const check = securePath(agentDir, filePath)
+		if (!check.ok) { res.status(403).json({ error: check.error }); return }
+
+		await fs.promises.mkdir(path.dirname(check.fullPath), { recursive: true })
+		if (encoding === "base64") {
+			await fs.promises.writeFile(check.fullPath, Buffer.from(content, "base64"))
+		} else {
+			await fs.promises.writeFile(check.fullPath, content, "utf-8")
+		}
+
+		const stat = await fs.promises.stat(check.fullPath)
+		io.emit("file-created", { agentId: req.params.agentId, relativePath: filePath, size: stat.size })
+		res.json({ success: true, path: filePath, size: stat.size, modified: stat.mtime.toISOString() })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * DELETE /api/agent/:agentId/workspace/file - Delete a file/dir from agent's workspace
+ */
+app.delete("/api/agent/:agentId/workspace/file", async (req, res): Promise<void> => {
+	try {
+		const filePath = req.query.path as string
+		if (!filePath) { res.status(400).json({ error: "path query parameter required" }); return }
+
+		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const check = securePath(agentDir, filePath)
+		if (!check.ok) { res.status(403).json({ error: check.error }); return }
+
+		if (path.resolve(check.fullPath) === path.resolve(agentDir)) {
+			res.status(403).json({ error: "Cannot delete agent root directory" }); return
+		}
+
+		const stat = await fs.promises.stat(check.fullPath)
+		if (stat.isDirectory()) {
+			await fs.promises.rm(check.fullPath, { recursive: true, force: true })
+		} else {
+			await fs.promises.unlink(check.fullPath)
+		}
+		io.emit("file-deleted", { agentId: req.params.agentId, relativePath: filePath })
+		res.json({ success: true, path: filePath })
+	} catch (error: any) {
+		if (error.code === "ENOENT") res.status(404).json({ error: "File not found" })
+		else res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/agent/:agentId/workspace/dir - Create a directory in agent's workspace
+ */
+app.post("/api/agent/:agentId/workspace/dir", async (req, res): Promise<void> => {
+	try {
+		const { path: dirPath } = req.body
+		if (!dirPath) { res.status(400).json({ error: "'path' required" }); return }
+
+		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const check = securePath(agentDir, dirPath)
+		if (!check.ok) { res.status(403).json({ error: check.error }); return }
+
+		await fs.promises.mkdir(check.fullPath, { recursive: true })
+		res.json({ success: true, path: dirPath })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/agent/:agentId/workspace/move - Move/rename in agent's workspace
+ */
+app.post("/api/agent/:agentId/workspace/move", async (req, res): Promise<void> => {
+	try {
+		const { from, to } = req.body
+		if (!from || !to) { res.status(400).json({ error: "'from' and 'to' required" }); return }
+
+		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const checkFrom = securePath(agentDir, from)
+		const checkTo = securePath(agentDir, to)
+		if (!checkFrom.ok) { res.status(403).json({ error: checkFrom.error }); return }
+		if (!checkTo.ok) { res.status(403).json({ error: checkTo.error }); return }
+
+		if (!fs.existsSync(checkFrom.fullPath)) { res.status(404).json({ error: "Source not found" }); return }
+
+		await fs.promises.mkdir(path.dirname(checkTo.fullPath), { recursive: true })
+		await fs.promises.rename(checkFrom.fullPath, checkTo.fullPath)
+
+		io.emit("file-moved", { agentId: req.params.agentId, from, to })
+		res.json({ success: true, from, to })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+// kilocode_change end
+
 // ============================================================================
 // Terminal & Command Execution
 // ============================================================================
@@ -1129,7 +1657,7 @@ io.on("connection", (socket) => {
 	// kilocode_change start - terminal (node-pty) per socket
 	let ptyProcess: pty.IPty | null = null
 
-	socket.on("terminal-start", (opts: { shell?: string; cols?: number; rows?: number }) => {
+	socket.on("terminal-start", (opts: { shell?: string; cols?: number; rows?: number; agentId?: string }) => {
 		// Kill existing terminal for this socket
 		if (ptyProcess) {
 			try {
@@ -1139,7 +1667,18 @@ io.on("connection", (socket) => {
 		}
 
 		const shell = opts.shell || process.env.SHELL || "/bin/bash"
-		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+		// kilocode_change start - scope terminal cwd to agent's workspace folder
+		let cwd: string
+		if (opts.agentId) {
+			const profile = agentStore.get(opts.agentId)
+			const folder = profile?.workspaceFolder || opts.agentId
+			cwd = path.join(getWorkspacePath(), "projects", folder)
+			// Ensure workspace folder exists
+			try { fs.mkdirSync(cwd, { recursive: true }) } catch {}
+		} else {
+			cwd = process.env.WORKSPACE_PATH || process.cwd()
+		}
+		// kilocode_change end
 		const cols = opts.cols || 80
 		const rows = opts.rows || 24
 
@@ -1148,7 +1687,7 @@ io.on("connection", (socket) => {
 				name: "xterm-256color",
 				cols,
 				rows,
-				cwd: workspacePath,
+				cwd,
 				env: { ...process.env, TERM: "xterm-256color" } as Record<string, string>,
 			})
 
@@ -1223,6 +1762,12 @@ io.on("connection", (socket) => {
 // ============================================================================
 // Serve React SPA
 // ============================================================================
+
+// kilocode_change start - serve agent-specific page
+app.get("/agent/:agentId", (req, res) => {
+	res.sendFile(path.join(__dirname, "public/agent.html"))
+})
+// kilocode_change end
 
 app.get("*", (req, res) => {
 	res.sendFile(path.join(__dirname, "public/index.html"))  // kilocode_change - serve standalone frontend

@@ -226,6 +226,56 @@
   .file-viewer-body { flex: 1; overflow: auto; padding: 16px; }
   .file-viewer-body pre { margin: 0; white-space: pre-wrap; word-break: break-all;
     font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 13px; line-height: 1.5; }
+
+  /* Agent selector (above chat input) */
+  .agent-selector { display: flex; align-items: center; gap: 8px; padding: 6px 20px;
+    border-bottom: 1px solid var(--border); background: var(--surface); font-size: 12px; }
+  .agent-selector label { color: var(--muted); }
+  .agent-selector select { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 8px; border-radius: 4px; font-size: 12px; min-width: 140px; }
+  .agent-selector .agent-info { color: var(--muted); font-size: 11px; margin-left: 4px; }
+  .agent-selector .agent-indicator { display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    margin-right: 4px; }
+  .agent-selector .agent-indicator.active { background: var(--green); }
+  .agent-selector .agent-indicator.idle { background: var(--yellow); }
+  .agent-selector .agent-indicator.disabled { background: var(--red); }
+
+  /* Agent management panel (tab) */
+  .agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px; padding: 16px 20px; overflow-y: auto; flex: 1; }
+  .agent-mgmt-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .agent-mgmt-card .agent-header { display: flex; align-items: center; gap: 8px; }
+  .agent-mgmt-card .agent-avatar { width: 36px; height: 36px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center; font-size: 18px;
+    background: rgba(88,166,255,0.15); }
+  .agent-mgmt-card .agent-meta { flex: 1; }
+  .agent-mgmt-card .agent-name { font-size: 14px; font-weight: 600; }
+  .agent-mgmt-card .agent-role { font-size: 11px; color: var(--muted); }
+  .agent-mgmt-card .agent-caps { display: flex; flex-wrap: wrap; gap: 4px; }
+  .agent-mgmt-card .cap-tag { font-size: 10px; padding: 1px 6px; border-radius: 8px;
+    background: rgba(88,166,255,0.1); color: var(--accent); border: 1px solid rgba(88,166,255,0.2); }
+  .agent-mgmt-card .agent-stats { display: flex; gap: 12px; font-size: 11px; color: var(--muted); }
+  .agent-mgmt-card .agent-actions { display: flex; gap: 6px; margin-top: 4px; }
+  .agent-mgmt-card .agent-actions .btn { font-size: 11px; padding: 4px 10px; }
+  .agent-add-card { background: transparent; border: 2px dashed var(--border); border-radius: 10px;
+    display: flex; align-items: center; justify-content: center; min-height: 140px;
+    cursor: pointer; color: var(--muted); font-size: 14px; transition: border-color 0.2s; }
+  .agent-add-card:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Agent edit modal */
+  .modal.wide { width: 560px; }
+  .modal .form-group { margin-bottom: 12px; }
+  .modal .form-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .modal .form-group input, .modal .form-group textarea, .modal .form-group select {
+    width: 100%; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 13px; outline: none; font-family: inherit; }
+  .modal .form-group input:focus, .modal .form-group textarea:focus { border-color: var(--accent); }
+  .modal .form-group textarea { min-height: 80px; resize: vertical; }
+  .modal .form-row { display: flex; gap: 12px; }
+  .modal .form-row .form-group { flex: 1; }
+  .modal .form-group .checkbox-row { display: flex; align-items: center; gap: 8px; }
+  .modal .form-group .checkbox-row input { width: auto; }
 </style>
 </head>
 <body>
@@ -277,10 +327,19 @@
   <div class="chat-area">
     <div class="tab-bar">
       <div class="tab active" onclick="switchTab('chat')" id="tabChat">&#128172; Chat</div>
+      <div class="tab" onclick="switchTab('agents')" id="tabAgents">&#129302; Agents</div>
       <div class="tab" onclick="switchTab('terminal')" id="tabTerminal">&#9000; Terminal</div>
     </div>
 
     <div class="tab-content active" id="paneChat">
+    <!-- Agent selector bar -->
+    <div class="agent-selector" id="agentSelector">
+      <label>Agent:</label>
+      <select id="agentSelect" onchange="onAgentChange()">
+        <option value="">Default (Society Agent)</option>
+      </select>
+      <span class="agent-info" id="agentSelectInfo"></span>
+    </div>
     <div class="messages" id="messages">
       <div class="welcome" id="welcome">
         <h2>Society Agent Server</h2>
@@ -320,6 +379,17 @@
     <div class="log-panel" id="logPanel"></div>
   </div><!-- /paneChat -->
 
+    <!-- Agents management pane -->
+    <div class="tab-content" id="paneAgents">
+      <div style="padding:12px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
+        <h3 style="font-size:14px;font-weight:600;flex:1">Persistent Agents</h3>
+        <span style="font-size:12px;color:var(--muted)" id="agentCountInfo">-</span>
+      </div>
+      <div class="agents-grid" id="agentsGrid">
+        <div style="padding:20px;color:var(--muted);font-size:13px">Loading agents...</div>
+      </div>
+    </div><!-- /paneAgents -->
+
     <div class="tab-content" id="paneTerminal">
       <div class="terminal-toolbar">
         <span style="color:var(--muted)">Shell:</span>
@@ -346,6 +416,46 @@
     <div class="actions">
       <button class="btn btn-secondary" onclick="hideApiKeyModal()">Cancel</button>
       <button class="btn btn-primary" onclick="saveApiKey()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Agent Edit/Create Modal -->
+<div class="modal-overlay" id="agentModal" style="display:none">
+  <div class="modal wide">
+    <h2 id="agentModalTitle">Create Agent</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px" id="agentModalDesc">Define a new persistent agent with its own personality and expertise.</p>
+    <div class="form-row">
+      <div class="form-group">
+        <label>ID (unique, lowercase)</label>
+        <input type="text" id="agentFormId" placeholder="my-agent" pattern="[a-z0-9-]+">
+      </div>
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="agentFormName" placeholder="My Agent">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Role / Specialty</label>
+      <input type="text" id="agentFormRole" placeholder="e.g. Security Reviewer, Data Analyst">
+    </div>
+    <div class="form-group">
+      <label>Capabilities (comma-separated)</label>
+      <input type="text" id="agentFormCaps" placeholder="coding, analysis, planning">
+    </div>
+    <div class="form-group">
+      <label>System Prompt</label>
+      <textarea id="agentFormPrompt" rows="5" placeholder="You are an expert in..."></textarea>
+    </div>
+    <div class="form-group">
+      <div class="checkbox-row">
+        <input type="checkbox" id="agentFormSpawn">
+        <label for="agentFormSpawn" style="margin-bottom:0">Can spawn ephemeral workers (supervisor capability)</label>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" onclick="hideAgentModal()">Cancel</button>
+      <button class="btn btn-primary" id="agentFormSubmit" onclick="submitAgentForm()">Create</button>
     </div>
   </div>
 </div>
@@ -382,7 +492,8 @@ socket.on('agent-message', (data) => {
     streamDidFire = true;
     if (!currentStreamEl) {
       removeTyping();
-      currentStreamEl = addMessage('assistant', '', 'Society Agent');
+      const senderName = data.agentName || 'Society Agent';
+      currentStreamEl = addMessage('assistant', '', senderName);
       streamText = '';
     }
     streamText += data.message;
@@ -530,10 +641,17 @@ async function sendMessage() {
   showTyping();
 
   try {
+    const agentId = selectedAgentId || undefined;
+    const agentName = selectedAgentId ? (persistentAgents.find(a => a.id === selectedAgentId)?.name || selectedAgentId) : undefined;
+
     const res = await fetch(`${API}/api/purpose/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ description: text, attachments: contentParts.length > 1 || contentParts[0]?.type === 'image' ? contentParts : undefined }),
+      body: JSON.stringify({
+        description: text,
+        attachments: contentParts.length > 1 || contentParts[0]?.type === 'image' ? contentParts : undefined,
+        agentId,
+      }),
     });
     const data = await res.json();
 
@@ -549,7 +667,8 @@ async function sendMessage() {
     // Only show HTTP response if WebSocket streaming didn't already handle it
     if (!streamDidFire && data.response) {
       removeTyping();
-      const el = addMessage('assistant', '', 'Society Agent');
+      const displayName = data.agentName || agentName || 'Society Agent';
+      const el = addMessage('assistant', '', displayName);
       el.querySelector('.content').innerHTML = formatMarkdown(data.response);
       isStreaming = false;
       document.getElementById('sendBtn').disabled = false;
@@ -557,7 +676,7 @@ async function sendMessage() {
 
     messageCount++;
     document.getElementById('msgCount').textContent = messageCount;
-    addLog('info', `Response received (history: ${data.historyLength} messages)`);
+    addLog('info', `Response from ${data.agentName || agentName || 'Society Agent'} (history: ${data.historyLength} messages)`);
   } catch (e) {
     removeTyping();
     addMessage('system', `Network error: ${e.message}`);
@@ -1392,6 +1511,238 @@ document.getElementById('input').addEventListener('input', function() {
 });
 
 // ============================================================================
+// Persistent Agent Management
+// ============================================================================
+
+let persistentAgents = [];
+let selectedAgentId = ''; // '' means default society agent
+let editingAgentId = null; // null = create, string = editing
+
+async function loadPersistentAgents() {
+  try {
+    const res = await fetch(`${API}/api/persistent-agents`);
+    const data = await res.json();
+    persistentAgents = data.agents || [];
+    renderAgentSelector();
+    renderAgentsGrid();
+    renderSidebarAgents();
+  } catch (e) {
+    addLog('warn', 'Failed to load persistent agents');
+  }
+}
+
+function renderAgentSelector() {
+  const sel = document.getElementById('agentSelect');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">Default (Society Agent)</option>' +
+    persistentAgents.filter(a => a.status !== 'disabled').map(a =>
+      `<option value="${escapeHtml(a.id)}" ${a.id === prev ? 'selected' : ''}>${escapeHtml(a.name)} — ${escapeHtml(a.role)}</option>`
+    ).join('');
+  // Restore selection
+  if (prev && persistentAgents.some(a => a.id === prev)) {
+    sel.value = prev;
+  }
+  onAgentChange();
+}
+
+function onAgentChange() {
+  const sel = document.getElementById('agentSelect');
+  selectedAgentId = sel.value;
+  const info = document.getElementById('agentSelectInfo');
+  if (!selectedAgentId) {
+    info.innerHTML = '';
+    return;
+  }
+  const agent = persistentAgents.find(a => a.id === selectedAgentId);
+  if (agent) {
+    const statusCls = agent.status === 'active' ? 'active' : agent.status === 'idle' ? 'idle' : 'disabled';
+    info.innerHTML = `<span class="agent-indicator ${statusCls}"></span>${agent.capabilities.slice(0, 3).join(', ')}${agent.totalMessages > 0 ? ` · ${agent.totalMessages} msgs` : ''}`;
+  }
+}
+
+function renderAgentsGrid() {
+  const grid = document.getElementById('agentsGrid');
+  const countEl = document.getElementById('agentCountInfo');
+  countEl.textContent = `${persistentAgents.length} agent${persistentAgents.length !== 1 ? 's' : ''}`;
+
+  let html = persistentAgents.map(a => {
+    const statusCls = a.status === 'active' ? 'active' : a.status === 'idle' ? 'idle' : 'disabled';
+    const avatar = a.canSpawnWorkers ? '&#128081;' : '&#129302;';
+    return `<div class="agent-mgmt-card">
+      <div class="agent-header">
+        <div class="agent-avatar">${avatar}</div>
+        <div class="agent-meta">
+          <div class="agent-name">${escapeHtml(a.name)}</div>
+          <div class="agent-role">${escapeHtml(a.role)}${a.canSpawnWorkers ? ' · <span style="color:var(--accent)">Supervisor</span>' : ''}</div>
+        </div>
+        <span class="status-badge ${statusCls}">${a.status}</span>
+      </div>
+      <div class="agent-caps">
+        ${a.capabilities.map(c => `<span class="cap-tag">${escapeHtml(c)}</span>`).join('')}
+      </div>
+      <div class="agent-stats">
+        <span>&#128172; ${a.totalMessages} msgs</span>
+        <span>&#9989; ${a.tasksCompleted} tasks</span>
+        <span>${a.isActive ? '<span style="color:var(--green)">&#9679; Live</span>' : '<span style="color:var(--muted)">&#9675; Inactive</span>'}</span>
+        ${a.historyLength ? `<span>&#128203; ${a.historyLength} in memory</span>` : ''}
+      </div>
+      <div class="agent-actions">
+        <button class="btn btn-primary" onclick="window.open('/agent/${escapeAttr(a.id)}','_blank')" style="font-size:12px">&#128279; Open</button>
+        <button class="btn btn-secondary" onclick="editAgent('${escapeAttr(a.id)}')">&#9998; Edit</button>
+        <button class="btn btn-secondary" onclick="resetAgent('${escapeAttr(a.id)}')">&#8635; Reset</button>
+        <button class="btn btn-secondary" style="color:var(--red)" onclick="deleteAgent('${escapeAttr(a.id)}', '${escapeAttr(a.name)}')">&#128465;</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  html += `<div class="agent-add-card" onclick="showCreateAgentModal()">+ Create New Agent</div>`;
+  grid.innerHTML = html;
+}
+
+function renderSidebarAgents() {
+  const list = document.getElementById('agentList');
+  if (persistentAgents.length === 0) {
+    list.innerHTML = '<div style="padding:8px 16px;color:var(--muted);font-size:12px">No agents — go to Agents tab</div>';
+    return;
+  }
+  list.innerHTML = persistentAgents.map(a => {
+    const statusCls = a.status === 'active' ? 'working' : 'idle';
+    return `<div class="agent-card" onclick="window.open('/agent/${escapeAttr(a.id)}','_blank')" style="cursor:pointer" title="Open ${escapeHtml(a.name)} workspace">
+      <div class="name">${escapeHtml(a.name)}</div>
+      <div class="role">${escapeHtml(a.role)}</div>
+      <span class="status-badge ${statusCls}">${a.isActive ? 'live' : a.status}</span>
+    </div>`;
+  }).join('');
+}
+
+function selectAndChatAgent(agentId) {
+  document.getElementById('agentSelect').value = agentId;
+  onAgentChange();
+  switchTab('chat');
+  document.getElementById('input').focus();
+}
+
+// Agent CRUD
+
+function showCreateAgentModal() {
+  editingAgentId = null;
+  document.getElementById('agentModalTitle').textContent = 'Create Agent';
+  document.getElementById('agentModalDesc').textContent = 'Define a new persistent agent with its own personality and expertise.';
+  document.getElementById('agentFormId').value = '';
+  document.getElementById('agentFormId').disabled = false;
+  document.getElementById('agentFormName').value = '';
+  document.getElementById('agentFormRole').value = '';
+  document.getElementById('agentFormCaps').value = '';
+  document.getElementById('agentFormPrompt').value = '';
+  document.getElementById('agentFormSpawn').checked = false;
+  document.getElementById('agentFormSubmit').textContent = 'Create';
+  document.getElementById('agentModal').style.display = 'flex';
+}
+
+function editAgent(id) {
+  const agent = persistentAgents.find(a => a.id === id);
+  if (!agent) return;
+  editingAgentId = id;
+  document.getElementById('agentModalTitle').textContent = `Edit: ${agent.name}`;
+  document.getElementById('agentModalDesc').textContent = 'Update this agent\'s configuration. Changes take effect on next message.';
+  document.getElementById('agentFormId').value = agent.id;
+  document.getElementById('agentFormId').disabled = true;
+  document.getElementById('agentFormName').value = agent.name;
+  document.getElementById('agentFormRole').value = agent.role;
+  document.getElementById('agentFormCaps').value = agent.capabilities.join(', ');
+  document.getElementById('agentFormPrompt').value = agent.systemPrompt;
+  document.getElementById('agentFormSpawn').checked = agent.canSpawnWorkers;
+  document.getElementById('agentFormSubmit').textContent = 'Save';
+  document.getElementById('agentModal').style.display = 'flex';
+}
+
+function hideAgentModal() {
+  document.getElementById('agentModal').style.display = 'none';
+  editingAgentId = null;
+}
+
+async function submitAgentForm() {
+  const id = document.getElementById('agentFormId').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  const name = document.getElementById('agentFormName').value.trim();
+  const role = document.getElementById('agentFormRole').value.trim();
+  const capabilities = document.getElementById('agentFormCaps').value.split(',').map(s => s.trim()).filter(Boolean);
+  const systemPrompt = document.getElementById('agentFormPrompt').value.trim();
+  const canSpawnWorkers = document.getElementById('agentFormSpawn').checked;
+
+  if (!id || !name || !role || !systemPrompt) {
+    alert('Please fill in all required fields (ID, Name, Role, System Prompt)');
+    return;
+  }
+
+  try {
+    let res;
+    if (editingAgentId) {
+      res = await fetch(`${API}/api/persistent-agents/${editingAgentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, role, capabilities, systemPrompt, canSpawnWorkers }),
+      });
+    } else {
+      res = await fetch(`${API}/api/persistent-agents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, name, role, capabilities, systemPrompt, canSpawnWorkers }),
+      });
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || 'Failed');
+      return;
+    }
+    hideAgentModal();
+    addLog('info', editingAgentId ? `Agent ${name} updated` : `Agent ${name} created`);
+    loadPersistentAgents();
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+async function deleteAgent(id, name) {
+  if (!confirm(`Delete agent "${name}"? This cannot be undone.`)) return;
+  try {
+    const res = await fetch(`${API}/api/persistent-agents/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      addLog('info', `Agent ${name} deleted`);
+      if (selectedAgentId === id) selectedAgentId = '';
+      loadPersistentAgents();
+    } else {
+      addLog('error', `Delete failed: ${data.error}`);
+    }
+  } catch (e) {
+    addLog('error', `Delete error: ${e.message}`);
+  }
+}
+
+async function resetAgent(id) {
+  const agent = persistentAgents.find(a => a.id === id);
+  if (!agent) return;
+  if (!confirm(`Reset ${agent.name}'s memory? Conversation history will be cleared.`)) return;
+  try {
+    const res = await fetch(`${API}/api/persistent-agents/${id}/reset`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      addLog('info', data.message);
+      loadPersistentAgents();
+    }
+  } catch (e) {
+    addLog('error', `Reset error: ${e.message}`);
+  }
+}
+
+// Load agents on startup
+socket.on('connect', () => { loadPersistentAgents(); });
+// Refresh on agent events
+socket.on('system-event', (data) => {
+  if (data.type === 'agent-created' || data.type === 'agent-deleted') loadPersistentAgents();
+});
+
+// ============================================================================
 // Tab Switching
 // ============================================================================
 
@@ -1403,6 +1754,10 @@ function switchTab(tab) {
     document.getElementById('paneTerminal').classList.add('active');
     if (!term) initTerminal();
     else fitAddon.fit();
+  } else if (tab === 'agents') {
+    document.getElementById('tabAgents').classList.add('active');
+    document.getElementById('paneAgents').classList.add('active');
+    loadPersistentAgents(); // refresh when switching to tab
   } else {
     document.getElementById('tabChat').classList.add('active');
     document.getElementById('paneChat').classList.add('active');

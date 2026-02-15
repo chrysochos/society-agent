@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+
+  /* Header */
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 20px;
+    display: flex; align-items: center; gap: 12px; }
+  header .back-link { color: var(--muted); text-decoration: none; font-size: 14px; }
+  header .back-link:hover { color: var(--accent); }
+  header .agent-avatar { width: 32px; height: 32px; border-radius: 8px; display: flex;
+    align-items: center; justify-content: center; font-size: 16px; background: rgba(88,166,255,0.15); }
+  header .agent-title { font-size: 16px; font-weight: 600; }
+  header .agent-role { font-size: 12px; color: var(--muted); }
+  header .agent-caps { display: flex; gap: 4px; margin-left: 8px; }
+  header .cap-tag { font-size: 10px; padding: 1px 6px; border-radius: 8px;
+    background: rgba(88,166,255,0.1); color: var(--accent); border: 1px solid rgba(88,166,255,0.2); }
+  header .status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; }
+  header .dot.online { background: var(--green); }
+  header .dot.offline { background: var(--red); }
+  header .agent-stats { font-size: 11px; color: var(--muted); display: flex; gap: 10px; }
+
+  /* Main layout: sidebar + content */
+  .main { display: flex; flex: 1; overflow: hidden; }
+
+  /* Sidebar (file explorer) */
+  .sidebar { width: 260px; min-width: 180px; max-width: 500px; background: var(--surface);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto;
+    position: relative; }
+  .sidebar-resize { position: absolute; top: 0; right: -3px; width: 6px; height: 100%;
+    cursor: col-resize; z-index: 10; }
+  .sidebar-resize:hover, .sidebar-resize.active { background: var(--accent); opacity: 0.5; }
+  .sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--muted); padding: 12px 14px 8px; }
+  .stat-row { display: flex; justify-content: space-between; padding: 4px 14px; font-size: 12px; }
+  .stat-row .label { color: var(--muted); }
+
+  /* File tree */
+  .file-tree { font-size: 12px; user-select: none; overflow-y: auto; flex: 1; }
+  .tree-row { display: flex; align-items: center; gap: 4px; padding: 3px 8px; cursor: pointer;
+    white-space: nowrap; border: 2px solid transparent; transition: background 0.1s; }
+  .tree-row:hover { background: rgba(88,166,255,0.08); }
+  .tree-row.selected { background: rgba(88,166,255,0.15); }
+  .tree-row.drag-over { border-color: var(--accent); background: rgba(88,166,255,0.12); }
+  .tree-row .chevron { width: 16px; text-align: center; font-size: 10px; color: var(--muted);
+    transition: transform 0.15s; flex-shrink: 0; }
+  .tree-row .chevron.open { transform: rotate(90deg); }
+  .tree-row .chevron.empty { visibility: hidden; }
+  .tree-row .icon { width: 16px; text-align: center; flex-shrink: 0; font-size: 13px; }
+  .tree-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+  .tree-row .size { color: var(--muted); font-size: 10px; margin-left: auto; flex-shrink: 0; }
+  .tree-row .actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; margin-left: 4px; }
+  .tree-row:hover .actions { opacity: 1; }
+  .tree-row .act-btn { background: none; border: none; color: var(--muted); cursor: pointer;
+    font-size: 11px; padding: 0 2px; line-height: 1; }
+  .tree-row .act-btn:hover { color: var(--text); }
+  .tree-children.collapsed { display: none; }
+  .tree-row.dir-row .name { color: var(--accent); font-weight: 500; }
+
+  /* Upload area */
+  .upload-area { border: 2px dashed var(--border); border-radius: 6px; padding: 10px; margin: 6px 10px;
+    text-align: center; cursor: pointer; transition: border-color 0.2s; font-size: 11px; color: var(--muted); }
+  .upload-area:hover { border-color: var(--accent); }
+  .upload-area.dragover { border-color: var(--green); background: rgba(63,185,80,0.08); }
+  .upload-area input[type=file] { display: none; }
+
+  /* Rename input */
+  .rename-input { background: var(--bg); border: 1px solid var(--accent); color: var(--text);
+    font-size: 12px; padding: 1px 4px; border-radius: 3px; outline: none; width: 100%; font-family: inherit; }
+
+  /* Context menu */
+  .ctx-menu { position: fixed; z-index: 200; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 0; min-width: 160px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+  .ctx-menu .ctx-item { padding: 6px 14px; font-size: 12px; cursor: pointer; display: flex;
+    align-items: center; gap: 8px; }
+  .ctx-menu .ctx-item:hover { background: rgba(88,166,255,0.12); }
+  .ctx-menu .ctx-sep { height: 1px; background: var(--border); margin: 4px 0; }
+  .ctx-menu .ctx-item .shortcut { margin-left: auto; color: var(--muted); font-size: 10px; }
+  .ctx-menu .ctx-item.danger { color: var(--red); }
+  .ctx-menu .ctx-item.danger:hover { background: rgba(248,81,73,0.12); }
+
+  /* Content area: tabs */
+  .content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .tab-bar { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .tab-bar .tab { padding: 8px 20px; font-size: 13px; cursor: pointer; color: var(--muted);
+    border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s; }
+  .tab-bar .tab:hover { color: var(--text); }
+  .tab-bar .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-content { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+  .tab-content.active { display: flex; }
+
+  /* Chat */
+  .messages { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .message { max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 14px;
+    line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+  .message.user { align-self: flex-end; background: #1f6feb; border-bottom-right-radius: 4px; }
+  .message.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border);
+    border-bottom-left-radius: 4px; }
+  .message.system { align-self: center; color: var(--muted); font-size: 12px; font-style: italic; }
+  .message.assistant .sender { font-size: 11px; color: var(--accent); margin-bottom: 4px; font-weight: 500; }
+  .message code { background: rgba(110,118,129,0.2); padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+  .message pre { background: var(--bg); padding: 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; }
+  .message pre code { background: none; padding: 0; }
+  .typing { align-self: flex-start; color: var(--muted); font-size: 13px; }
+  .typing::after { content: '...'; animation: dots 1.5s steps(3) infinite; }
+  @keyframes dots { 0% { content: '.'; } 33% { content: '..'; } 66% { content: '...'; } }
+
+  /* Input area */
+  .input-area { padding: 12px 20px; border-top: 1px solid var(--border); background: var(--surface); }
+  .input-row { display: flex; gap: 8px; }
+  .input-row textarea { flex: 1; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: 14px; font-family: inherit;
+    resize: none; outline: none; min-height: 44px; max-height: 200px; }
+  .input-row textarea:focus { border-color: var(--accent); }
+  .btn { padding: 8px 16px; border-radius: 6px; border: none; font-size: 13px; font-weight: 500;
+    cursor: pointer; transition: opacity 0.15s; }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-secondary { background: var(--border); color: var(--text); }
+  .btn-send { padding: 10px 20px; background: var(--accent); color: #fff; border: none;
+    border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; }
+  .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Attachments */
+  .attach-btn { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 6px;
+    padding: 8px 10px; cursor: pointer; font-size: 16px; line-height: 1; }
+  .attach-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .attach-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px 0; }
+  .attach-chip { display: flex; align-items: center; gap: 4px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 8px; font-size: 12px; color: var(--text); }
+  .attach-chip img { width: 20px; height: 20px; border-radius: 3px; object-fit: cover; }
+  .attach-chip .remove { cursor: pointer; color: var(--muted); margin-left: 2px; }
+  .attach-chip .remove:hover { color: var(--red); }
+  .msg-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .msg-attachments img { max-width: 200px; max-height: 150px; border-radius: 6px; cursor: pointer; }
+
+  /* Terminal */
+  .terminal-container { flex: 1; background: #000; padding: 4px; overflow: hidden; }
+  .terminal-container .xterm { height: 100%; }
+  .terminal-toolbar { display: flex; gap: 8px; padding: 8px 12px; background: var(--surface);
+    border-bottom: 1px solid var(--border); align-items: center; font-size: 12px; }
+  .terminal-toolbar select { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+
+  /* Log panel */
+  .log-panel { height: 140px; border-top: 1px solid var(--border); background: var(--bg);
+    overflow-y: auto; padding: 6px 14px; font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 11px; }
+  .log-entry { color: var(--muted); padding: 1px 0; }
+  .log-entry.info { color: var(--accent); }
+  .log-entry.warn { color: var(--yellow); }
+  .log-entry.error { color: var(--red); }
+  .log-entry .ts { color: #484f58; margin-right: 8px; }
+
+  /* File viewer overlay */
+  .file-viewer { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex;
+    align-items: center; justify-content: center; z-index: 90; }
+  .file-viewer-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    width: 80vw; max-width: 900px; max-height: 80vh; display: flex; flex-direction: column; overflow: hidden; }
+  .file-viewer-header { display: flex; align-items: center; padding: 12px 16px;
+    border-bottom: 1px solid var(--border); gap: 8px; }
+  .file-viewer-header .title { flex: 1; font-size: 14px; font-weight: 500; }
+  .file-viewer-header .meta { font-size: 12px; color: var(--muted); }
+  .file-viewer-header .close-btn { background: none; border: none; color: var(--muted); font-size: 20px;
+    cursor: pointer; padding: 0 4px; line-height: 1; }
+  .file-viewer-header .close-btn:hover { color: var(--text); }
+  .file-viewer-body { flex: 1; overflow: auto; padding: 16px; }
+  .file-viewer-body pre { margin: 0; white-space: pre-wrap; word-break: break-all;
+    font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 13px; line-height: 1.5; }
+
+  /* Welcome state */
+  .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    flex: 1; color: var(--muted); text-align: center; padding: 40px; }
+  .welcome h2 { font-size: 18px; color: var(--text); margin-bottom: 8px; }
+  .welcome p { font-size: 13px; max-width: 450px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<header>
+  <a href="/" class="back-link">&larr; Dashboard</a>
+  <div class="agent-avatar" id="agentAvatar">&#129302;</div>
+  <div>
+    <div class="agent-title" id="agentTitle">Loading...</div>
+    <div class="agent-role" id="agentRole"></div>
+  </div>
+  <div class="agent-caps" id="agentCaps"></div>
+  <div style="flex:1"></div>
+  <div class="agent-stats" id="agentStats"></div>
+  <div class="status">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">Connecting...</span>
+  </div>
+</header>
+
+<div class="main">
+  <!-- Sidebar: agent's file explorer -->
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-resize" id="sidebarResize"></div>
+    <h2 style="display:flex;align-items:center;gap:6px">
+      Files
+      <span style="flex:1"></span>
+      <button class="act-btn" onclick="promptNewFile('')" title="New File" style="font-size:13px;background:none;border:none;color:var(--muted);cursor:pointer">&#128196;+</button>
+      <button class="act-btn" onclick="promptNewFolder('')" title="New Folder" style="font-size:13px;background:none;border:none;color:var(--muted);cursor:pointer">&#128193;+</button>
+      <button class="act-btn" onclick="refreshFiles()" title="Refresh" style="font-size:12px;background:none;border:none;color:var(--muted);cursor:pointer">&#8635;</button>
+    </h2>
+    <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+      &#128228; Drop files or click
+      <input type="file" id="fileInput" multiple onchange="handleFileSelect(event)">
+    </div>
+    <div class="stat-row"><span class="label">Folder</span><span id="folderName">-</span></div>
+    <div class="stat-row"><span class="label">Files</span><span id="fileCount">0</span></div>
+    <div id="fileTree" class="file-tree">
+      <div style="padding:16px;color:var(--muted);font-size:12px">No files yet</div>
+    </div>
+  </div>
+
+  <!-- Content area -->
+  <div class="content">
+    <div class="tab-bar">
+      <div class="tab active" onclick="switchTab('chat')" id="tabChat">&#128172; Chat</div>
+      <div class="tab" onclick="switchTab('terminal')" id="tabTerminal">&#9000; Terminal</div>
+    </div>
+
+    <!-- Chat pane -->
+    <div class="tab-content active" id="paneChat">
+      <div class="messages" id="messages">
+        <div class="welcome" id="welcome">
+          <h2 id="welcomeTitle">Agent</h2>
+          <p id="welcomeDesc">Send a message to start a conversation with this agent.</p>
+        </div>
+      </div>
+      <div class="input-area">
+        <div id="attachChips" class="attach-chips" style="display:none"></div>
+        <div class="input-row">
+          <button class="attach-btn" onclick="document.getElementById('chatFileInput').click()" title="Attach files">&#128206;</button>
+          <input type="file" id="chatFileInput" multiple style="display:none" onchange="handleChatAttach(event)"
+            accept="image/*,.txt,.md,.json,.js,.ts,.py,.html,.css,.csv,.xml,.yaml,.yml,.log,.sh,.sql">
+          <textarea id="input" placeholder="Type a message..." rows="1" autofocus></textarea>
+          <button class="btn-send" id="sendBtn" onclick="sendMessage()">Send</button>
+        </div>
+      </div>
+      <div class="log-panel" id="logPanel"></div>
+    </div>
+
+    <!-- Terminal pane -->
+    <div class="tab-content" id="paneTerminal">
+      <div class="terminal-toolbar">
+        <span style="color:var(--muted)">Shell:</span>
+        <select id="termShell">
+          <option value="/bin/bash">bash</option>
+          <option value="/bin/sh">sh</option>
+        </select>
+        <span style="color:var(--muted);margin-left:8px">CWD:</span>
+        <span id="termCwd" style="color:var(--text)">-</span>
+        <div style="flex:1"></div>
+        <button class="btn btn-secondary" onclick="reconnectTerminal()" style="font-size:11px;padding:3px 10px">&#8635; Reconnect</button>
+      </div>
+      <div class="terminal-container" id="terminalContainer"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================================
+// Extract agent ID from URL: /agent/:agentId
+// ============================================================================
+const pathParts = window.location.pathname.split('/');
+const AGENT_ID = pathParts[pathParts.indexOf('agent') + 1];
+if (!AGENT_ID) { document.body.innerHTML = '<h2 style="padding:40px;color:#f85149">No agent ID in URL</h2>'; }
+
+const API = window.location.origin;
+const socket = io(API);
+let agentProfile = null;
+let messageCount = 0;
+let isStreaming = false;
+let currentStreamEl = null;
+let streamText = '';
+let chatAttachments = [];
+
+// ============================================================================
+// Load agent profile
+// ============================================================================
+async function loadAgent() {
+  try {
+    const res = await fetch(`${API}/api/persistent-agents/${AGENT_ID}`);
+    if (!res.ok) {
+      document.body.innerHTML = `<h2 style="padding:40px;color:#f85149">Agent "${AGENT_ID}" not found</h2>`;
+      return;
+    }
+    agentProfile = await res.json();
+    document.title = `${agentProfile.name} — Society Agent`;
+
+    // Header
+    document.getElementById('agentAvatar').innerHTML = agentProfile.canSpawnWorkers ? '&#128081;' : '&#129302;';
+    document.getElementById('agentTitle').textContent = agentProfile.name;
+    document.getElementById('agentRole').textContent = agentProfile.role;
+    document.getElementById('agentCaps').innerHTML = agentProfile.capabilities.map(c =>
+      `<span class="cap-tag">${esc(c)}</span>`).join('');
+    document.getElementById('agentStats').innerHTML =
+      `<span>&#128172; ${agentProfile.totalMessages} msgs</span>` +
+      `<span>&#9989; ${agentProfile.tasksCompleted} tasks</span>` +
+      `<span>${agentProfile.isActive ? '&#9679; Live' : '&#9675; Idle'}</span>`;
+
+    // Welcome
+    document.getElementById('welcomeTitle').textContent = agentProfile.name;
+    document.getElementById('welcomeDesc').textContent =
+      `${agentProfile.role}. ${agentProfile.capabilities.join(', ')}. Send a message to get started.`;
+
+    // Folder info
+    document.getElementById('folderName').textContent = agentProfile.workspaceFolder || agentProfile.id;
+    document.getElementById('termCwd').textContent = `projects/${agentProfile.workspaceFolder || agentProfile.id}/`;
+
+    // Join socket room for this agent
+    socket.emit('subscribe-agent', AGENT_ID);
+
+    refreshFiles();
+  } catch (e) {
+    addLog('error', `Failed to load agent: ${e.message}`);
+  }
+}
+
+// ============================================================================
+// Socket.IO
+// ============================================================================
+socket.on('connect', () => {
+  setStatus(true);
+  addLog('info', 'Connected');
+  loadAgent();
+});
+
+socket.on('disconnect', () => { setStatus(false); addLog('warn', 'Disconnected'); });
+
+let streamDidFire = false;
+socket.on('agent-message', (data) => {
+  // Only handle messages for THIS agent
+  if (data.agentId !== AGENT_ID && data.agentId !== 'user-agent') return;
+
+  if (data.isStreaming) {
+    streamDidFire = true;
+    if (!currentStreamEl) {
+      removeTyping();
+      currentStreamEl = addMessage('assistant', '', agentProfile?.name || 'Agent');
+      streamText = '';
+    }
+    streamText += data.message;
+    currentStreamEl.querySelector('.content').textContent = streamText;
+    scrollToBottom();
+  } else if (data.isDone) {
+    if (currentStreamEl && streamText) {
+      currentStreamEl.querySelector('.content').innerHTML = formatMarkdown(streamText);
+    }
+    currentStreamEl = null;
+    streamText = '';
+    isStreaming = false;
+    document.getElementById('sendBtn').disabled = false;
+    removeTyping();
+  }
+});
+
+socket.on('file-created', (data) => {
+  if (data.agentId === AGENT_ID) {
+    addLog('info', `File created: ${data.relativePath}`);
+    addMessage('system', `&#128196; Created: ${data.relativePath}`);
+    refreshFiles();
+  }
+});
+
+socket.on('file-deleted', () => refreshFiles());
+socket.on('file-moved', () => refreshFiles());
+
+// ============================================================================
+// Chat
+// ============================================================================
+async function sendMessage() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if ((!text && chatAttachments.length === 0) || isStreaming) return;
+
+  const welcome = document.getElementById('welcome');
+  if (welcome) welcome.style.display = 'none';
+
+  // Show user message
+  let attachHtml = '';
+  if (chatAttachments.length > 0) {
+    attachHtml = '<div class="msg-attachments">' + chatAttachments.map(a => {
+      if (a.type.startsWith('image/')) return `<img src="${a.dataUrl}" title="${esc(a.name)}">`;
+      return `<span style="font-size:11px;color:var(--muted)">&#128196; ${esc(a.name)}</span>`;
+    }).join('') + '</div>';
+  }
+  const msgEl = addMessage('user', text);
+  if (attachHtml) msgEl.querySelector('.content').innerHTML += attachHtml;
+
+  // Build content for API
+  const contentParts = [];
+  for (const a of chatAttachments) {
+    if (a.type.startsWith('image/')) {
+      contentParts.push({ type: 'image', source: { type: 'base64', media_type: a.mediaType, data: a.base64 } });
+    } else {
+      contentParts.push({ type: 'text', text: `[Attached file: ${a.name}]\n${atob(a.base64)}` });
+    }
+  }
+  if (text) contentParts.push({ type: 'text', text });
+
+  chatAttachments = [];
+  renderAttachChips();
+  input.value = '';
+  input.style.height = 'auto';
+  messageCount++;
+
+  isStreaming = true;
+  streamDidFire = false;
+  document.getElementById('sendBtn').disabled = true;
+  showTyping();
+
+  try {
+    const res = await fetch(`${API}/api/agent/${AGENT_ID}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        description: text,
+        attachments: contentParts.length > 1 || contentParts[0]?.type === 'image' ? contentParts : undefined,
+      }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      removeTyping();
+      addMessage('system', `Error: ${data.error || 'Unknown error'}`);
+      isStreaming = false;
+      document.getElementById('sendBtn').disabled = false;
+      return;
+    }
+
+    if (!streamDidFire && data.response) {
+      removeTyping();
+      const el = addMessage('assistant', '', agentProfile?.name || 'Agent');
+      el.querySelector('.content').innerHTML = formatMarkdown(data.response);
+      isStreaming = false;
+      document.getElementById('sendBtn').disabled = false;
+    }
+
+    messageCount++;
+    addLog('info', `Response (history: ${data.historyLength} messages)`);
+    // Refresh agent stats
+    loadAgent();
+  } catch (e) {
+    removeTyping();
+    addMessage('system', `Network error: ${e.message}`);
+    isStreaming = false;
+    document.getElementById('sendBtn').disabled = false;
+  }
+}
+
+// ============================================================================
+// Agent-scoped file operations
+// ============================================================================
+let fileData = [];
+let expandedDirs = new Set(['']);
+let selectedPath = null;
+
+function agentFileApi(endpoint, opts) {
+  // All file operations scoped to /api/agent/:id/workspace/...
+  return fetch(`${API}/api/agent/${AGENT_ID}/workspace${endpoint}`, opts);
+}
+
+async function refreshFiles() {
+  try {
+    const res = await agentFileApi('/files');
+    const data = await res.json();
+    fileData = data.files || [];
+    document.getElementById('fileCount').textContent = `${data.totalFiles} files, ${data.totalDirs} dirs`;
+
+    const tree = document.getElementById('fileTree');
+    if (fileData.length === 0) {
+      tree.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">No files yet</div>';
+      return;
+    }
+    const root = buildTree(fileData);
+    tree.innerHTML = renderTree(root);
+    attachTreeHandlers();
+  } catch (e) {
+    addLog('warn', 'Failed to refresh files');
+  }
+}
+
+function buildTree(files) {
+  const root = { children: {}, path: '', isDir: true };
+  for (const f of files) {
+    const parts = f.path.split('/');
+    let node = root;
+    let pathSoFar = '';
+    for (let i = 0; i < parts.length; i++) {
+      pathSoFar = pathSoFar ? pathSoFar + '/' + parts[i] : parts[i];
+      if (!node.children[parts[i]]) {
+        node.children[parts[i]] = {
+          name: parts[i], path: pathSoFar,
+          isDir: i < parts.length - 1 || f.isDir,
+          size: f.isDir ? 0 : f.size, children: {},
+        };
+      }
+      node = node.children[parts[i]];
+    }
+    if (!f.isDir) { node.size = f.size; node.isDir = false; }
+  }
+  return root;
+}
+
+function fileIcon(name, isDir) {
+  if (isDir) return '&#128193;';
+  const ext = name.split('.').pop().toLowerCase();
+  const icons = {
+    js:'&#128312;', ts:'&#128309;', py:'&#128013;', html:'&#127760;', css:'&#127912;',
+    json:'&#123;&#125;', md:'&#128221;', txt:'&#128196;', sh:'&#9000;',
+  };
+  return icons[ext] || '&#128196;';
+}
+
+function renderTree(node, depth = 0) {
+  const entries = Object.values(node.children).sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  return entries.map(e => {
+    const indent = depth * 16;
+    const isOpen = expandedDirs.has(e.path);
+    const sel = selectedPath === e.path ? ' selected' : '';
+    if (e.isDir) {
+      const hasKids = Object.keys(e.children).length > 0;
+      const chevCls = hasKids ? (isOpen ? 'chevron open' : 'chevron') : 'chevron empty';
+      return `<div class="tree-node" data-path="${esc(e.path)}" data-dir="true">
+        <div class="tree-row dir-row${sel}" style="padding-left:${indent+8}px"
+             draggable="true" data-path="${esc(e.path)}" data-dir="true">
+          <span class="${chevCls}">&#9654;</span>
+          <span class="icon">${fileIcon(e.name,true)}</span>
+          <span class="name">${esc(e.name)}</span>
+          <span class="actions">
+            <button class="act-btn" title="New file" onclick="event.stopPropagation();promptNewFile('${escAttr(e.path)}')">+&#128196;</button>
+            <button class="act-btn" title="New folder" onclick="event.stopPropagation();promptNewFolder('${escAttr(e.path)}')">+&#128193;</button>
+          </span>
+        </div>
+        <div class="tree-children ${isOpen?'':'collapsed'}">${hasKids?renderTree(e,depth+1):''}</div>
+      </div>`;
+    } else {
+      return `<div class="tree-node" data-path="${esc(e.path)}">
+        <div class="tree-row${sel}" style="padding-left:${indent+24}px"
+             draggable="true" data-path="${esc(e.path)}" data-dir="false">
+          <span class="icon">${fileIcon(e.name,false)}</span>
+          <span class="name">${esc(e.name)}</span>
+          <span class="size">${formatSize(e.size)}</span>
+        </div>
+      </div>`;
+    }
+  }).join('');
+}
+
+function attachTreeHandlers() {
+  const tree = document.getElementById('fileTree');
+  tree.addEventListener('click', (e) => {
+    const row = e.target.closest('.tree-row');
+    if (!row) return;
+    const p = row.dataset.path, isDir = row.dataset.dir === 'true';
+    if (isDir) {
+      if (expandedDirs.has(p)) expandedDirs.delete(p); else expandedDirs.add(p);
+      refreshFiles();
+      return;
+    }
+    selectedPath = p;
+    tree.querySelectorAll('.tree-row').forEach(r => r.classList.remove('selected'));
+    row.classList.add('selected');
+    viewFile(p);
+  });
+  tree.addEventListener('dblclick', (e) => {
+    const row = e.target.closest('.tree-row');
+    if (!row) return;
+    e.preventDefault();
+    startRename(row.dataset.path, row.dataset.dir === 'true');
+  });
+  tree.addEventListener('contextmenu', (e) => {
+    const row = e.target.closest('.tree-row');
+    if (!row) return;
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, row.dataset.path, row.dataset.dir === 'true');
+  });
+  // Drag-drop
+  tree.querySelectorAll('.tree-row[draggable]').forEach(row => {
+    row.addEventListener('dragstart', (e) => {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', row.dataset.path);
+      row.style.opacity = '0.4';
+    });
+    row.addEventListener('dragend', () => { row.style.opacity = ''; });
+    if (row.dataset.dir === 'true') {
+      row.addEventListener('dragover', (e) => { e.preventDefault(); row.classList.add('drag-over'); });
+      row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+      row.addEventListener('drop', async (e) => {
+        e.preventDefault(); row.classList.remove('drag-over');
+        const from = e.dataTransfer.getData('text/plain');
+        const toDir = row.dataset.path;
+        if (!from || from === toDir || toDir.startsWith(from + '/')) return;
+        await moveFile(from, toDir + '/' + from.split('/').pop());
+      });
+    }
+  });
+}
+
+async function viewFile(filePath) {
+  try {
+    const res = await agentFileApi(`/file?path=${encodeURIComponent(filePath)}`);
+    const data = await res.json();
+    if (!res.ok) { addLog('error', data.error); return; }
+    let viewer = document.getElementById('fileViewer');
+    if (!viewer) {
+      viewer = document.createElement('div'); viewer.id = 'fileViewer'; viewer.className = 'file-viewer';
+      viewer.onclick = (e) => { if (e.target === viewer) closeFileViewer(); };
+      document.body.appendChild(viewer);
+    }
+    viewer.innerHTML = `<div class="file-viewer-panel">
+      <div class="file-viewer-header">
+        <span class="title">&#128196; ${esc(filePath)}</span>
+        <span class="meta">${formatSize(data.size)}</span>
+        <button class="close-btn" onclick="closeFileViewer()">&times;</button>
+      </div>
+      <div class="file-viewer-body"><pre>${esc(data.content)}</pre></div>
+    </div>`;
+    viewer.style.display = 'flex';
+  } catch (e) { addLog('error', 'Failed to read file'); }
+}
+function closeFileViewer() { const v = document.getElementById('fileViewer'); if (v) v.style.display = 'none'; }
+
+async function moveFile(from, to) {
+  if (from === to) return;
+  try {
+    const res = await agentFileApi('/move', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to }),
+    });
+    const data = await res.json();
+    if (data.success) { addLog('info', `Moved: ${from} → ${to}`); refreshFiles(); }
+    else addLog('error', `Move failed: ${data.error}`);
+  } catch (e) { addLog('error', `Move error: ${e.message}`); }
+}
+
+async function deleteFile(filePath, isDir) {
+  if (!confirm(`Delete ${isDir ? 'directory' : 'file'}?\n${filePath}`)) return;
+  try {
+    const res = await agentFileApi(`/file?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) { addLog('info', `Deleted: ${filePath}`); refreshFiles(); }
+    else addLog('error', data.error);
+  } catch (e) { addLog('error', e.message); }
+}
+
+async function uploadFiles(files, targetDir = '') {
+  for (const file of files) {
+    const filePath = targetDir ? `${targetDir}/${file.name}` : file.name;
+    try {
+      const content = await readFileAsBase64(file);
+      const res = await agentFileApi('/file', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath, content, encoding: 'base64' }),
+      });
+      const data = await res.json();
+      if (data.success) addLog('info', `Uploaded: ${filePath} (${formatSize(data.size)})`);
+      else addLog('error', data.error);
+    } catch (e) { addLog('error', e.message); }
+  }
+  refreshFiles();
+}
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+function handleFileSelect(event) { if (event.target.files.length) uploadFiles(event.target.files); event.target.value = ''; }
+
+async function promptNewFile(dirPath) {
+  const name = prompt(`New file name${dirPath ? ' in ' + dirPath : ''}:`);
+  if (!name) return;
+  const fullPath = dirPath ? dirPath + '/' + name : name;
+  try {
+    const res = await agentFileApi('/file', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: fullPath, content: '' }),
+    });
+    if ((await res.json()).success) { if (dirPath) expandedDirs.add(dirPath); refreshFiles(); }
+  } catch (e) { addLog('error', e.message); }
+}
+
+async function promptNewFolder(dirPath) {
+  const name = prompt(`New folder name${dirPath ? ' in ' + dirPath : ''}:`);
+  if (!name) return;
+  const fullPath = dirPath ? dirPath + '/' + name : name;
+  try {
+    const res = await agentFileApi('/dir', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: fullPath }),
+    });
+    if ((await res.json()).success) { if (dirPath) expandedDirs.add(dirPath); expandedDirs.add(fullPath); refreshFiles(); }
+  } catch (e) { addLog('error', e.message); }
+}
+
+function startRename(filePath, isDir) {
+  const tree = document.getElementById('fileTree');
+  const row = tree.querySelector(`.tree-row[data-path="${CSS.escape(filePath)}"]`);
+  if (!row) return;
+  const nameSpan = row.querySelector('.name');
+  const oldName = filePath.split('/').pop();
+  const origHTML = nameSpan.innerHTML;
+  const input = document.createElement('input');
+  input.type = 'text'; input.className = 'rename-input'; input.value = oldName;
+  nameSpan.innerHTML = ''; nameSpan.appendChild(input); input.focus();
+  if (!isDir) { const d = oldName.lastIndexOf('.'); input.setSelectionRange(0, d > 0 ? d : oldName.length); }
+  else input.select();
+  function finish(commit) {
+    const newName = input.value.trim(); nameSpan.innerHTML = origHTML;
+    if (commit && newName && newName !== oldName) {
+      const parent = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : '';
+      moveFile(filePath, parent ? parent + '/' + newName : newName);
+    }
+  }
+  input.addEventListener('keydown', (e) => { if (e.key==='Enter'){e.preventDefault();finish(true);} if (e.key==='Escape'){e.preventDefault();finish(false);} e.stopPropagation(); });
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('click', (e) => e.stopPropagation());
+}
+
+function showContextMenu(x, y, filePath, isDir) {
+  hideContextMenu(); selectedPath = filePath;
+  const menu = document.createElement('div'); menu.className = 'ctx-menu'; menu.id = 'ctxMenu';
+  const items = [];
+  if (isDir) {
+    items.push({ label: '&#128196;+ New File', action: () => promptNewFile(filePath) });
+    items.push({ label: '&#128193;+ New Folder', action: () => promptNewFolder(filePath) });
+    items.push({ type: 'sep' });
+  } else {
+    items.push({ label: '&#128065; View', action: () => viewFile(filePath) });
+    items.push({ type: 'sep' });
+  }
+  items.push({ label: '&#9998; Rename', action: () => startRename(filePath, isDir), shortcut: 'F2' });
+  items.push({ type: 'sep' });
+  items.push({ label: '&#128465; Delete', action: () => deleteFile(filePath, isDir), cls: 'danger' });
+  menu.innerHTML = items.map(it => {
+    if (it.type==='sep') return '<div class="ctx-sep"></div>';
+    return `<div class="ctx-item ${it.cls||''}" data-idx="${items.indexOf(it)}">${it.label}${it.shortcut?`<span class="shortcut">${it.shortcut}</span>`:''}</div>`;
+  }).join('');
+  menu.querySelectorAll('.ctx-item').forEach(el => {
+    const idx = parseInt(el.dataset.idx);
+    el.addEventListener('click', () => { hideContextMenu(); items[idx].action(); });
+  });
+  document.body.appendChild(menu);
+  const rect = menu.getBoundingClientRect();
+  if (x+rect.width > window.innerWidth) x = window.innerWidth-rect.width-8;
+  if (y+rect.height > window.innerHeight) y = window.innerHeight-rect.height-8;
+  menu.style.left = x+'px'; menu.style.top = y+'px';
+  setTimeout(() => { document.addEventListener('click', hideContextMenu, { once: true }); }, 0);
+}
+function hideContextMenu() { const m = document.getElementById('ctxMenu'); if (m) m.remove(); }
+
+// Upload area drag-drop
+const uploadArea = document.getElementById('uploadArea');
+['dragenter','dragover'].forEach(ev => uploadArea.addEventListener(ev, e => { e.preventDefault(); uploadArea.classList.add('dragover'); }));
+['dragleave','drop'].forEach(ev => uploadArea.addEventListener(ev, e => { e.preventDefault(); uploadArea.classList.remove('dragover'); }));
+uploadArea.addEventListener('drop', e => { if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files); });
+
+// ============================================================================
+// Chat attachments
+// ============================================================================
+function handleChatAttach(event) {
+  const files = event.target.files;
+  for (const file of files) {
+    if (file.type.startsWith('image/')) {
+      resizeImage(file, 1024).then(({ dataUrl, base64 }) => {
+        chatAttachments.push({ name: file.name, type: file.type, dataUrl, base64, mediaType: file.type });
+        renderAttachChips();
+      });
+    } else {
+      const reader = new FileReader();
+      reader.onload = () => {
+        chatAttachments.push({ name: file.name, type: file.type || 'application/octet-stream',
+          dataUrl: reader.result, base64: reader.result.split(',')[1], mediaType: file.type });
+        renderAttachChips();
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+  event.target.value = '';
+}
+function resizeImage(file, maxPx) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxPx || height > maxPx) {
+        const scale = maxPx / Math.max(width, height);
+        width = Math.round(width * scale); height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      resolve({ dataUrl, base64: dataUrl.split(',')[1] });
+      URL.revokeObjectURL(img.src);
+    };
+    img.src = URL.createObjectURL(file);
+  });
+}
+function renderAttachChips() {
+  const c = document.getElementById('attachChips');
+  if (chatAttachments.length === 0) { c.style.display = 'none'; c.innerHTML = ''; return; }
+  c.style.display = 'flex';
+  c.innerHTML = chatAttachments.map((a,i) => {
+    const preview = a.type.startsWith('image/') ? `<img src="${a.dataUrl}" alt="">` : '&#128196;';
+    return `<span class="attach-chip">${preview} ${esc(a.name)}<span class="remove" onclick="removeAttachment(${i})">&#10005;</span></span>`;
+  }).join('');
+}
+function removeAttachment(i) { chatAttachments.splice(i,1); renderAttachChips(); }
+
+document.querySelector('.input-area').addEventListener('dragover', e => e.preventDefault());
+document.querySelector('.input-area').addEventListener('drop', e => {
+  e.preventDefault();
+  if (e.dataTransfer.files.length) handleChatAttach({ target: { files: e.dataTransfer.files, value: '' } });
+});
+
+// ============================================================================
+// Tabs
+// ============================================================================
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(p => p.classList.remove('active'));
+  if (tab === 'terminal') {
+    document.getElementById('tabTerminal').classList.add('active');
+    document.getElementById('paneTerminal').classList.add('active');
+    if (!term) initTerminal();
+    else fitAddon.fit();
+  } else {
+    document.getElementById('tabChat').classList.add('active');
+    document.getElementById('paneChat').classList.add('active');
+  }
+}
+
+// ============================================================================
+// Terminal (xterm.js) — scoped to agent's workspace folder
+// ============================================================================
+let term = null, fitAddon = null, termConnected = false;
+
+function initTerminal() {
+  const container = document.getElementById('terminalContainer');
+  container.innerHTML = '';
+  term = new Terminal({
+    cursorBlink: true, fontSize: 14,
+    fontFamily: "'SF Mono', 'Cascadia Code', 'Consolas', monospace",
+    theme: { background: '#0d1117', foreground: '#e6edf3', cursor: '#58a6ff',
+      selectionBackground: 'rgba(88,166,255,0.3)',
+      black: '#484f58', red: '#f85149', green: '#3fb950', yellow: '#d29922',
+      blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#b1bac4' },
+  });
+  fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(container);
+  setTimeout(() => fitAddon.fit(), 100);
+  window.addEventListener('resize', () => { if (fitAddon) fitAddon.fit(); });
+  connectTerminal();
+  term.onData(data => { if (termConnected) socket.emit('terminal-input', data); });
+  term.onResize(({ cols, rows }) => { if (termConnected) socket.emit('terminal-resize', { cols, rows }); });
+}
+
+function connectTerminal() {
+  const shell = document.getElementById('termShell').value;
+  // Tell server to start terminal scoped to THIS agent's folder
+  socket.emit('terminal-start', { shell, cols: term?.cols || 80, rows: term?.rows || 24, agentId: AGENT_ID });
+  if (term) { term.clear(); term.writeln('\x1b[33mConnecting terminal for ' + (agentProfile?.name || AGENT_ID) + '...\x1b[0m'); }
+}
+function reconnectTerminal() { socket.emit('terminal-stop'); setTimeout(() => connectTerminal(), 200); }
+
+socket.on('terminal-output', data => { if (term) term.write(data); termConnected = true; });
+socket.on('terminal-ready', () => { termConnected = true; if (term) { term.clear(); addLog('info', 'Terminal connected'); } });
+socket.on('terminal-exit', data => { termConnected = false; if (term) term.writeln(`\x1b[31m\r\nExited (${data.code})\x1b[0m`); });
+
+// ============================================================================
+// UI Helpers
+// ============================================================================
+function addMessage(role, content, sender) {
+  const el = document.createElement('div'); el.className = `message ${role}`;
+  if (role === 'assistant') {
+    el.innerHTML = `<div class="sender">${sender || 'Agent'}</div><div class="content">${formatMarkdown(content)}</div>`;
+  } else { el.innerHTML = `<div class="content">${esc(content)}</div>`; }
+  document.getElementById('messages').appendChild(el);
+  scrollToBottom();
+  return el;
+}
+function showTyping() {
+  const el = document.createElement('div'); el.className = 'typing'; el.id = 'typingIndicator';
+  el.textContent = (agentProfile?.name || 'Agent') + ' is thinking';
+  document.getElementById('messages').appendChild(el); scrollToBottom();
+}
+function removeTyping() { const el = document.getElementById('typingIndicator'); if (el) el.remove(); }
+function scrollToBottom() { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; }
+function setStatus(online) {
+  document.getElementById('statusDot').className = `dot ${online ? 'online' : 'offline'}`;
+  document.getElementById('statusText').textContent = online ? 'Connected' : 'Disconnected';
+}
+function addLog(level, text) {
+  const el = document.createElement('div'); el.className = `log-entry ${level}`;
+  el.innerHTML = `<span class="ts">${new Date().toLocaleTimeString()}</span>${esc(text)}`;
+  const panel = document.getElementById('logPanel'); panel.appendChild(el); panel.scrollTop = panel.scrollHeight;
+}
+function esc(text) { const d = document.createElement('div'); d.textContent = text; return d.innerHTML; }
+function escAttr(s) { return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
+function formatSize(bytes) {
+  if (!bytes) return '0 B';
+  const k = 1024, sizes = ['B','KB','MB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k,i)).toFixed(1)) + ' ' + sizes[i];
+}
+function formatMarkdown(text) {
+  if (!text) return '';
+  let html = esc(text);
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
+
+// Keyboard
+document.getElementById('input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeFileViewer(); hideContextMenu(); }
+  if (e.key === 'F2' && selectedPath) { e.preventDefault(); startRename(selectedPath, fileData.some(f => f.path === selectedPath && f.isDir)); }
+  if (e.key === 'Delete' && selectedPath && !document.querySelector('.rename-input')) {
+    e.preventDefault(); deleteFile(selectedPath, fileData.some(f => f.path === selectedPath && f.isDir));
+  }
+});
+document.getElementById('input').addEventListener('input', function() {
+  this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+});
+
+// Sidebar resize
+(function() {
+  const sidebar = document.getElementById('sidebar'), handle = document.getElementById('sidebarResize');
+  let startX, startW;
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault(); startX = e.clientX; startW = sidebar.offsetWidth; handle.classList.add('active');
+    document.addEventListener('mousemove', drag); document.addEventListener('mouseup', up);
+  });
+  function drag(e) { sidebar.style.width = Math.max(180, Math.min(500, startW + (e.clientX - startX))) + 'px'; }
+  function up() { handle.classList.remove('active'); document.removeEventListener('mousemove', drag); document.removeEventListener('mouseup', up);
+    try { localStorage.setItem('agent-sidebar-width', sidebar.style.width); } catch {} }
+  try { const s = localStorage.getItem('agent-sidebar-width'); if (s) sidebar.style.width = s; } catch {}
+})();
+</script>
+</body>
+</html>
