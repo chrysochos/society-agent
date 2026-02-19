@@ -187,28 +187,60 @@ class SettingsManager {
 	 * Load from environment variables
 	 */
 	private loadFromEnv(): void {
-		// Check providers in priority order
-		if (process.env.OPENROUTER_API_KEY) {
-			this.settings.provider = {
-				type: "openrouter",
-				apiKey: process.env.OPENROUTER_API_KEY,
-				model: process.env.OPENROUTER_MODEL_ID || DEFAULT_MODELS.openrouter,
+		// Check for explicit provider selection
+		const activeProvider = process.env.ACTIVE_PROVIDER as ProviderType | undefined
+		const activeModel = process.env.ACTIVE_MODEL
+
+		if (activeProvider) {
+			// Use explicitly selected provider
+			const apiKeyEnvMap: Record<ProviderType, string> = {
+				openrouter: "OPENROUTER_API_KEY",
+				anthropic: "ANTHROPIC_API_KEY",
+				openai: "OPENAI_API_KEY",
+				minimax: "MINIMAX_API_KEY",
+				gemini: "GEMINI_API_KEY",
+				deepseek: "DEEPSEEK_API_KEY",
+				groq: "GROQ_API_KEY",
+				mistral: "MISTRAL_API_KEY",
 			}
-			log.info("Loaded OpenRouter config from environment")
-		} else if (process.env.ANTHROPIC_API_KEY) {
-			this.settings.provider = {
-				type: "anthropic",
-				apiKey: process.env.ANTHROPIC_API_KEY,
-				model: process.env.API_MODEL_ID || DEFAULT_MODELS.anthropic,
+
+			const apiKeyEnv = apiKeyEnvMap[activeProvider]
+			const apiKey = process.env[apiKeyEnv]
+
+			if (apiKey) {
+				this.settings.provider = {
+					type: activeProvider,
+					apiKey,
+					model: activeModel || DEFAULT_MODELS[activeProvider],
+				}
+				log.info(`Loaded ${activeProvider} config from environment (ACTIVE_PROVIDER)`)
+			} else {
+				log.warn(`ACTIVE_PROVIDER=${activeProvider} but ${apiKeyEnv} is not set`)
 			}
-			log.info("Loaded Anthropic config from environment")
-		} else if (process.env.OPENAI_API_KEY) {
-			this.settings.provider = {
-				type: "openai",
-				apiKey: process.env.OPENAI_API_KEY,
-				model: process.env.OPENAI_MODEL_ID || DEFAULT_MODELS.openai,
+		} else {
+			// Fallback: Check providers in priority order (legacy behavior)
+			if (process.env.OPENROUTER_API_KEY) {
+				this.settings.provider = {
+					type: "openrouter",
+					apiKey: process.env.OPENROUTER_API_KEY,
+					model: process.env.OPENROUTER_MODEL_ID || DEFAULT_MODELS.openrouter,
+				}
+				log.info("Loaded OpenRouter config from environment")
+			} else if (process.env.ANTHROPIC_API_KEY) {
+				this.settings.provider = {
+					type: "anthropic",
+					apiKey: process.env.ANTHROPIC_API_KEY,
+					model: process.env.API_MODEL_ID || DEFAULT_MODELS.anthropic,
+				}
+				log.info("Loaded Anthropic config from environment")
+			} else if (process.env.OPENAI_API_KEY) {
+				this.settings.provider = {
+					type: "openai",
+					apiKey: process.env.OPENAI_API_KEY,
+					model: process.env.OPENAI_MODEL_ID || DEFAULT_MODELS.openai,
+				}
+				log.info("Loaded OpenAI config from environment")
 			}
-			log.info("Loaded OpenAI config from environment")
 		}
 
 		// Load other settings from env

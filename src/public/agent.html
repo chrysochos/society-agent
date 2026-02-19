@@ -222,6 +222,14 @@
     flex: 1; color: var(--muted); text-align: center; padding: 40px; }
   .welcome h2 { font-size: 18px; color: var(--text); margin-bottom: 8px; }
   .welcome p { font-size: 13px; max-width: 450px; line-height: 1.5; }
+
+  /* Toast notifications */
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 16px; border-radius: 6px; font-size: 12px; z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3); animation: toastIn 0.2s ease-out; }
+  @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 </style>
 </head>
 <body>
@@ -529,6 +537,15 @@ socket.on('agent-message', (data) => {
     showWorkingIndicator(false, true);
     fetchAgentUsage();
     refreshContextStats(); // kilocode_change - update context stats
+    
+    // kilocode_change start - Add clear completion divider in chat
+    const divider = document.createElement('div');
+    divider.className = 'completion-divider';
+    divider.innerHTML = '<span>✅ Task completed</span>';
+    divider.style.cssText = 'text-align:center;margin:16px 0;color:var(--green);font-size:12px;opacity:0.8;border-top:1px dashed var(--border);padding-top:12px;';
+    document.getElementById('chatMessages').appendChild(divider);
+    scrollToBottom();
+    // kilocode_change end
   }
 });
 
@@ -1142,11 +1159,11 @@ function showWorkingIndicator(working, done = false) {
       if (bannerIcon) bannerIcon.textContent = '✅';
       if (bannerText) bannerText.textContent = 'DONE - Agent finished responding';
     }
-    // Hide after 8 seconds
+    // Hide after 15 seconds (increased from 8)
     doneTimeout = setTimeout(() => {
       if (indicator) indicator.style.display = 'none';
       if (banner) banner.style.display = 'none';
-    }, 8000);
+    }, 15000);
   } else {
     if (indicator) indicator.style.display = 'none';
     if (banner) banner.style.display = 'none';
@@ -1221,6 +1238,11 @@ async function sendMessage() {
   const input = document.getElementById('input');
   const text = input.value.trim();
   if ((!text && chatAttachments.length === 0) || isStreaming) return;
+
+  // kilocode_change start - Reset stream state for new message (fixes continue after network error)
+  currentStreamEl = null;
+  streamText = '';
+  // kilocode_change end
 
   const welcome = document.getElementById('welcome');
   if (welcome) welcome.style.display = 'none';
@@ -1319,6 +1341,10 @@ async function sendMessage() {
     removeTyping();
     addMessage('system', `Network error: ${e.message}`);
     isStreaming = false;
+    // kilocode_change start - Reset stream state on error so next message starts fresh
+    currentStreamEl = null;
+    streamText = '';
+    // kilocode_change end
     document.getElementById('sendBtn').disabled = false;
     document.getElementById('stopBtn').style.display = 'none'; // kilocode_change - hide stop button
     showWorkingIndicator(false); // kilocode_change - hide on error
@@ -1795,6 +1821,26 @@ function startRename(filePath, isDir) {
   input.addEventListener('click', (e) => e.stopPropagation());
 }
 
+// Toast notification
+function showToast(message) {
+  const existing = document.querySelector('.toast');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 2000);
+}
+
+// Copy text to clipboard
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    showToast('Copied: ' + text);
+  }).catch(err => {
+    console.error('Failed to copy:', err);
+  });
+}
+
 // kilocode_change start - fix context menu issues after delete
 let ctxMenuDocListener = null;
 
@@ -1810,6 +1856,9 @@ function showContextMenu(x, y, filePath, isDir) {
     items.push({ label: '&#128065; View', action: () => viewFile(filePath) });
     items.push({ type: 'sep' });
   }
+  items.push({ label: '&#128203; Copy Path', action: () => copyToClipboard(filePath) });
+  items.push({ label: '&#128279; Copy Relative Path', action: () => copyToClipboard(filePath.startsWith('/') ? filePath.slice(1) : filePath) });
+  items.push({ type: 'sep' });
   items.push({ label: '&#9998; Rename', action: () => startRename(filePath, isDir), shortcut: 'F2' });
   items.push({ type: 'sep' });
   items.push({ label: '&#128465; Delete', action: () => deleteFile(filePath, isDir), cls: 'danger' });

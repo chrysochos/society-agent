@@ -1,6 +1,6 @@
 /**
- * Simplified Provider Configuration for Society Agent standalone
- * Anthropic-only implementation
+ * Provider Configuration for Society Agent standalone
+ * Multi-provider implementation
  */
 
 import * as fs from "fs"
@@ -11,21 +11,36 @@ import { getLog } from "./logger"
 const log = getLog()
 
 // ============================================================================
-// Types (simplified from @roo-code/types)
+// Types
 // ============================================================================
 
+export type ProviderType = "anthropic" | "openrouter" | "openai" | "minimax" | "custom" | "gemini" | "deepseek" | "groq" | "mistral"
+
 export interface ProviderSettings {
-	apiProvider: "anthropic"
+	apiProvider: ProviderType
+	// Anthropic
 	anthropicApiKey?: string
 	apiModelId?: string
+	// OpenRouter
+	openRouterApiKey?: string
+	openRouterModelId?: string
+	// OpenAI
+	openAiApiKey?: string
+	openAiModelId?: string
+	// MiniMax
+	minimaxApiKey?: string
+	// Gemini
+	geminiApiKey?: string
+	// Ollama (local)
+	ollamaModelId?: string
+	// Generic
+	apiKey?: string
 	maxTokens?: number
 	temperature?: number
 }
 
-export type ProviderName = "anthropic"
-export const providerNames = ["anthropic"] as const
-
-export type ProviderType = "anthropic"
+export type ProviderName = ProviderType
+export const providerNames = ["anthropic", "openrouter", "openai", "minimax", "custom", "gemini", "deepseek", "groq", "mistral"] as const
 
 export interface ProviderConfig {
 	provider: ProviderType
@@ -202,7 +217,11 @@ export function isProviderConfigured(workspacePath?: string): boolean {
  */
 export function loadProviderConfig(workspacePath: string): ProviderConfig | null {
 	const settings = loadProviderSettings(workspacePath)
-	if (!settings.anthropicApiKey && !process.env.ANTHROPIC_API_KEY) {
+	// Check for any configured API key
+	const hasKey = settings.anthropicApiKey || settings.openRouterApiKey || settings.openAiApiKey || 
+		settings.minimaxApiKey || settings.apiKey || process.env.ANTHROPIC_API_KEY || 
+		process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY
+	if (!hasKey) {
 		return null
 	}
 	return getCurrentProviderConfig(workspacePath)
@@ -213,37 +232,51 @@ export function loadProviderConfig(workspacePath: string): ProviderConfig | null
  */
 export async function saveProviderConfig(workspacePath: string, config: ProviderConfig): Promise<void> {
 	const settings: ProviderSettings = {
-		apiProvider: "anthropic",
-		anthropicApiKey: config.apiKey,
+		apiProvider: config.provider,
+		apiKey: config.apiKey,
 		apiModelId: config.model,
 		maxTokens: config.maxTokens,
 		temperature: config.temperature,
+	}
+	// Set provider-specific keys
+	if (config.provider === "anthropic") {
+		settings.anthropicApiKey = config.apiKey
+	} else if (config.provider === "openrouter") {
+		settings.openRouterApiKey = config.apiKey
+		settings.openRouterModelId = config.model
+	} else if (config.provider === "openai") {
+		settings.openAiApiKey = config.apiKey
+		settings.openAiModelId = config.model
+	} else if (config.provider === "minimax") {
+		settings.minimaxApiKey = config.apiKey
 	}
 	await saveProviderSettings(workspacePath, settings)
 }
 
 /**
- * Get configured providers (Anthropic only in standalone)
+ * Get configured providers
  */
 export function getConfiguredProviders(workspacePath: string): ProviderType[] {
-	if (isProviderConfigured(workspacePath)) {
-		return ["anthropic"]
-	}
-	return []
+	const providers: ProviderType[] = []
+	if (process.env.ANTHROPIC_API_KEY) providers.push("anthropic")
+	if (process.env.OPENROUTER_API_KEY) providers.push("openrouter")
+	if (process.env.OPENAI_API_KEY) providers.push("openai")
+	if (process.env.MINIMAX_API_KEY) providers.push("minimax")
+	return providers.length > 0 ? providers : ["anthropic"]
 }
 
 /**
- * Get all provider names (Anthropic only in standalone)
+ * Get all provider names
  */
 export function getAllProviderNames(): ProviderName[] {
-	return ["anthropic"]
+	return [...providerNames]
 }
 
 /**
  * Check if provider name is valid
  */
 export function isValidProvider(name: string): name is ProviderName {
-	return name === "anthropic"
+	return providerNames.includes(name as ProviderType)
 }
 
 /**

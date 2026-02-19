@@ -6,6 +6,9 @@
  * Single user, full-featured chat interface with agent monitoring.
  */
 
+// Load environment variables first
+import "dotenv/config"
+
 // kilocode_change - Mock vscode module for standalone server mode (must be first!)
 import "./vscode-mock"
 
@@ -20,7 +23,7 @@ import { ResponseStrategy } from "./response-strategy"
 import { ConversationAgent } from "./conversation-agent"
 import { Anthropic } from "@anthropic-ai/sdk"
 import OpenAI from "openai" // kilocode_change - OpenRouter support
-import { ApiHandler } from "./api"
+import { ApiHandler, buildApiHandler } from "./api"
 import { commandExecutor } from "./command-executor"
 import { getLog } from "./logger"
 // kilocode_change start - dynamic provider configuration
@@ -53,7 +56,7 @@ import { ProjectStore, ProjectAgentConfig, Project, Task, TaskContext } from "./
 import * as pty from "node-pty"
 // kilocode_change end
 // kilocode_change start - standalone settings system
-import { settings as standaloneSettings, initializeSettings, getSettingsSummary } from "./settings"
+import { settings as standaloneSettings, initializeSettings, getSettingsSummary, PROVIDER_BASE_URLS } from "./settings"
 // kilocode_change end
 
 const app = express()
@@ -162,6 +165,27 @@ interface UsageEntry {
 	totalTokens: number
 	costUsd: number // estimated cost
 }
+
+// kilocode_change start - Safe JSON parse for tool arguments (models sometimes return malformed JSON)
+function safeParseToolArgs(jsonStr: string | undefined): Record<string, any> {
+	if (!jsonStr) return {}
+	try {
+		return JSON.parse(jsonStr)
+	} catch (e: any) {
+		log.warn(`Failed to parse tool arguments: ${e.message}`)
+		log.warn(`Raw arguments: ${jsonStr?.substring(0, 200)}...`)
+		// Try to fix common issues
+		try {
+			// Sometimes models output trailing content after JSON
+			const match = jsonStr.match(/^\s*\{[\s\S]*?\}/)
+			if (match) {
+				return JSON.parse(match[0])
+			}
+		} catch {}
+		return { _parseError: e.message, _rawArgs: jsonStr }
+	}
+}
+// kilocode_change end
 
 interface UsageSummary {
 	totalInputTokens: number
@@ -375,6 +399,27 @@ let currentProviderSettings: ProviderSettings | null = null
 function getApiHandlerFromConfig(): ApiHandler {
 	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 
+	// kilocode_change start - Check standalone settings first (supports OpenRouter)
+	if (standaloneSettings.isInitialized() && standaloneSettings.hasApiKey()) {
+		const providerConfig = standaloneSettings.getProvider()
+		// For non-Anthropic providers, return a dummy handler (actual API calls are handled in chat functions)
+		if (providerConfig.type !== "anthropic") {
+			log.info(`[getApiHandlerFromConfig] Using ${providerConfig.type} (chat functions handle API calls)`)
+			// Return a minimal handler that won't be used for actual API calls
+			return {
+				createMessage: () => {
+					throw new Error(`Direct API handler not supported for ${providerConfig.type}. Use chat endpoints.`)
+				},
+			} as any
+		}
+		// For Anthropic, we can use the standard handler
+		return buildApiHandler({
+			apiKey: providerConfig.apiKey,
+			model: providerConfig.model,
+		})
+	}
+	// kilocode_change end
+
 	// Try to use the new full ProviderSettings first
 	if (!currentProviderSettings) {
 		try {
@@ -391,6 +436,10 @@ function getApiHandlerFromConfig(): ApiHandler {
 	// Fallback to legacy provider config
 	if (!currentProviderConfig) {
 		currentProviderConfig = loadProviderConfig(workspacePath)
+	}
+
+	if (!currentProviderConfig) {
+		throw new Error("No provider configuration found. Please configure API key.")
 	}
 
 	return createApiHandler(currentProviderConfig) as ApiHandler
@@ -420,10 +469,14 @@ async function initializeSocietyManager(apiKey?: string) {
 			apiHandler = buildApiHandlerFromSettings(settings)
 		} catch (settingsError) {
 			// Fall back to legacy config
-			let providerConfig: ProviderConfig
+			let providerConfig: ProviderConfig | null
 			try {
 				providerConfig = loadProviderConfig(workspacePath)
 			} catch (configError) {
+				providerConfig = null
+			}
+			
+			if (!providerConfig) {
 				// If no config exists and apiKey provided, use Anthropic as default
 				if (apiKey) {
 					providerConfig = {
@@ -432,7 +485,7 @@ async function initializeSocietyManager(apiKey?: string) {
 						model: process.env.API_MODEL_ID || "claude-sonnet-4-20250514",
 					}
 				} else {
-					throw configError
+					throw new Error("No provider configuration found")
 				}
 			}
 			currentProviderConfig = providerConfig
@@ -522,15 +575,23 @@ function getTeamAgents(purposeId: string) {
  */
 app.get("/api/status", (req, res) => {
 	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+	// kilocode_change start - use standalone settings for provider info
+	const providerConfig = standaloneSettings.isInitialized() ? standaloneSettings.getProvider() : null
 	res.json({
 		status: "ok",
 		environment: NODE_ENV,
 		societyManagerReady: !!societyManager,
-		apiKeyConfigured: !!process.env.ANTHROPIC_API_KEY,
+		apiKeyConfigured: providerConfig ? !!providerConfig.apiKey : !!process.env.ANTHROPIC_API_KEY,
+		provider: providerConfig ? {
+			type: providerConfig.type,
+			model: providerConfig.model,
+			apiKeyMasked: standaloneSettings.getMaskedApiKey(),
+		} : null,
 		workspacePath,
 		outputDir: path.join(workspacePath, "projects"),
 		timestamp: new Date().toISOString(),
 	})
+	// kilocode_change end
 })
 
 // kilocode_change start - activity log API
@@ -1196,6 +1257,17 @@ app.get("/api/config/provider", (req, res) => {
 		}
 
 		const config = loadProviderConfig(workspacePath)
+		if (!config) {
+			res.json({
+				provider: null,
+				model: null,
+				apiKeyConfigured: false,
+				configuredProviders: getConfiguredProviders(workspacePath),
+				allProviders: getAllProviderNames(),
+				settingsType: "legacy",
+			})
+			return
+		}
 		res.json({
 			provider: config.provider,
 			model: config.model,
@@ -1268,7 +1340,11 @@ app.post("/api/config/provider", async (req, res): Promise<void> => {
 			return
 		}
 
-		await saveProviderConfig(workspacePath, provider, apiKey, model)
+		await saveProviderConfig(workspacePath, {
+			provider,
+			apiKey,
+			model: model || "claude-sonnet-4-20250514",
+		})
 
 		// Clear current state to reload with new config
 		societyManager = null
@@ -2647,266 +2723,8 @@ function securePath(agentDir: string, relativePath: string): { ok: boolean; full
 	return { ok: true, fullPath }
 }
 
-// kilocode_change start - Tool-use supervisor delegation with agentic loop
-
-/**
- * Anthropic tool definitions for supervisor agents.
- * These let the supervisor organically decide when to delegate, list team, or propose new agents.
- */
-const SUPERVISOR_TOOLS: Anthropic.Tool[] = [
-	// kilocode_change start - Supervisor mind tools (same as workers)
-	{
-		name: "read_file",
-		description: "Read a file from YOUR folder. Use this to read any files you've created - notes, plans, context. This is your persistent memory!",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				path: { type: "string", description: "Relative path to the file (e.g. 'notes.md', 'plan.md', 'context.md')" },
-			},
-			required: ["path"],
-		},
-	},
-	{
-		name: "write_file",
-		description: "Write/update a file in YOUR folder. Save notes, plans, decisions, learnings - whatever helps you stay organized.",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				path: { type: "string", description: "Relative path to the file (e.g. 'notes.md', 'decisions.md', 'progress.md')" },
-				content: { type: "string", description: "Full content to write to the file" },
-			},
-			required: ["path", "content"],
-		},
-	},
-	{
-		name: "list_files",
-		description: "List files in YOUR folder. Use this to see what files exist.",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				path: { type: "string", description: "Relative path to directory (e.g. '.' for your root)" },
-			},
-			required: ["path"],
-		},
-	},
-	// kilocode_change end
-	{
-		name: "list_team",
-		description: "List all agents in your project team with their IDs, names, roles, and current status. Use this to see who is available before delegating.",
-		input_schema: {
-			type: "object" as const,
-			properties: {},
-			required: [],
-		},
-	},
-	// kilocode_change start - Supervisor can read agent knowledge
-	{
-		name: "read_agent_file",
-		description: "Read a file from an agent's folder. Use this to check their files and notes. Check agent knowledge before delegating to understand what they already know!",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				agent_id: { type: "string", description: "The agent ID whose file to read" },
-				path: { type: "string", description: "Relative path to the file (e.g. 'notes.md', 'package.json', 'src/App.js')" },
-			},
-			required: ["agent_id", "path"],
-		},
-	},
-	{
-		name: "list_agent_files",
-		description: "List files in an agent's folder. Use this to see what an agent has created, what knowledge files exist, and understand their project state.",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				agent_id: { type: "string", description: "The agent ID whose files to list" },
-				path: { type: "string", description: "Relative path within agent folder (default: '.')" },
-			},
-			required: ["agent_id"],
-		},
-	},
-	// kilocode_change end
-	// kilocode_change start - Supervisor can ask/message agents directly
-	{
-		name: "ask_agent",
-		description: "Ask a quick question to one of your workers. They'll respond immediately. Good for clarification, status checks, or quick coordination. For complex work, use delegate_task instead.",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				agent_id: { type: "string", description: "The agent ID to ask (from list_team)" },
-				question: { type: "string", description: "Your question or message" },
-			},
-			required: ["agent_id", "question"],
-		},
-	},
-	{
-		name: "send_message",
-		description: "Send an async message to an agent's inbox. They'll see it when they check their inbox. Use for non-urgent updates, instructions for later, or FYI messages.",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				agent_id: { type: "string", description: "The agent ID to message" },
-				message: { type: "string", description: "Your message content" },
-				priority: { type: "string", enum: ["normal", "urgent"], description: "Priority level. Urgent messages may interrupt the agent." },
-			},
-			required: ["agent_id", "message"],
-		},
-	},
-	{
-		name: "read_inbox",
-		description: "Check your inbox for messages from other agents. Call this periodically to see if anyone has sent you messages.",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				mark_read: { type: "boolean", description: "If true, mark messages as read. Default: true" },
-			},
-			required: [],
-		},
-	},
-	// kilocode_change end
-	{
-		name: "delegate_task",
-		description: "Delegate a specific task to one of your team agents. The agent will execute the task autonomously and return results including any files created. Use this when work needs to be done by a specialist.",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				agent_id: { type: "string", description: "The ID of the agent to delegate to (from list_team)" },
-				task: { type: "string", description: "Detailed task instructions. Be specific — include requirements, technology choices, file names, expected output format. The agent has no prior context." },
-			},
-			required: ["agent_id", "task"],
-		},
-	},
-	// kilocode_change start - Parallel delegation for multiple agents
-	{
-		name: "delegate_tasks_parallel",
-		description: "Delegate tasks to MULTIPLE agents simultaneously. All agents work in parallel and results are collected. Use this when you have independent tasks for different specialists.",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				delegations: {
-					type: "array",
-					description: "Array of delegation objects",
-					items: {
-						type: "object",
-						properties: {
-							agent_id: { type: "string", description: "Agent ID to delegate to" },
-							task: { type: "string", description: "Task instructions for this agent" },
-						},
-						required: ["agent_id", "task"],
-					},
-				},
-			},
-			required: ["delegations"],
-		},
-	},
-	// kilocode_change end
-	{
-		name: "propose_new_agent",
-		description: "Create a new worker agent for the project. By default, agents are EPHEMERAL (automatically deleted after completing their task). Use persistent=true for agents you want to keep long-term.",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				name: { type: "string", description: "Human-readable name for the agent (e.g. 'Security Reviewer')" },
-				role: { type: "string", description: "One-line role description (e.g. 'Reviews code for security vulnerabilities')" },
-				system_prompt: { type: "string", description: "System prompt defining the agent's expertise and behavior" },
-				persistent: { type: "boolean", description: "If true, agent is permanent. If false (default), agent is deleted after completing its task." },
-			},
-			required: ["name", "role"],
-		},
-	},
-	// kilocode_change start - Cleanup orphaned ephemeral files
-	{
-		name: "cleanup_ephemeral_files",
-		description: "List and optionally delete _eph_ prefixed files (from ephemeral agents). Orphaned files are those where the agent no longer exists.",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				delete: { type: "boolean", description: "If true, delete orphaned files. If false (default), just list them." },
-				pattern: { type: "string", description: "Optional: filter files containing this pattern (e.g. agent ID or filename)" },
-			},
-			required: [],
-		},
-	},
-	// kilocode_change end
-	// kilocode_change start - Task pool system
-	{
-		name: "create_task",
-		description: "Create a task in the task pool. Workers will claim and execute tasks. Include full context so workers can execute without asking questions.",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				title: { type: "string", description: "Short task title (e.g. 'Write User model tests')" },
-				description: { type: "string", description: "Full task description with requirements, acceptance criteria, implementation hints" },
-				priority: { type: "number", description: "Priority 1-10 (higher = more urgent). Default: 5" },
-				working_directory: { type: "string", description: "Directory for this task relative to project root (e.g. 'src/models', 'tests')" },
-				output_paths: {
-					type: "object",
-					description: "Expected output files as { path: description } (e.g. { 'tests/user.test.ts': 'Unit tests for User model' })",
-				},
-				relevant_files: {
-					type: "array",
-					items: { type: "string" },
-					description: "Files the worker should read for context (e.g. ['src/models/user.ts', 'README.md'])",
-				},
-				conventions: { type: "string", description: "Coding conventions, patterns to follow (e.g. 'Use Jest, follow existing test patterns')" },
-				notes: { type: "string", description: "Additional context or notes" },
-			},
-			required: ["title", "description"],
-		},
-	},
-	{
-		name: "list_tasks",
-		description: "List all tasks in the task pool with their status. Shows available, claimed, in-progress, completed, and failed tasks.",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				status: {
-					type: "string",
-					enum: ["all", "available", "claimed", "in-progress", "completed", "failed"],
-					description: "Filter by status. Default: 'all'",
-				},
-			},
-			required: [],
-		},
-	},
-	{
-		name: "spawn_worker",
-		description: "Spawn an ephemeral worker to claim and execute tasks from the pool. Worker is generic - it becomes specialized by the task it claims. Workers auto-delete after completing their task.",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				count: { type: "number", description: "How many workers to spawn (limited by maxConcurrentWorkers). Default: 1" },
-			},
-			required: [],
-		},
-	},
-	{
-		name: "get_worker_status",
-		description: "Get status of all active ephemeral workers - what task each is working on, progress, etc.",
-		input_schema: {
-			type: "object" as const,
-			properties: {},
-			required: [],
-		},
-	},
-	// kilocode_change end
-	{
-		name: "run_command",
-		description: "Execute a shell command in the project workspace. Use this to install dependencies (npm install), run servers (npm start), run tests, or any other terminal operation. Commands run in the project folder.",
-		input_schema: {
-			type: "object" as const,
-			properties: {
-				command: { type: "string", description: "The shell command to execute (e.g. 'npm install', 'npm start', 'ls -la')" },
-				working_dir: { type: "string", description: "Optional subdirectory within the project to run the command (e.g. 'agent1' or 'backend'). Defaults to project root." },
-				background: { type: "boolean", description: "If true, run the command in background (for servers). Default false." },
-				timeout_ms: { type: "number", description: "Timeout in milliseconds. Default 60000 (60s). Use higher for npm install." },
-			},
-			required: ["command"],
-		},
-	},
-]
-
-// kilocode_change start - Worker agents get tools to operate in their folder
-const WORKER_TOOLS: Anthropic.Tool[] = [
+// kilocode_change start - Unified agent tools (all agents have the same capabilities)
+const AGENT_TOOLS: Anthropic.Tool[] = [
 	{
 		name: "run_command",
 		description: "Execute a shell command in YOUR agent folder. Use this to install dependencies (npm install), run/stop servers, run tests, or any terminal operation. Commands run in your designated folder within the project.",
@@ -3243,8 +3061,115 @@ const WORKER_TOOLS: Anthropic.Tool[] = [
 		},
 	},
 	// kilocode_change end
+	// kilocode_change start - Team management tools (previously supervisor-only, now for all agents)
+	{
+		name: "list_team",
+		description: "List all agents in your project team with their IDs, names, roles, and current status. Use this to see who is available before delegating or asking for help.",
+		input_schema: {
+			type: "object" as const,
+			properties: {},
+			required: [],
+		},
+	},
+	{
+		name: "read_agent_file",
+		description: "Read a file from another agent's folder. Use this to check their files, code, or notes.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				agent_id: { type: "string", description: "The agent ID whose file to read" },
+				path: { type: "string", description: "Relative path to the file" },
+			},
+			required: ["agent_id", "path"],
+		},
+	},
+	{
+		name: "list_agent_files",
+		description: "List files in another agent's folder. Use this to see what an agent has created.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				agent_id: { type: "string", description: "The agent ID whose files to list" },
+				path: { type: "string", description: "Relative path within agent folder (default: '.')" },
+			},
+			required: ["agent_id"],
+		},
+	},
+	{
+		name: "delegate_task",
+		description: "Delegate a task to another agent and wait for their response. Use this to get help from specialized agents or distribute work.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				agent_id: { type: "string", description: "ID of the agent to delegate to" },
+				task: { type: "string", description: "Full task description with all context needed" },
+			},
+			required: ["agent_id", "task"],
+		},
+	},
+	{
+		name: "create_task",
+		description: "Create a task in the task pool. Other agents can claim and execute tasks.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				title: { type: "string", description: "Short task title" },
+				description: { type: "string", description: "Full task description with requirements" },
+				priority: { type: "number", description: "Priority 1-10 (higher = more urgent). Default: 5" },
+				working_directory: { type: "string", description: "Directory for this task relative to project root" },
+			},
+			required: ["title", "description"],
+		},
+	},
+	{
+		name: "list_tasks",
+		description: "List all tasks in the task pool with their status.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				status: { type: "string", enum: ["all", "available", "claimed", "completed", "failed"], description: "Filter by status. Default: 'all'" },
+			},
+			required: [],
+		},
+	},
+	{
+		name: "spawn_worker",
+		description: "Spawn an ephemeral worker agent to claim and execute tasks from the pool.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				count: { type: "number", description: "How many workers to spawn. Default: 1" },
+			},
+			required: [],
+		},
+	},
+	{
+		name: "propose_new_agent",
+		description: "Propose creating a new permanent agent for the project. Requires human approval.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				name: { type: "string", description: "Agent name (e.g. 'Testing Specialist')" },
+				role: { type: "string", description: "Agent role description" },
+				purpose: { type: "string", description: "Why this agent is needed" },
+			},
+			required: ["name", "role", "purpose"],
+		},
+	},
+	// kilocode_change end - All agents now have full capabilities
 ]
-// kilocode_change end
+
+// Ephemeral agents get a subset of tools - no delegation or spawning capabilities
+// They are temporary workers that execute tasks and disappear
+const EPHEMERAL_EXCLUDED_TOOLS = new Set([
+	"delegate_task",       // Can't delegate to others
+	"spawn_worker",        // Can't spawn more workers
+	"create_task",         // Can't create tasks in the pool
+	"propose_new_agent",   // Can't propose permanent agents
+])
+const EPHEMERAL_TOOLS: Anthropic.Tool[] = AGENT_TOOLS.filter(
+	tool => !EPHEMERAL_EXCLUDED_TOOLS.has(tool.name)
+)
 
 /**
  * Execute a single tool call for suprevisor agents.
@@ -3623,6 +3548,14 @@ async function executeAgentTool(
 	const { spawn } = await import("child_process")
 	const timeout = timeout_ms || 300000 // 5 minutes default
 
+	// kilocode_change start - Auto-prepend sudo for apt commands
+	let finalCommand = command
+	if (/^\s*(apt-get|apt|dpkg)\s/.test(command) && !command.includes("sudo")) {
+		finalCommand = `sudo ${command}`
+		log.info(`[Worker ${agentConfig.name}] Auto-prepending sudo: ${finalCommand}`)
+	}
+	// kilocode_change end
+
 	return new Promise<{ result: string; filesCreated: number }>((resolve) => {
 		let output = ""
 		let lastEmitTime = 0
@@ -3633,12 +3566,12 @@ async function executeAgentTool(
 			agentId: agentConfig.id,
 			agentName: agentConfig.name,
 			projectId: project.id,
-			message: `\n⏳ *Running: ${command}*\n\`\`\`\n`,
+			message: `\n⏳ *Running: ${finalCommand}*\n\`\`\`\n`,
 			timestamp: Date.now(),
 			isStreaming: true,
 		})
 
-		const child = spawn("bash", ["-c", command], {
+		const child = spawn("bash", ["-c", finalCommand], {
 			cwd: workingFolder, // kilocode_change - Use workingFolder for commands
 			env: { ...process.env, FORCE_COLOR: "0" },
 		})
@@ -3739,42 +3672,28 @@ async function executeAgentTool(
 			try {
 				// kilocode_change start - use createOneShot for inter-agent communication
 				const targetFolder = projectStore.agentHomeDir(project.id, targetAgent.id)
+				const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 				
-				const response = await createOneShot(
+				const answer = await createOneShot(
+					workspacePath,
 					`You are ${targetAgent.name}, role: ${targetAgent.role}. 
 Your folder is: ${targetFolder}
 Another agent (${agentConfig.name}) is asking you a question. Answer briefly and helpfully.
 If you don't know, say so. Be concise.`,
-					`[Question from ${agentConfig.name}]: ${question}`,
-					undefined, // use current provider config
-					1024
+					`[Question from ${agentConfig.name}]: ${question}`
 				)
 				// kilocode_change end
-
-				// Track usage
-				if (response.usage) {
-					usageTracker.record({
-						projectId: project.id,
-						agentId: targetAgent.id,
-						agentName: targetAgent.name,
-						model: currentProviderConfig?.model || "unknown",
-						inputTokens: response.usage.inputTokens,
-						outputTokens: response.usage.outputTokens,
-					})
-				}
-
-				const answer = response.text || '(no response)'
 				
 				io.emit("agent-message", {
 					agentId: agentConfig.id,
 					agentName: agentConfig.name,
 					projectId: project.id,
-					message: `\n💬 **${targetAgent.name} replied:** ${answer}\n`,
+					message: `\n💬 **${targetAgent.name} replied:** ${answer || '(no response)'}\n`,
 					timestamp: Date.now(),
 					isStreaming: true,
 				})
 
-				return { result: `📨 **Response from ${targetAgent.name}:**\n${answer}`, filesCreated: 0 }
+				return { result: `📨 **Response from ${targetAgent.name}:**\n${answer || '(no response)'}`, filesCreated: 0 }
 			} catch (err: any) {
 				log.error(`[Worker ${agentConfig.name}] ask_agent failed:`, err)
 				return { result: `❌ Failed to reach ${targetAgent.name}: ${err.message}`, filesCreated: 0 }
@@ -4406,7 +4325,6 @@ async function handleWorkerChat(
 			model = providerConfig.model
 		} else if (providerConfig.type === "openai" || providerConfig.type === "groq" || providerConfig.type === "deepseek" || providerConfig.type === "mistral") {
 			// These providers use OpenAI-compatible API
-			const { PROVIDER_BASE_URLS } = await import("./settings")
 			useOpenRouter = true  // Use OpenAI SDK path
 			openRouterClient = new OpenAI({
 				baseURL: providerConfig.baseUrl || PROVIDER_BASE_URLS[providerConfig.type],
@@ -4460,7 +4378,7 @@ async function handleWorkerChat(
 		// Legacy provider config
 		const providerConfig = currentProviderConfig || loadProviderConfig(process.env.WORKSPACE_PATH || process.cwd())
 		// kilocode_change start - OpenRouter legacy support
-		if (providerConfig.provider === "openrouter" && providerConfig.apiKey) {
+		if (providerConfig && providerConfig.provider === "openrouter" && providerConfig.apiKey) {
 			useOpenRouter = true
 			openRouterClient = new OpenAI({
 				baseURL: "https://openrouter.ai/api/v1",
@@ -4470,7 +4388,7 @@ async function handleWorkerChat(
 		}
 		// kilocode_change end
 		// Tool calling requires Anthropic-compatible API (Anthropic or MiniMax)
-		else if (providerConfig.provider === "anthropic" || providerConfig.provider === "minimax") {
+		else if (providerConfig && (providerConfig.provider === "anthropic" || providerConfig.provider === "minimax")) {
 			anthropic = new Anthropic({
 				apiKey: providerConfig.apiKey,
 				baseURL: providerConfig.provider === "minimax" ? "https://api.minimax.io/anthropic" : undefined,
@@ -4651,10 +4569,10 @@ See all agents you can communicate with.
 4. If a test fails, fix it immediately - don't leave broken tests`
 
 	// kilocode_change start - Build content with attachments (images)
-	let messageContent: string | Anthropic.ContentBlockParam[]
+	let messageContent: string | Array<{ type: string; [key: string]: any }>
 	if (attachments && attachments.length > 0) {
 		// Build content blocks with images
-		const contentBlocks: Anthropic.ContentBlockParam[] = []
+		const contentBlocks: Array<{ type: string; [key: string]: any }> = []
 		
 		// Add images first - handle both frontend format (source.data) and raw format (base64)
 		// NOTE: Frontend resizeImage() always converts to JPEG, so we hardcode image/jpeg
@@ -4707,10 +4625,14 @@ See all agents you can communicate with.
 	let fullResponse = ""
 	const maxIterations = 15 // kilocode_change - Increased from 5 to allow auto-continue
 
-	log.info(`[handleWorkerChat] Starting loop with model ${model}, ${messages.length} messages, ${WORKER_TOOLS.length} tools, useOpenRouter=${useOpenRouter}`)
+	// kilocode_change start - Use appropriate tools based on agent type
+	const agentTools = agentConfig.ephemeral ? EPHEMERAL_TOOLS : AGENT_TOOLS
+	// kilocode_change end
+
+	log.info(`[handleAgentChat] Starting loop with model ${model}, ${messages.length} messages, ${agentTools.length} tools, useOpenRouter=${useOpenRouter}, ephemeral=${!!agentConfig.ephemeral}`)
 
 	// kilocode_change start - OpenRouter uses OpenAI SDK, need to convert tools
-	const openAiTools: OpenAI.Chat.ChatCompletionTool[] = useOpenRouter ? WORKER_TOOLS.map((t) => ({
+	const openAiTools: OpenAI.Chat.ChatCompletionTool[] = useOpenRouter ? agentTools.map((t) => ({
 		type: "function" as const,
 		function: {
 			name: t.name,
@@ -4808,48 +4730,91 @@ See all agents you can communicate with.
 				return true
 			})
 			
-			const completion = await openRouterClient.chat.completions.create({
+			// kilocode_change start - TRUE STREAMING for OpenRouter
+			const stream = await openRouterClient.chat.completions.create({
 				model,
 				max_tokens: 16384,
 				messages: validMessages,
 				tools: openAiTools,
+				stream: true,
+				stream_options: { include_usage: true }, // kilocode_change - get token usage in stream
 			})
 			
-			const choice = completion.choices[0]
-			const textContent = choice?.message?.content || ""
+			let textContent = ""
+			let toolCalls: any[] = []
+			let finishReason: string | null = null
+			let streamUsage: { prompt_tokens?: number; completion_tokens?: number } | null = null
+			const toolCallsMap = new Map<number, { id: string; name: string; arguments: string }>()
 			
-			// Track usage
-			if (completion.usage) {
+			// Stream text in real-time
+			for await (const chunk of stream) {
+				// kilocode_change start - Capture usage from stream
+				if ((chunk as any).usage) {
+					streamUsage = (chunk as any).usage
+				}
+				// kilocode_change end
+				
+				const choice = chunk.choices[0]
+				if (!choice) continue
+				
+				// Handle text content
+				const delta = choice.delta
+				if (delta?.content) {
+					textContent += delta.content
+					fullResponse += delta.content
+					io.emit("agent-message", {
+						agentId: agentConfig.id,
+						agentName: agentConfig.name,
+						projectId: project.id,
+						message: delta.content,
+						timestamp: Date.now(),
+						isStreaming: true,
+					})
+				}
+				
+				// Handle tool calls (streamed incrementally)
+				if (delta?.tool_calls) {
+					for (const tc of delta.tool_calls) {
+						const idx = tc.index ?? 0
+						if (!toolCallsMap.has(idx)) {
+							toolCallsMap.set(idx, { id: tc.id || "", name: tc.function?.name || "", arguments: "" })
+						}
+						const existing = toolCallsMap.get(idx)!
+						if (tc.id) existing.id = tc.id
+						if (tc.function?.name) existing.name = tc.function.name
+						if (tc.function?.arguments) existing.arguments += tc.function.arguments
+					}
+				}
+				
+				if (choice.finish_reason) {
+					finishReason = choice.finish_reason
+				}
+			}
+			
+			// Convert accumulated tool calls to array
+			toolCalls = Array.from(toolCallsMap.values()).filter(tc => tc.id && tc.name).map(tc => ({
+				id: tc.id,
+				type: "function",
+				function: { name: tc.name, arguments: tc.arguments }
+			}))
+			
+			// kilocode_change start - Track usage from streaming response
+			if (streamUsage) {
 				usageTracker.record({
 					projectId: project.id,
 					agentId: agentConfig.id,
 					agentName: agentConfig.name,
 					model,
-					inputTokens: completion.usage.prompt_tokens || 0,
-					outputTokens: completion.usage.completion_tokens || 0,
+					inputTokens: streamUsage.prompt_tokens || 0,
+					outputTokens: streamUsage.completion_tokens || 0,
 				})
 			}
-			
-			// Emit text to UI
-			if (textContent) {
-				io.emit("agent-message", {
-					agentId: agentConfig.id,
-					agentName: agentConfig.name,
-					projectId: project.id,
-					message: textContent,
-					timestamp: Date.now(),
-					isStreaming: true,
-				})
-				fullResponse += textContent
-			}
-			
-			// Check for tool calls
-			const toolCalls = choice?.message?.tool_calls || []
+			// kilocode_change end
 			
 			if (toolCalls.length === 0) {
-				if (choice?.finish_reason === "stop") {
+				if (finishReason === "stop") {
 					break
-				} else if (choice?.finish_reason === "length") {
+				} else if (finishReason === "length") {
 					log.info(`[handleWorkerChat] OpenRouter hit length limit, auto-continuing`)
 					messages.push({ 
 						role: "assistant", 
@@ -4873,7 +4838,7 @@ See all agents you can communicate with.
 					type: "tool_use",
 					id: toolCall.id,
 					name: toolCall.function.name,
-					input: JSON.parse(toolCall.function.arguments || "{}"),
+					input: safeParseToolArgs(toolCall.function.arguments),
 				})
 			}
 			messages.push({ role: "assistant", content: assistantContent })
@@ -4883,7 +4848,7 @@ See all agents you can communicate with.
 			for (const tc of toolCalls) {
 				const toolCall = tc as any
 				const toolName = toolCall.function.name
-				const toolInput = JSON.parse(toolCall.function.arguments || "{}")
+				const toolInput = safeParseToolArgs(toolCall.function.arguments)
 				
 				// kilocode_change start - Show detailed tool info for ALL tools
 				let toolDisplay = `🔧 **${toolName}**`
@@ -4962,7 +4927,7 @@ See all agents you can communicate with.
 			max_tokens: 16384, // kilocode_change - Increased from 4096 for longer tasks
 			system: systemPrompt,
 			messages,
-			tools: WORKER_TOOLS,
+			tools: agentTools,
 		})
 
 		let textContent = ""
@@ -5210,7 +5175,6 @@ async function handleSupervisorChat(
 			})
 			model = providerConfig.model
 		} else if (providerConfig.type === "openai" || providerConfig.type === "groq" || providerConfig.type === "deepseek" || providerConfig.type === "mistral") {
-			const { PROVIDER_BASE_URLS } = await import("./settings")
 			useOpenRouter = true
 			openRouterClient = new OpenAI({
 				baseURL: providerConfig.baseUrl || PROVIDER_BASE_URLS[providerConfig.type],
@@ -5261,7 +5225,7 @@ async function handleSupervisorChat(
 		// Legacy provider config
 		const providerConfig = currentProviderConfig || loadProviderConfig(process.env.WORKSPACE_PATH || process.cwd())
 		// kilocode_change start - Handle OpenRouter in legacy config
-		if (providerConfig.provider === "openrouter" && providerConfig.apiKey) {
+		if (providerConfig && providerConfig.provider === "openrouter" && providerConfig.apiKey) {
 			useOpenRouter = true
 			openRouterClient = new OpenAI({
 				baseURL: "https://openrouter.ai/api/v1",
@@ -5271,7 +5235,7 @@ async function handleSupervisorChat(
 		}
 		// kilocode_change end
 		// Tool calling requires Anthropic-compatible API (Anthropic or MiniMax)
-		else if (providerConfig.provider === "anthropic" || providerConfig.provider === "minimax") {
+		else if (providerConfig && (providerConfig.provider === "anthropic" || providerConfig.provider === "minimax")) {
 			anthropic = new Anthropic({
 				apiKey: providerConfig.apiKey,
 				baseURL: providerConfig.provider === "minimax" ? "https://api.minimax.io/anthropic" : undefined,
@@ -5302,6 +5266,7 @@ async function handleSupervisorChat(
 	const delegationResults: Array<{ agentId: string; agentName: string; filesCreated: number; responseLength: number }> = []
 	let totalFilesCreated = 0
 	const MAX_TOOL_ITERATIONS = 15 // kilocode_change - Increased from 10 for auto-continue
+	let lastActionDescription = "" // kilocode_change - Track what the last step did
 
 	for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
 		log.info(`[Supervisor] ${supervisorConfig.name} iteration ${iteration + 1}, ${messages.length} messages, useOpenRouter=${useOpenRouter}`)
@@ -5325,11 +5290,14 @@ async function handleSupervisorChat(
 
 		// kilocode_change start - Progress indicators
 		if (iteration > 0) {
+			const progressMsg = lastActionDescription 
+				? `\n⏳ **Step ${iteration + 1}** - Continuing after: ${lastActionDescription}\n`
+				: `\n⏳ **Processing step ${iteration + 1}...**\n`
 			io.emit("agent-message", {
 				agentId: supervisorConfig.id,
 				agentName: supervisorConfig.name,
 				projectId: project.id,
-				message: `\n⏳ **Processing step ${iteration + 1}...**\n`,
+				message: progressMsg,
 				timestamp: Date.now(),
 				isStreaming: true,
 				isProgress: true,
@@ -5339,8 +5307,8 @@ async function handleSupervisorChat(
 
 		// kilocode_change start - OpenRouter path for supervisor
 		if (useOpenRouter && openRouterClient) {
-			// Convert SUPERVISOR_TOOLS to OpenAI function format
-			const openAITools: OpenAI.Chat.ChatCompletionTool[] = SUPERVISOR_TOOLS.map((tool: any) => ({
+			// Convert AGENT_TOOLS to OpenAI function format
+			const openAITools: OpenAI.Chat.ChatCompletionTool[] = AGENT_TOOLS.map((tool: any) => ({
 				type: "function" as const,
 				function: {
 					name: tool.name,
@@ -5388,46 +5356,91 @@ async function handleSupervisorChat(
 				}
 			}
 
-			const completion = await openRouterClient.chat.completions.create({
+			// kilocode_change start - TRUE STREAMING for OpenRouter supervisor
+			const stream = await openRouterClient.chat.completions.create({
 				model,
 				max_tokens: 16384,
 				messages: openAIMessages,
 				tools: openAITools,
+				stream: true,
+				stream_options: { include_usage: true }, // kilocode_change - get token usage in stream
 			})
 
-			const choice = completion.choices[0]
-			const assistantMsg = choice.message
-
-			// Track usage
-			if (completion.usage) {
+			let textContent = ""
+			let finishReason: string | null = null
+			let streamUsage: { prompt_tokens?: number; completion_tokens?: number } | null = null
+			const toolCallsMap = new Map<number, { id: string; name: string; arguments: string }>()
+			
+			// Stream text in real-time
+			for await (const chunk of stream) {
+				// kilocode_change start - Capture usage from stream
+				if ((chunk as any).usage) {
+					streamUsage = (chunk as any).usage
+				}
+				// kilocode_change end
+				
+				const choice = chunk.choices[0]
+				if (!choice) continue
+				
+				// Handle text content
+				const delta = choice.delta
+				if (delta?.content) {
+					textContent += delta.content
+					fullResponse += delta.content
+					io.emit("agent-message", {
+						agentId: supervisorConfig.id,
+						agentName: supervisorConfig.name,
+						projectId: project.id,
+						message: delta.content,
+						timestamp: Date.now(),
+						isStreaming: true,
+					})
+				}
+				
+				// Handle tool calls (streamed incrementally)
+				if (delta?.tool_calls) {
+					for (const tc of delta.tool_calls) {
+						const idx = tc.index ?? 0
+						if (!toolCallsMap.has(idx)) {
+							toolCallsMap.set(idx, { id: tc.id || "", name: tc.function?.name || "", arguments: "" })
+						}
+						const existing = toolCallsMap.get(idx)!
+						if (tc.id) existing.id = tc.id
+						if (tc.function?.name) existing.name = tc.function.name
+						if (tc.function?.arguments) existing.arguments += tc.function.arguments
+					}
+				}
+				
+				if (choice.finish_reason) {
+					finishReason = choice.finish_reason
+				}
+			}
+			
+			// Convert accumulated tool calls to array
+			const toolCallsList = Array.from(toolCallsMap.values()).filter(tc => tc.id && tc.name).map(tc => ({
+				id: tc.id,
+				type: "function",
+				function: { name: tc.name, arguments: tc.arguments }
+			}))
+			
+			// kilocode_change start - Track usage from streaming response
+			if (streamUsage) {
 				usageTracker.record({
 					projectId: project.id,
 					agentId: supervisorConfig.id,
 					agentName: supervisorConfig.name,
 					model,
-					inputTokens: completion.usage.prompt_tokens,
-					outputTokens: completion.usage.completion_tokens,
+					inputTokens: streamUsage.prompt_tokens || 0,
+					outputTokens: streamUsage.completion_tokens || 0,
 				})
 			}
-
-			// Stream text to UI
-			if (assistantMsg.content) {
-				fullResponse += assistantMsg.content
-				io.emit("agent-message", {
-					agentId: supervisorConfig.id,
-					agentName: supervisorConfig.name,
-					projectId: project.id,
-					message: assistantMsg.content,
-					timestamp: Date.now(),
-					isStreaming: true,
-				})
-			}
+			// kilocode_change end
 
 			// Check for tool calls
-			if (!assistantMsg.tool_calls || assistantMsg.tool_calls.length === 0) {
-				if (choice.finish_reason === "length") {
+			if (toolCallsList.length === 0) {
+				if (finishReason === "length") {
 					log.info(`[Supervisor] OpenRouter hit length limit, auto-continuing`)
-					messages.push({ role: "assistant", content: assistantMsg.content || "" })
+					messages.push({ role: "assistant", content: textContent || "" })
 					messages.push({ role: "user", content: "Continue from where you left off." })
 					continue
 				}
@@ -5436,26 +5449,26 @@ async function handleSupervisorChat(
 
 			// Convert assistant message back to Anthropic format for storage
 			const anthropicContent: any[] = []
-			if (assistantMsg.content) {
-				anthropicContent.push({ type: "text", text: assistantMsg.content })
+			if (textContent) {
+				anthropicContent.push({ type: "text", text: textContent })
 			}
-			for (const tc of assistantMsg.tool_calls) {
+			for (const tc of toolCallsList) {
 				const toolCall = tc as any
 				anthropicContent.push({
 					type: "tool_use",
 					id: toolCall.id,
 					name: toolCall.function.name,
-					input: JSON.parse(toolCall.function.arguments || "{}"),
+					input: safeParseToolArgs(toolCall.function.arguments),
 				})
 			}
 			messages.push({ role: "assistant", content: anthropicContent })
 
 			// Execute tools
 			const toolResults: { type: "tool_result"; tool_use_id: string; content: string }[] = []
-			for (const tc of assistantMsg.tool_calls) {
+			for (const tc of toolCallsList) {
 				const toolCall = tc as any
 				const toolName = toolCall.function.name
-				const toolInput = JSON.parse(toolCall.function.arguments || "{}")
+				const toolInput = safeParseToolArgs(toolCall.function.arguments)
 				log.info(`[Supervisor] OpenRouter Tool call: ${toolName}(${JSON.stringify(toolInput).substring(0, 200)})`)
 
 				// kilocode_change start - Show detailed tool info for ALL tools
@@ -5521,6 +5534,21 @@ async function handleSupervisorChat(
 				toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result })
 			}
 
+			// kilocode_change start - Track what tools were used for progress message
+			const toolNames = toolCallsList.map((tc: any) => {
+				const name = tc.function.name
+				const args = safeParseToolArgs(tc.function.arguments)
+				if (name === "write_file" && args.path) return `wrote ${args.path.split('/').pop()}`
+				if (name === "read_file" && args.path) return `read ${args.path.split('/').pop()}`
+				if (name === "run_command") return "ran command"
+				if (name === "delegate_task") return `delegated to ${args.agent_id}`
+				if (name === "create_task") return `created task`
+				if (name === "list_files") return "listed files"
+				return name.replace(/_/g, ' ')
+			})
+			lastActionDescription = toolNames.join(", ")
+			// kilocode_change end
+
 			messages.push({ role: "user", content: toolResults })
 			continue
 		}
@@ -5536,7 +5564,7 @@ async function handleSupervisorChat(
 			max_tokens: 16384, // kilocode_change - Increased from 8096 for longer tasks
 			system: systemPrompt,
 			messages,
-			tools: SUPERVISOR_TOOLS,
+			tools: AGENT_TOOLS,
 		})
 
 		// kilocode_change start - TRUE STREAMING: emit text as it arrives
@@ -5692,6 +5720,20 @@ async function handleSupervisorChat(
 				content: result,
 			})
 		}
+
+		// kilocode_change start - Track what tools were used for progress message  
+		const toolNames = toolBlocks.map((tb: Anthropic.ToolUseBlock) => {
+			const input = tb.input as Record<string, any>
+			if (tb.name === "write_file" && input.path) return `wrote ${input.path.split('/').pop()}`
+			if (tb.name === "read_file" && input.path) return `read ${input.path.split('/').pop()}`
+			if (tb.name === "run_command") return "ran command"
+			if (tb.name === "delegate_task") return `delegated to ${input.agent_id}`
+			if (tb.name === "create_task") return `created task`
+			if (tb.name === "list_files") return "listed files"
+			return tb.name.replace(/_/g, ' ')
+		})
+		lastActionDescription = toolNames.join(", ")
+		// kilocode_change end
 
 		// Add tool results as user message
 		messages.push({ role: "user", content: toolResults })

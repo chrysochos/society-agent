@@ -2,13 +2,25 @@
   "name": "Society Agent",
   "image": "mcr.microsoft.com/devcontainers/typescript-node:20",
   "forwardPorts": [4000],
-  "postCreateCommand": "npm install",
+  
+  // Run setup script which installs system dependencies + npm packages
+  "postCreateCommand": "chmod +x .devcontainer/setup.sh && .devcontainer/setup.sh",
+  
+  // Features add common dev tools that persist across rebuilds
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {},
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+  
   "customizations": {
     "vscode": {
       "extensions": [
         "dbaeumer.vscode-eslint",
         "esbenp.prettier-vscode"
-      ]
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
     }
   },
   "remoteUser": "node"
