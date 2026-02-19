@@ -10,7 +10,7 @@
 
 import { ConversationAgent, AgentIdentity } from "./conversation-agent"
 import { SupervisorAgent, Purpose, WorkerSpec } from "./supervisor-agent"
-import { ApiHandler } from "../../api"
+import { ApiHandler } from "./api"
 import { AgentIdentityManager } from "./agent-identity"
 import { AgentLauncher, LaunchConfig } from "./agent-launcher"
 import { getLog } from "./logger"

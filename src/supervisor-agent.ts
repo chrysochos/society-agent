@@ -7,7 +7,7 @@
  */
 
 import { ConversationAgent, AgentIdentity } from "./conversation-agent"
-import { ApiHandler } from "../../api"
+import { ApiHandler } from "./api"
 import { getLog } from "./logger"
 
 // kilocode_change start

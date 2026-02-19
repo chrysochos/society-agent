@@ -9,10 +9,8 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk"
-import { ApiHandler } from "../../api"
-import { ApiStream } from "../../api/transform/stream"
-import { ApiMessage } from "../../core/task-persistence/apiMessages"
-import { summarizeConversation } from "../../core/condense"
+import { ApiHandler, ApiStream } from "./api"
+import { ApiMessage, summarizeConversation } from "./api/condense"
 import * as fs from "fs/promises"
 import * as path from "path"
 import { getLog } from "./logger" // kilocode_change

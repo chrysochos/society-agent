@@ -9,7 +9,7 @@
 import { AgentTeam, AgentTeamConfig } from "./agent-team"
 import { Purpose } from "./supervisor-agent"
 import { PurposeAnalyzer, PurposeContext } from "./purpose-analyzer"
-import { ApiHandler } from "../../api"
+import { ApiHandler } from "./api"
 import { ExecutionLogger } from "./execution-logger"
 import { getLog } from "./logger"
 

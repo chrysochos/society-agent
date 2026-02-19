@@ -20,7 +20,7 @@ import { ResponseStrategy } from "./response-strategy"
 import { ConversationAgent } from "./conversation-agent"
 import { Anthropic } from "@anthropic-ai/sdk"
 import OpenAI from "openai" // kilocode_change - OpenRouter support
-import { ApiHandler } from "../../api/index"
+import { ApiHandler } from "./api"
 import { commandExecutor } from "./command-executor"
 import { getLog } from "./logger"
 // kilocode_change start - dynamic provider configuration
@@ -40,8 +40,8 @@ import {
 	createOneShot,
 	getAllProviderNames,
 	isValidProvider,
+	ProviderSettings,
 } from "./provider-config"
-import type { ProviderSettings } from "@roo-code/types"
 // kilocode_change end
 // kilocode_change start - persistent agents
 import { PersistentAgentStore } from "./persistent-agent-store"
