@@ -1,0 +1,2083 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+
+  /* Header */
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 20px;
+    display: flex; align-items: center; gap: 12px; }
+  header .back-link { color: var(--muted); text-decoration: none; font-size: 14px; }
+  header .back-link:hover { color: var(--accent); }
+  header .agent-avatar { width: 32px; height: 32px; border-radius: 8px; display: flex;
+    align-items: center; justify-content: center; font-size: 16px; background: rgba(88,166,255,0.15); }
+  header .agent-title { font-size: 16px; font-weight: 600; }
+  header .agent-role { font-size: 12px; color: var(--muted); }
+  header .agent-caps { display: flex; gap: 4px; margin-left: 8px; }
+  header .cap-tag { font-size: 10px; padding: 1px 6px; border-radius: 8px;
+    background: rgba(88,166,255,0.1); color: var(--accent); border: 1px solid rgba(88,166,255,0.2); }
+  header .status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; }
+  header .dot.online { background: var(--green); }
+  header .dot.offline { background: var(--red); }
+  header .agent-stats { font-size: 11px; color: var(--muted); display: flex; gap: 10px; }
+
+  /* Main layout: sidebar + content */
+  .main { display: flex; flex: 1; overflow: hidden; }
+
+  /* Sidebar (file explorer) */
+  .sidebar { width: 260px; min-width: 180px; max-width: 500px; background: var(--surface);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto;
+    position: relative; }
+  .sidebar-resize { position: absolute; top: 0; right: -3px; width: 6px; height: 100%;
+    cursor: col-resize; z-index: 10; }
+  .sidebar-resize:hover, .sidebar-resize.active { background: var(--accent); opacity: 0.5; }
+  .sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--muted); padding: 12px 14px 8px; }
+  .stat-row { display: flex; justify-content: space-between; padding: 4px 14px; font-size: 12px; }
+  .stat-row .label { color: var(--muted); }
+
+  /* File tree */
+  .file-tree { font-size: 12px; user-select: none; overflow-y: auto; flex: 1; }
+  .tree-row { display: flex; align-items: center; gap: 4px; padding: 3px 8px; cursor: pointer;
+    white-space: nowrap; border: 2px solid transparent; transition: background 0.1s; }
+  .tree-row:hover { background: rgba(88,166,255,0.08); }
+  .tree-row.selected { background: rgba(88,166,255,0.15); }
+  .tree-row.drag-over { border-color: var(--accent); background: rgba(88,166,255,0.12); }
+  .tree-row .chevron { width: 16px; text-align: center; font-size: 10px; color: var(--muted);
+    transition: transform 0.15s; flex-shrink: 0; }
+  .tree-row .chevron.open { transform: rotate(90deg); }
+  .tree-row .chevron.empty { visibility: hidden; }
+  .tree-row .icon { width: 16px; text-align: center; flex-shrink: 0; font-size: 13px; }
+  .tree-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+  .tree-row .size { color: var(--muted); font-size: 10px; margin-left: auto; flex-shrink: 0; }
+  .tree-row .actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; margin-left: 4px; }
+  .tree-row:hover .actions { opacity: 1; }
+  .tree-row .act-btn { background: none; border: none; color: var(--muted); cursor: pointer;
+    font-size: 11px; padding: 0 2px; line-height: 1; }
+  .tree-row .act-btn:hover { color: var(--text); }
+  .tree-children.collapsed { display: none; }
+  .tree-row.dir-row .name { color: var(--accent); font-weight: 500; }
+
+  /* Upload area */
+  .upload-area { border: 2px dashed var(--border); border-radius: 6px; padding: 10px; margin: 6px 10px;
+    text-align: center; cursor: pointer; transition: border-color 0.2s; font-size: 11px; color: var(--muted); }
+  .upload-area:hover { border-color: var(--accent); }
+  .upload-area.dragover { border-color: var(--green); background: rgba(63,185,80,0.08); }
+  .upload-area input[type=file] { display: none; }
+
+  /* Rename input */
+  .rename-input { background: var(--bg); border: 1px solid var(--accent); color: var(--text);
+    font-size: 12px; padding: 1px 4px; border-radius: 3px; outline: none; width: 100%; font-family: inherit; }
+
+  /* Context menu */
+  .ctx-menu { position: fixed; z-index: 200; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 0; min-width: 160px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+  .ctx-menu .ctx-item { padding: 6px 14px; font-size: 12px; cursor: pointer; display: flex;
+    align-items: center; gap: 8px; }
+  .ctx-menu .ctx-item:hover { background: rgba(88,166,255,0.12); }
+  .ctx-menu .ctx-sep { height: 1px; background: var(--border); margin: 4px 0; }
+  .ctx-menu .ctx-item .shortcut { margin-left: auto; color: var(--muted); font-size: 10px; }
+  .ctx-menu .ctx-item.danger { color: var(--red); }
+  .ctx-menu .ctx-item.danger:hover { background: rgba(248,81,73,0.12); }
+
+  /* Content area: tabs */
+  .content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .tab-bar { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .tab-bar .tab { padding: 8px 20px; font-size: 13px; cursor: pointer; color: var(--muted);
+    border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s; }
+  .tab-bar .tab:hover { color: var(--text); }
+  .tab-bar .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-content { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+  .tab-content.active { display: flex; }
+
+  /* Chat */
+  .messages { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .message { max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 14px;
+    line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+  .message.user { align-self: flex-end; background: #1f6feb; border-bottom-right-radius: 4px; }
+  .message.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border);
+    border-bottom-left-radius: 4px; }
+  .message.system { align-self: center; color: var(--muted); font-size: 12px; font-style: italic; }
+  .message.assistant .sender { font-size: 11px; color: var(--accent); margin-bottom: 4px; font-weight: 500; }
+  .message code { background: rgba(110,118,129,0.2); padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+  .message pre { background: var(--bg); padding: 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; }
+  .message pre code { background: none; padding: 0; }
+  .typing { align-self: flex-start; color: var(--muted); font-size: 13px; }
+  .typing::after { content: '...'; animation: dots 1.5s steps(3) infinite; }
+  @keyframes dots { 0% { content: '.'; } 33% { content: '..'; } 66% { content: '...'; } }
+
+  /* Input area */
+  .input-area { padding: 12px 20px; border-top: 1px solid var(--border); background: var(--surface); }
+  .input-row { display: flex; gap: 8px; }
+  .input-row textarea { flex: 1; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: 14px; font-family: inherit;
+    resize: none; outline: none; min-height: 44px; max-height: 200px; }
+  .input-row textarea:focus { border-color: var(--accent); }
+  .btn { padding: 8px 16px; border-radius: 6px; border: none; font-size: 13px; font-weight: 500;
+    cursor: pointer; transition: opacity 0.15s; }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-secondary { background: var(--border); color: var(--text); }
+  .btn-send { padding: 10px 20px; background: var(--accent); color: #fff; border: none;
+    border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; }
+  .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* kilocode_change start - Stop button */
+  .btn-stop { display: none; padding: 10px 20px; background: var(--red); color: #fff; border: none;
+    border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; }
+  .btn-stop:hover { filter: brightness(1.1); }
+  /* kilocode_change end */
+
+  /* Attachments */
+  .attach-btn { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 6px;
+    padding: 8px 10px; cursor: pointer; font-size: 16px; line-height: 1; }
+  .attach-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .attach-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px 0; }
+  .attach-chip { display: flex; align-items: center; gap: 4px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 8px; font-size: 12px; color: var(--text); }
+  .attach-chip img { width: 20px; height: 20px; border-radius: 3px; object-fit: cover; }
+  .attach-chip .remove { cursor: pointer; color: var(--muted); margin-left: 2px; }
+  .attach-chip .remove:hover { color: var(--red); }
+  .msg-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .msg-attachments img { max-width: 200px; max-height: 150px; border-radius: 6px; cursor: pointer; }
+
+  /* Terminal */
+  .terminal-container { flex: 1; background: #000; padding: 4px; overflow: hidden; }
+  .terminal-container .xterm { height: 100%; }
+  .terminal-toolbar { display: flex; gap: 8px; padding: 8px 12px; background: var(--surface);
+    border-bottom: 1px solid var(--border); align-items: center; font-size: 12px; }
+  .terminal-toolbar select { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+
+  /* Log panel */
+  .log-panel { height: 140px; border-top: 1px solid var(--border); background: var(--bg);
+    overflow-y: auto; padding: 6px 14px; font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 11px; }
+  .log-entry { color: var(--muted); padding: 1px 0; }
+  .log-entry.info { color: var(--accent); }
+  .log-entry.warn { color: var(--yellow); }
+  .log-entry.error { color: var(--red); }
+  .log-entry .ts { color: #484f58; margin-right: 8px; }
+
+  /* File viewer overlay */
+  .file-viewer { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex;
+    align-items: center; justify-content: center; z-index: 90; }
+  .file-viewer-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    width: 80vw; max-width: 900px; max-height: 80vh; display: flex; flex-direction: column; overflow: hidden; }
+  .file-viewer-panel.pdf-viewer { max-width: 1100px; height: 90vh; max-height: 90vh; }
+  .file-viewer-header { display: flex; align-items: center; padding: 12px 16px;
+    border-bottom: 1px solid var(--border); gap: 8px; }
+  .file-viewer-header .title { flex: 1; font-size: 14px; font-weight: 500; }
+  .file-viewer-header .meta { font-size: 12px; color: var(--muted); }
+  .file-viewer-header .view-toggle { display: flex; gap: 4px; }
+  .file-viewer-header .view-toggle button { background: var(--bg); border: 1px solid var(--border);
+    color: var(--muted); padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+  .file-viewer-header .view-toggle button.active { background: var(--accent); color: white; border-color: var(--accent); }
+  .file-viewer-header .close-btn { background: none; border: none; color: var(--muted); font-size: 20px;
+    cursor: pointer; padding: 0 4px; line-height: 1; }
+  .file-viewer-header .close-btn:hover { color: var(--text); }
+  .file-viewer-body { flex: 1; overflow: auto; padding: 16px; }
+  .file-viewer-body pre { margin: 0; white-space: pre-wrap; word-break: break-all;
+    font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 13px; line-height: 1.5; }
+  .file-viewer-body iframe { width: 100%; height: 100%; border: none; }
+  .file-viewer-body.pdf-body { padding: 0; }
+  /* Markdown rendered view */
+  .file-viewer-body .markdown-body { font-size: 14px; line-height: 1.6; padding: 8px; }
+  .file-viewer-body .markdown-body h1 { font-size: 1.8em; margin: 0.5em 0 0.3em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  .file-viewer-body .markdown-body h2 { font-size: 1.5em; margin: 0.4em 0 0.2em; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }
+  .file-viewer-body .markdown-body h3 { font-size: 1.25em; margin: 0.3em 0 0.15em; }
+  .file-viewer-body .markdown-body p { margin: 0.5em 0; }
+  .file-viewer-body .markdown-body ul, .file-viewer-body .markdown-body ol { margin: 0.5em 0; padding-left: 1.5em; }
+  .file-viewer-body .markdown-body li { margin: 0.2em 0; }
+  .file-viewer-body .markdown-body code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+  .file-viewer-body .markdown-body pre { background: var(--bg); padding: 12px; border-radius: 8px;
+    overflow-x: auto; margin: 0.5em 0; }
+  .file-viewer-body .markdown-body pre code { background: none; padding: 0; }
+  .file-viewer-body .markdown-body blockquote { border-left: 4px solid var(--accent); margin: 0.5em 0;
+    padding-left: 1em; color: var(--muted); }
+  .file-viewer-body .markdown-body table { border-collapse: collapse; width: 100%; margin: 0.5em 0; }
+  .file-viewer-body .markdown-body th, .file-viewer-body .markdown-body td { border: 1px solid var(--border);
+    padding: 8px 12px; text-align: left; }
+  .file-viewer-body .markdown-body th { background: var(--bg); font-weight: 600; }
+  .file-viewer-body .markdown-body a { color: var(--accent); text-decoration: none; }
+  .file-viewer-body .markdown-body a:hover { text-decoration: underline; }
+  .file-viewer-body .markdown-body img { max-width: 100%; height: auto; border-radius: 8px; }
+
+  /* Welcome state */
+  .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    flex: 1; color: var(--muted); text-align: center; padding: 40px; }
+  .welcome h2 { font-size: 18px; color: var(--text); margin-bottom: 8px; }
+  .welcome p { font-size: 13px; max-width: 450px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<header>
+  <a href="/" class="back-link">&larr; Dashboard</a>
+  <div class="agent-avatar" id="agentAvatar">&#129302;</div>
+  <div>
+    <div class="agent-title" id="agentTitle">Loading...</div>
+    <div class="agent-role" id="agentRole"></div>
+  </div>
+  <div class="agent-caps" id="agentCaps"></div>
+  <div style="flex:1"></div>
+  <!-- kilocode_change start - working/done indicator (PROMINENT) -->
+  <div id="workingIndicator" style="display:none;padding:6px 16px;border-radius:16px;font-size:14px;font-weight:600;margin-right:12px;animation:pulse 1.5s infinite">
+    <span id="workingText">⏳ Working...</span>
+  </div>
+  <style>
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
+    #statusBanner { transition: all 0.3s ease; }
+    #statusBanner.working { background: rgba(88,166,255,0.15); border-color: var(--accent); }
+    #statusBanner.done { background: rgba(63,185,80,0.2); border-color: var(--green); }
+    #statusBanner.summarizing { background: rgba(210,153,34,0.15); border-color: #d29922; }
+    #statusBanner .status-icon { font-size: 18px; margin-right: 8px; }
+  </style>
+  <!-- kilocode_change end -->
+  <div class="agent-stats" id="agentStats"></div>
+  <div class="status">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">Connecting...</span>
+  </div>
+</header>
+
+<div class="main">
+  <!-- Sidebar: agent's file explorer -->
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-resize" id="sidebarResize"></div>
+    <h2 style="display:flex;align-items:center;gap:6px">
+      Files
+      <span style="flex:1"></span>
+      <button class="act-btn" onclick="promptNewFile('')" title="New File" style="font-size:13px;background:none;border:none;color:var(--muted);cursor:pointer">&#128196;+</button>
+      <button class="act-btn" onclick="promptNewFolder('')" title="New Folder" style="font-size:13px;background:none;border:none;color:var(--muted);cursor:pointer">&#128193;+</button>
+      <button class="act-btn" onclick="refreshFiles()" title="Refresh" style="font-size:12px;background:none;border:none;color:var(--muted);cursor:pointer">&#8635;</button>
+    </h2>
+    <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+      &#128228; Drop files or click
+      <input type="file" id="fileInput" multiple onchange="handleFileSelect(event)">
+    </div>
+    <div class="stat-row"><span class="label">Folder</span><span id="folderName">-</span></div>
+    <div class="stat-row"><span class="label">Files</span><span id="fileCount">0</span></div>
+    <!-- kilocode_change start - usage tracking for this agent -->
+    <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+      <div class="stat-row"><span class="label">💰 Tokens</span><span id="agentTokens" style="cursor:pointer" onclick="showUsageDetails()" title="Click for details">0</span></div>
+      <div class="stat-row"><span class="label">💵 Cost</span><span id="agentCost" style="color:var(--green)">$0.00</span></div>
+      <div class="stat-row"><span class="label">📊 Calls</span><span id="agentCalls">0</span></div>
+    </div>
+    <!-- kilocode_change end -->
+    <!-- kilocode_change start - context window stats -->
+    <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+      <div class="stat-row"><span class="label">📐 Context</span><span id="contextPercent" style="cursor:pointer" onclick="refreshContextStats()" title="Click to refresh">0%</span></div>
+      <div class="stat-row"><span class="label">📝 Messages</span><span id="contextMessages">0</span></div>
+      <div style="margin-top:4px;background:var(--bg);border-radius:4px;height:6px;overflow:hidden">
+        <div id="contextBar" style="height:100%;background:var(--accent);width:0%;transition:width 0.3s"></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+        <input type="checkbox" id="backupsEnabled" checked onchange="toggleBackups(this.checked)" style="margin:0">
+        <label for="backupsEnabled" style="font-size:11px;color:var(--muted);cursor:pointer">Enable history backups</label>
+      </div>
+      <button onclick="showHistoryBackups()" style="width:100%;margin-top:6px;padding:4px 8px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer" title="View conversation backups from before each summarization">📜 View History Backups</button>
+      <button onclick="openSummaryExaminer()" style="width:100%;margin-top:4px;padding:4px 8px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer" title="Ask questions about the summary to verify quality">🔍 Examine Summary</button>
+    </div>
+    <!-- kilocode_change end -->
+    <div id="fileTree" class="file-tree">
+      <div style="padding:16px;color:var(--muted);font-size:12px">No files yet</div>
+    </div>
+  </div>
+
+  <!-- Content area -->
+  <div class="content">
+    <div class="tab-bar">
+      <div class="tab active" onclick="switchTab('chat')" id="tabChat">&#128172; Chat</div>
+      <div class="tab" onclick="switchTab('terminal')" id="tabTerminal">&#9000; Terminal</div>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" id="clearChatBtn" onclick="clearChat()" style="font-size:11px;padding:3px 10px;margin:4px 8px" title="Clear conversation history">&#128465; Clear Chat</button>
+    </div>
+
+    <!-- Chat pane -->
+    <div class="tab-content active" id="paneChat">
+      <!-- kilocode_change start - expandable summary banner -->
+      <div id="summaryBanner" style="display:none;padding:8px 20px;background:rgba(210,153,34,0.08);border-bottom:1px solid #d29922;font-size:12px;color:var(--muted)">
+        <div style="display:flex;align-items:center;gap:8px">
+          <strong style="color:#d29922">📝 Context Summarized</strong>
+          <span id="summaryMeta" style="color:var(--muted)"></span>
+          <button id="summaryToggle" onclick="toggleSummaryDetails()" style="background:none;border:1px solid var(--border);color:var(--muted);cursor:pointer;font-size:11px;padding:2px 8px;border-radius:4px;margin-left:auto">Show Details</button>
+          <button onclick="document.getElementById('summaryBanner').style.display='none'" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px">&times;</button>
+        </div>
+        <div id="summaryDetails" style="display:none;margin-top:8px;padding:8px;background:var(--bg);border-radius:4px;font-size:11px;max-height:150px;overflow-y:auto;white-space:pre-wrap">
+          <span id="summaryText"></span>
+        </div>
+      </div>
+      <!-- kilocode_change end -->
+      <div class="messages" id="messages">
+        <div class="welcome" id="welcome">
+          <h2 id="welcomeTitle">Agent</h2>
+          <p id="welcomeDesc">Send a message to start a conversation with this agent.</p>
+        </div>
+      </div>
+      <div class="input-area">
+        <!-- kilocode_change start - prominent status banner -->
+        <div id="statusBanner" style="display:none;padding:10px 16px;margin-bottom:10px;border-radius:8px;border:2px solid var(--border);font-size:14px;font-weight:600;text-align:center">
+          <span class="status-icon" id="statusIcon">⏳</span>
+          <span id="statusText2">Working...</span>
+        </div>
+        <!-- kilocode_change end -->
+        <div id="attachChips" class="attach-chips" style="display:none"></div>
+        <div class="input-row">
+          <button class="attach-btn" onclick="document.getElementById('chatFileInput').click()" title="Attach files">&#128206;</button>
+          <input type="file" id="chatFileInput" multiple style="display:none" onchange="handleChatAttach(event)"
+            accept="image/*,.txt,.md,.json,.js,.ts,.py,.html,.css,.csv,.xml,.yaml,.yml,.log,.sh,.sql">
+          <textarea id="input" placeholder="Type a message..." rows="1" autofocus></textarea>
+          <button class="btn-send" id="sendBtn" onclick="sendMessage()">Send</button>
+          <!-- kilocode_change start - Stop button -->
+          <button class="btn-stop" id="stopBtn" onclick="stopAgent()">Stop</button>
+          <!-- kilocode_change end -->
+        </div>
+      </div>
+      <div class="log-panel" id="logPanel"></div>
+    </div>
+
+    <!-- Terminal pane -->
+    <div class="tab-content" id="paneTerminal">
+      <div class="terminal-toolbar">
+        <span style="color:var(--muted)">Shell:</span>
+        <select id="termShell">
+          <option value="/bin/bash">bash</option>
+          <option value="/bin/sh">sh</option>
+        </select>
+        <span style="color:var(--muted);margin-left:8px">CWD:</span>
+        <span id="termCwd" style="color:var(--text)">-</span>
+        <div style="flex:1"></div>
+        <button class="btn btn-secondary" onclick="reconnectTerminal()" style="font-size:11px;padding:3px 10px">&#8635; Reconnect</button>
+      </div>
+      <div class="terminal-container" id="terminalContainer"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================================
+// Extract agent ID from URL: /agent/:agentId or /project/:projectId/agent/:agentId
+// ============================================================================
+const pathParts = window.location.pathname.split('/');
+const AGENT_ID = pathParts[pathParts.indexOf('agent') + 1];
+const PROJECT_ID = pathParts.includes('project') ? pathParts[pathParts.indexOf('project') + 1] : null;
+if (!AGENT_ID) { document.body.innerHTML = '<h2 style="padding:40px;color:#f85149">No agent ID in URL</h2>'; }
+
+// Update back link for project context
+if (PROJECT_ID) {
+  const backLink = document.querySelector('.back-link');
+  backLink.href = `/project/${PROJECT_ID}`;
+  backLink.textContent = '\u2190 Project';
+}
+
+const API = window.location.origin;
+const socket = io(API);
+let agentProfile = null;
+let messageCount = 0;
+let isStreaming = false;
+let currentStreamEl = null;
+let streamText = '';
+let chatAttachments = [];
+
+// ============================================================================
+// Load agent profile
+// ============================================================================
+async function loadAgent() {
+  try {
+    let res;
+    // Try project-scoped agent first, then fall back to legacy persistent-agents
+    if (PROJECT_ID) {
+      res = await fetch(`${API}/api/projects/${PROJECT_ID}`);
+      if (res.ok) {
+        const project = await res.json();
+        const agentConfig = (project.agents || []).find(a => a.id === AGENT_ID);
+        if (agentConfig) {
+          // Use agent's homeFolder if set, otherwise fall back to project folder
+          // Handle leading/trailing slashes and "/" meaning root
+          let agentFolder = project.folder || project.id;
+          const home = (agentConfig.homeFolder || '').replace(/^\/+|\/+$/g, ''); // trim slashes
+          if (home && home !== '') {
+            agentFolder = agentFolder ? `${agentFolder}/${home}` : home;
+          }
+          agentProfile = {
+            ...agentConfig,
+            projectId: project.id,
+            projectName: project.name,
+            workspaceFolder: agentFolder,
+          };
+        }
+      }
+    }
+    if (!agentProfile) {
+      res = await fetch(`${API}/api/persistent-agents/${AGENT_ID}`);
+      if (!res.ok) {
+        document.body.innerHTML = `<h2 style="padding:40px;color:#f85149">Agent "${AGENT_ID}" not found</h2>`;
+        return;
+      }
+      agentProfile = await res.json();
+    }
+    document.title = `${agentProfile.name}${agentProfile.projectName ? ' — ' + agentProfile.projectName : ''} — Society Agent`;
+
+    // Header - kilocode_change: add null checks
+    const avatar = document.getElementById('agentAvatar');
+    const title = document.getElementById('agentTitle');
+    const role = document.getElementById('agentRole');
+    const caps = document.getElementById('agentCaps');
+    const stats = document.getElementById('agentStats');
+    const welcomeTitle = document.getElementById('welcomeTitle');
+    const welcomeDesc = document.getElementById('welcomeDesc');
+    const folderName = document.getElementById('folderName');
+    const termCwd = document.getElementById('termCwd');
+
+    if (avatar) avatar.innerHTML = !agentProfile.ephemeral ? '&#128081;' : '&#129302;'; // kilocode_change - Use !ephemeral
+    if (title) title.textContent = agentProfile.name;
+    if (role) role.textContent = agentProfile.role;
+    if (caps) caps.innerHTML = (agentProfile.capabilities || []).map(c =>
+      `<span class="cap-tag">${esc(c)}</span>`).join('');
+    if (stats) stats.innerHTML =
+      `<span>&#128172; ${agentProfile.totalMessages || 0} msgs</span>` +
+      `<span>&#9989; ${agentProfile.tasksCompleted || 0} tasks</span>` +
+      `<span>${agentProfile.isActive ? '&#9679; Live' : '&#9675; Idle'}</span>`;
+
+    // Welcome
+    if (welcomeTitle) welcomeTitle.textContent = agentProfile.name;
+    if (welcomeDesc) welcomeDesc.textContent =
+      `${agentProfile.role}. ${(agentProfile.capabilities || []).join(', ')}. Send a message to get started.`;
+
+    // Folder info
+    if (folderName) folderName.textContent = agentProfile.workspaceFolder || agentProfile.id;
+    if (termCwd) termCwd.textContent = `projects/${agentProfile.workspaceFolder || agentProfile.id}/`;
+
+    // Join socket room for this agent
+    socket.emit('subscribe-agent', AGENT_ID);
+
+    refreshFiles();
+  } catch (e) {
+    addLog('error', `Failed to load agent: ${e.message}`);
+  }
+}
+
+// ============================================================================
+// Socket.IO
+// ============================================================================
+socket.on('connect', () => {
+  setStatus(true);
+  addLog('info', 'Connected');
+  loadAgent();
+  loadChatHistory();
+  refreshContextStats(); // kilocode_change - load context stats on connect
+  loadBackupsSetting(); // kilocode_change - load backup toggle state
+});
+
+socket.on('disconnect', () => { setStatus(false); addLog('warn', 'Disconnected'); });
+
+// kilocode_change start - listen for agent reset (from project page or other tabs)
+socket.on('agent-reset', (data) => {
+  if (data.agentId === AGENT_ID) {
+    addLog('info', 'Agent memory was cleared');
+    document.getElementById('messages').innerHTML =
+      `<div class="welcome" id="welcome"><h2>${esc(agentProfile?.name || 'Agent')}</h2><p>Memory cleared. Send a message to start fresh.</p></div>`;
+    document.getElementById('summaryBanner').style.display = 'none';
+    messageCount = 0;
+  }
+});
+// kilocode_change end
+
+let streamDidFire = false;
+socket.on('agent-message', (data) => {
+  // Only handle messages for THIS agent
+  if (data.agentId !== AGENT_ID && data.agentId !== 'user-agent') return;
+
+  if (data.isStreaming) {
+    streamDidFire = true;
+    // kilocode_change - Show working indicator
+    showWorkingIndicator(true);
+    if (!currentStreamEl) {
+      removeTyping();
+      currentStreamEl = addMessage('assistant', '', agentProfile?.name || 'Agent');
+      streamText = '';
+    }
+    streamText += data.message;
+    currentStreamEl.querySelector('.content').textContent = streamText;
+    scrollToBottom();
+  } else if (data.isDone) {
+    if (currentStreamEl && streamText) {
+      currentStreamEl.querySelector('.content').innerHTML = formatMarkdown(streamText);
+    }
+    currentStreamEl = null;
+    streamText = '';
+    isStreaming = false;
+    document.getElementById('sendBtn').disabled = false;
+    document.getElementById('stopBtn').style.display = 'none'; // kilocode_change - hide stop button
+    removeTyping();
+    // kilocode_change - Show done indicator and update usage
+    showWorkingIndicator(false, true);
+    fetchAgentUsage();
+    refreshContextStats(); // kilocode_change - update context stats
+  }
+});
+
+socket.on('file-created', (data) => {
+  if (data.agentId === AGENT_ID) {
+    addLog('info', `File created: ${data.relativePath}`);
+    addMessage('system', `&#128196; Created: ${data.relativePath}`);
+    refreshFiles();
+  }
+});
+
+// kilocode_change start - Show tool executions in chat so user sees what agent is doing
+socket.on('tool-execution', (data) => {
+  // Only show for THIS agent
+  if (data.agentId !== AGENT_ID) {
+    addLog('info', `[${data.agentName || data.agentId}] ${data.details}`);
+    return;
+  }
+  
+  // Show tool execution as a progress message
+  if (data.status === 'started') {
+    const toolMsg = `\n🔧 **${data.details}**\n`;
+    if (currentStreamEl) {
+      streamText += toolMsg;
+      const contentEl = currentStreamEl.querySelector('.content');
+      if (contentEl) contentEl.textContent = streamText;
+      scrollToBottom();
+    } else {
+      // No stream active - show as system message
+      addMessage('system', `🔧 ${esc(data.details)}`);
+    }
+  }
+});
+// kilocode_change end
+
+// kilocode_change start - system-event for filesCreated from chat
+socket.on('system-event', (data) => {
+  if (data.type === 'files-created' && data.agentId === AGENT_ID) {
+    addMessage('system', `&#128230; ${data.message}`);
+    refreshFiles();
+  }
+});
+// kilocode_change end
+
+socket.on('file-deleted', () => refreshFiles());
+socket.on('file-moved', () => refreshFiles());
+
+// kilocode_change start - summarization indicator
+let lastSummarizationData = null;
+
+socket.on('summarization-start', (data) => {
+  if (data.agentId === AGENT_ID) {
+    const tokenK = (data.tokenCount / 1000).toFixed(1);
+    showSummarizingIndicator(true, data.messageCount, data.tokenCount);
+    addLog('info', `Summarizing context (${data.messageCount} msgs, ~${tokenK}K tokens, ${data.contextPercent.toFixed(1)}%)...`);
+  }
+});
+
+socket.on('summarization-end', (data) => {
+  if (data.agentId === AGENT_ID) {
+    showSummarizingIndicator(false);
+    lastSummarizationData = data;
+    
+    if (data.error) {
+      addLog('warn', `Summarization failed: ${data.error}`);
+    } else {
+      const tokenBeforeK = ((data.tokensBefore || 0) / 1000).toFixed(1);
+      const tokenAfterK = ((data.tokensAfter || 0) / 1000).toFixed(1);
+      addLog('info', `✅ Summarized: ${data.messageCountBefore} → ${data.messageCountAfter} msgs, ~${tokenBeforeK}K → ~${tokenAfterK}K tokens ($${data.cost.toFixed(4)})`);
+    }
+    
+    // Show summary banner with metadata including tokens
+    const summaryBanner = document.getElementById('summaryBanner');
+    const summaryMeta = document.getElementById('summaryMeta');
+    const summaryText = document.getElementById('summaryText');
+    if (summaryBanner && summaryMeta) {
+      const tokenBeforeK = ((data.tokensBefore || 0) / 1000).toFixed(1);
+      const tokenAfterK = ((data.tokensAfter || 0) / 1000).toFixed(1);
+      summaryMeta.textContent = `${data.messageCountBefore} → ${data.messageCountAfter} msgs | ~${tokenBeforeK}K → ~${tokenAfterK}K tokens | $${data.cost.toFixed(4)}`;
+      if (summaryText && data.summary) {
+        summaryText.textContent = data.summary;
+      }
+      summaryBanner.style.display = 'block';
+      // Hide details by default
+      const details = document.getElementById('summaryDetails');
+      if (details) details.style.display = 'none';
+      const toggle = document.getElementById('summaryToggle');
+      if (toggle) toggle.textContent = 'Show Details';
+    }
+  }
+});
+
+function toggleSummaryDetails() {
+  const details = document.getElementById('summaryDetails');
+  const toggle = document.getElementById('summaryToggle');
+  if (details && toggle) {
+    if (details.style.display === 'none') {
+      details.style.display = 'block';
+      toggle.textContent = 'Hide Details';
+    } else {
+      details.style.display = 'none';
+      toggle.textContent = 'Show Details';
+    }
+  }
+}
+
+// kilocode_change start - context stats and history backups
+function refreshContextStats() {
+  fetch(`/api/agent/${AGENT_ID}/context-stats`)
+    .then(r => r.json())
+    .then(data => {
+      updateContextStats(data);
+    })
+    .catch(e => console.error('Failed to fetch context stats:', e));
+}
+
+function updateContextStats(data) {
+  const percentEl = document.getElementById('contextPercent');
+  const messagesEl = document.getElementById('contextMessages');
+  const barEl = document.getElementById('contextBar');
+  
+  if (percentEl) {
+    percentEl.textContent = `${data.contextPercent.toFixed(1)}%`;
+    // Color based on usage: green < 50%, yellow 50-70%, red > 70%
+    if (data.contextPercent < 50) {
+      percentEl.style.color = 'var(--green)';
+      if (barEl) barEl.style.background = 'var(--green)';
+    } else if (data.contextPercent < 70) {
+      percentEl.style.color = '#d29922';
+      if (barEl) barEl.style.background = '#d29922';
+    } else {
+      percentEl.style.color = 'var(--red)';
+      if (barEl) barEl.style.background = 'var(--red)';
+    }
+  }
+  if (messagesEl) messagesEl.textContent = data.messageCount;
+  if (barEl) barEl.style.width = `${Math.min(100, data.contextPercent)}%`;
+}
+
+// kilocode_change start - backup toggle functions
+function loadBackupsSetting() {
+  fetch(`/api/agent/${AGENT_ID}/backups-enabled`)
+    .then(r => r.json())
+    .then(data => {
+      const checkbox = document.getElementById('backupsEnabled');
+      if (checkbox) checkbox.checked = data.enabled;
+    })
+    .catch(e => console.warn('Failed to load backups setting:', e));
+}
+
+function toggleBackups(enabled) {
+  fetch(`/api/agent/${AGENT_ID}/backups-enabled`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled })
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        addLog('info', `History backups ${enabled ? 'enabled' : 'disabled'}`);
+      } else {
+        addLog('error', data.error || 'Failed to toggle backups');
+        // Revert checkbox
+        const checkbox = document.getElementById('backupsEnabled');
+        if (checkbox) checkbox.checked = !enabled;
+      }
+    })
+    .catch(e => {
+      addLog('error', `Failed to toggle backups: ${e.message}`);
+      // Revert checkbox
+      const checkbox = document.getElementById('backupsEnabled');
+      if (checkbox) checkbox.checked = !enabled;
+    });
+}
+// kilocode_change end
+
+function showHistoryBackups() {
+  fetch(`/api/agent/${AGENT_ID}/history-backups`)
+    .then(r => r.json())
+    .then(data => {
+      if (!data.backups || data.backups.length === 0) {
+        alert('No history backups yet.\\n\\nBackups are created automatically before each summarization (at 70% context window usage).');
+        return;
+      }
+      
+      // Create modal to show backups
+      const modal = document.createElement('div');
+      modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);z-index:1000;display:flex;align-items:center;justify-content:center';
+      modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+      
+      let content = '<div style="background:var(--surface);border-radius:8px;max-width:800px;max-height:80vh;overflow:auto;padding:20px;color:var(--text)">';
+      content += '<h2 style="margin:0 0 16px 0">📜 History Backups</h2>';
+      content += '<p style="color:var(--muted);font-size:12px;margin-bottom:16px">Full conversation history saved before each summarization. Newest first.</p>';
+      
+      data.backups.slice().reverse().forEach((backup, idx) => {
+        const date = new Date(backup.timestamp).toLocaleString();
+        const tokenK = (backup.tokenCount / 1000).toFixed(1);
+        content += `<div style="border:1px solid var(--border);border-radius:6px;margin-bottom:12px;overflow:hidden">`;
+        content += `<div style="background:var(--bg);padding:8px 12px;font-size:12px;display:flex;justify-content:space-between;align-items:center">`;
+        content += `<span><strong>Backup #${data.backups.length - idx}</strong> - ${date}</span>`;
+        content += `<span style="color:var(--muted)">${backup.messages.length} msgs | ~${tokenK}K tokens</span>`;
+        content += `</div>`;
+        content += `<div style="padding:12px;font-size:11px;max-height:200px;overflow-y:auto;background:var(--surface)">`;
+        content += `<div style="color:var(--muted);margin-bottom:8px">${backup.reason}</div>`;
+        backup.messages.forEach(msg => {
+          const preview = msg.content.length > 200 ? msg.content.substring(0, 200) + '...' : msg.content;
+          const roleColor = msg.role === 'user' ? 'var(--accent)' : 'var(--green)';
+          content += `<div style="margin-bottom:6px"><span style="color:${roleColor};font-weight:500">${msg.role}:</span> ${escapeHtml(preview)}</div>`;
+        });
+        content += '</div></div>';
+      });
+      
+      content += '<button onclick="this.parentElement.parentElement.remove()" style="width:100%;padding:10px;background:var(--accent);color:white;border:none;border-radius:6px;cursor:pointer;font-size:14px">Close</button>';
+      content += '</div>';
+      
+      modal.innerHTML = content;
+      document.body.appendChild(modal);
+    })
+    .catch(e => alert('Failed to load backups: ' + e.message));
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// kilocode_change start - Summary Examiner
+function openSummaryExaminer() {
+  // First check examination context
+  fetch(`/api/agent/${AGENT_ID}/examination-context`)
+    .then(r => r.json())
+    .then(ctx => {
+      if (!ctx.hasSummarized && !ctx.lastBackup) {
+        alert('No summary to examine yet.\\n\\nThe summary examiner becomes available after the first summarization (at 70% context window usage or 40+ messages).');
+        return;
+      }
+      
+      // Create examiner modal
+      const modal = document.createElement('div');
+      modal.id = 'summaryExaminerModal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:1000;display:flex;align-items:center;justify-content:center';
+      modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+      
+      let content = `<div style="background:var(--surface);border-radius:8px;width:900px;max-width:90vw;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;color:var(--text)">
+        <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+          <h2 style="margin:0">🔍 Summary Examiner</h2>
+          <button onclick="document.getElementById('summaryExaminerModal').remove()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px">&times;</button>
+        </div>
+        
+        <div style="flex:1;overflow-y:auto;padding:20px">
+          <!-- Quality Score Section -->
+          <div style="margin-bottom:20px">
+            <h3 style="margin:0 0 12px 0;font-size:14px">📊 Quality Assessment</h3>
+            <div id="qualitySection" style="background:var(--bg);border-radius:6px;padding:12px">
+              <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+                <span>Score:</span>
+                <span id="qualityScore" style="font-size:20px;font-weight:bold">-</span>
+                <button onclick="runQualityAssessment()" style="margin-left:auto;padding:4px 12px;background:var(--accent);color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px">Run Assessment</button>
+              </div>
+              <div id="qualityDetails" style="display:none;margin-top:12px;font-size:12px">
+                <div style="margin-bottom:8px">
+                  <strong style="color:var(--green)">✓ Topics Captured:</strong>
+                  <div id="topicsFound" style="margin-top:4px;color:var(--muted)"></div>
+                </div>
+                <div style="margin-bottom:8px">
+                  <strong style="color:var(--red)">✗ Topics Missing:</strong>
+                  <div id="topicsMissing" style="margin-top:4px;color:var(--muted)"></div>
+                </div>
+                <div>
+                  <strong style="color:var(--accent)">💡 Recommendations:</strong>
+                  <div id="recommendations" style="margin-top:4px;color:var(--muted)"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Q&A Section -->
+          <div>
+            <h3 style="margin:0 0 12px 0;font-size:14px">💬 Ask Questions About the Summary</h3>
+            <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Ask any question and see if the answer is in the summary or only in the original conversation.</p>
+            
+            <div style="display:flex;gap:8px;margin-bottom:16px">
+              <input type="text" id="examineQuestion" placeholder="e.g., What was decided about authentication?" style="flex:1;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px" onkeypress="if(event.key==='Enter') askQuestion()">
+              <button onclick="askQuestion()" style="padding:10px 20px;background:var(--accent);color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px">Ask</button>
+            </div>
+            
+            <div id="examineResult" style="display:none;background:var(--bg);border-radius:6px;padding:16px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+                <span style="font-weight:bold">Result:</span>
+                <span id="comparisonBadge" style="padding:2px 8px;border-radius:4px;font-size:11px;font-weight:bold"></span>
+              </div>
+              
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+                <div>
+                  <div style="color:var(--muted);font-size:11px;margin-bottom:4px">From Summary:</div>
+                  <div id="answerSummary" style="font-size:12px;padding:8px;background:var(--surface);border-radius:4px"></div>
+                </div>
+                <div>
+                  <div style="color:var(--muted);font-size:11px;margin-bottom:4px">From Original:</div>
+                  <div id="answerOriginal" style="font-size:12px;padding:8px;background:var(--surface);border-radius:4px"></div>
+                </div>
+              </div>
+              
+              <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+                <div style="color:var(--muted);font-size:11px;margin-bottom:4px">Explanation:</div>
+                <div id="examineExplanation" style="font-size:12px"></div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Current Summary Preview -->
+          ${ctx.currentSummary ? `
+          <div style="margin-top:20px">
+            <h3 style="margin:0 0 12px 0;font-size:14px">📄 Current Summary</h3>
+            <div style="background:var(--bg);border-radius:6px;padding:12px;font-size:11px;max-height:150px;overflow-y:auto;white-space:pre-wrap;color:var(--muted)">${escapeHtml(ctx.currentSummary)}</div>
+          </div>
+          ` : ''}
+        </div>
+      </div>`;
+      
+      modal.innerHTML = content;
+      document.body.appendChild(modal);
+    })
+    .catch(e => alert('Failed to load examination context: ' + e.message));
+}
+
+async function runQualityAssessment() {
+  const scoreEl = document.getElementById('qualityScore');
+  const detailsEl = document.getElementById('qualityDetails');
+  const foundEl = document.getElementById('topicsFound');
+  const missingEl = document.getElementById('topicsMissing');
+  const recsEl = document.getElementById('recommendations');
+  
+  scoreEl.textContent = '⏳';
+  detailsEl.style.display = 'none';
+  
+  try {
+    const res = await fetch(`/api/agent/${AGENT_ID}/summary-quality`);
+    const data = await res.json();
+    
+    if (data.error) {
+      scoreEl.textContent = '❌';
+      detailsEl.style.display = 'block';
+      foundEl.textContent = '';
+      missingEl.textContent = '';
+      recsEl.textContent = data.error || 'Quality assessment failed';
+      return;
+    }
+    
+    // Score with color coding
+    const score = data.score || 0;
+    scoreEl.textContent = `${score}%`;
+    scoreEl.style.color = score >= 80 ? 'var(--green)' : score >= 60 ? 'var(--yellow)' : 'var(--red)';
+    
+    detailsEl.style.display = 'block';
+    
+    // Topics found
+    if (data.topicsFound && data.topicsFound.length > 0) {
+      foundEl.innerHTML = data.topicsFound.map(t => `<div>• ${escapeHtml(t)}</div>`).join('');
+    } else {
+      foundEl.textContent = '(none identified)';
+    }
+    
+    // Topics missing
+    if (data.topicsMissing && data.topicsMissing.length > 0) {
+      missingEl.innerHTML = data.topicsMissing.map(t => `<div>• ${escapeHtml(t)}</div>`).join('');
+    } else {
+      missingEl.textContent = '(none - good coverage!)';
+    }
+    
+    // Recommendations
+    if (data.recommendations && data.recommendations.length > 0) {
+      recsEl.innerHTML = data.recommendations.map(r => `<div>• ${escapeHtml(r)}</div>`).join('');
+    } else {
+      recsEl.textContent = '(no recommendations)';
+    }
+  } catch (e) {
+    scoreEl.textContent = '❌';
+    detailsEl.style.display = 'block';
+    foundEl.textContent = '';
+    missingEl.textContent = '';
+    recsEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function askQuestion() {
+  const questionInput = document.getElementById('examineQuestion');
+  const resultEl = document.getElementById('examineResult');
+  const badgeEl = document.getElementById('comparisonBadge');
+  const summaryEl = document.getElementById('answerSummary');
+  const originalEl = document.getElementById('answerOriginal');
+  const explainEl = document.getElementById('examineExplanation');
+  
+  const question = questionInput.value.trim();
+  if (!question) {
+    alert('Please enter a question');
+    return;
+  }
+  
+  // Show loading state
+  resultEl.style.display = 'block';
+  badgeEl.textContent = '⏳ Analyzing...';
+  badgeEl.style.cssText = 'padding:2px 8px;border-radius:4px;font-size:11px;font-weight:bold;background:var(--bg);color:var(--muted)';
+  summaryEl.textContent = '';
+  originalEl.textContent = '';
+  explainEl.textContent = '';
+  
+  try {
+    const res = await fetch(`/api/agent/${AGENT_ID}/examine-summary`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question })
+    });
+    const data = await res.json();
+    
+    if (data.error) {
+      badgeEl.textContent = '❌ Error';
+      badgeEl.style.background = 'var(--red)';
+      badgeEl.style.color = 'white';
+      explainEl.textContent = data.error;
+      return;
+    }
+    
+    // Comparison badge styling
+    const badgeStyles = {
+      captured: { bg: 'var(--green)', text: '✓ CAPTURED' },
+      partial: { bg: 'var(--yellow)', text: '⚠ PARTIAL' },
+      missing: { bg: 'var(--red)', text: '✗ MISSING' },
+      'no-backup': { bg: 'var(--muted)', text: '? NO BACKUP' }
+    };
+    const style = badgeStyles[data.comparison] || badgeStyles.missing;
+    badgeEl.textContent = style.text;
+    badgeEl.style.background = style.bg;
+    badgeEl.style.color = 'white';
+    
+    // Answers
+    summaryEl.textContent = data.answerFromSummary || '(no answer)';
+    originalEl.textContent = data.answerFromOriginal || '(no answer)';
+    explainEl.textContent = data.explanation || '';
+  } catch (e) {
+    badgeEl.textContent = '❌ Error';
+    badgeEl.style.background = 'var(--red)';
+    badgeEl.style.color = 'white';
+    explainEl.textContent = 'Error: ' + e.message;
+  }
+}
+// kilocode_change end
+
+// Refresh context stats periodically and after messages
+setInterval(refreshContextStats, 30000);
+// kilocode_change end
+
+// kilocode_change start - usage tracking for this agent
+socket.on('usage', (data) => {
+  if (data.agentId === AGENT_ID) {
+    fetchAgentUsage();
+  }
+});
+
+socket.on('usage-summary', () => {
+  fetchAgentUsage();
+});
+
+function updateAgentUsage(agentData) {
+  const tokensEl = document.getElementById('agentTokens');
+  const costEl = document.getElementById('agentCost');
+  const callsEl = document.getElementById('agentCalls');
+  
+  if (!agentData) {
+    if (tokensEl) tokensEl.textContent = '0';
+    if (costEl) costEl.textContent = '$0.00';
+    if (callsEl) callsEl.textContent = '0';
+    return;
+  }
+  
+  const tokens = agentData.inputTokens + agentData.outputTokens;
+  if (tokensEl) tokensEl.textContent = formatNumber(tokens);
+  if (costEl) {
+    const cost = agentData.costUsd;
+    costEl.textContent = cost < 0.01 ? `$${(cost * 100).toFixed(2)}¢` : `$${cost.toFixed(4)}`;
+    if (cost > 1) costEl.style.color = 'var(--red)';
+    else if (cost > 0.1) costEl.style.color = 'var(--yellow)';
+    else costEl.style.color = 'var(--green)';
+  }
+  if (callsEl) callsEl.textContent = agentData.callCount;
+}
+
+function formatNumber(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return n.toString();
+}
+
+async function fetchAgentUsage() {
+  try {
+    const res = await fetch(`${API}/api/usage`);
+    if (res.ok) {
+      const summary = await res.json();
+      const agentData = summary.byAgent?.[AGENT_ID];
+      updateAgentUsage(agentData);
+    }
+  } catch (e) {
+    console.warn('Failed to fetch usage:', e);
+  }
+}
+
+function showUsageDetails() {
+  fetch(`${API}/api/usage`).then(r => r.json()).then(summary => {
+    const agentData = summary.byAgent?.[AGENT_ID];
+    if (!agentData) {
+      alert('No usage data for this agent yet.');
+      return;
+    }
+    alert(`Token Usage for ${AGENT_ID}:\n` +
+      `Input: ${formatNumber(agentData.inputTokens)}\n` +
+      `Output: ${formatNumber(agentData.outputTokens)}\n` +
+      `Total: ${formatNumber(agentData.inputTokens + agentData.outputTokens)}\n` +
+      `Cost: $${agentData.costUsd.toFixed(4)}\n` +
+      `API Calls: ${agentData.callCount}`);
+  }).catch(e => alert('Failed to load usage: ' + e.message));
+}
+
+// kilocode_change start - working/done indicator (PROMINENT)
+let doneTimeout = null;
+let isSummarizing = false; // kilocode_change - track summarization state
+
+function showSummarizingIndicator(active, messageCount = 0, tokenCount = 0) {
+  isSummarizing = active;
+  const indicator = document.getElementById('workingIndicator');
+  const text = document.getElementById('workingText');
+  const banner = document.getElementById('statusBanner');
+  const bannerIcon = document.getElementById('statusIcon');
+  const bannerText = document.getElementById('statusText2');
+  
+  if (active) {
+    const tokenK = tokenCount ? (tokenCount / 1000).toFixed(1) : '?';
+    const countText = messageCount ? ` (${messageCount} msgs, ~${tokenK}K tokens)` : '';
+    // Header indicator
+    if (indicator && text) {
+      indicator.style.display = 'block';
+      indicator.style.background = 'rgba(210,153,34,0.2)';
+      indicator.style.color = '#d29922';
+      text.innerHTML = '📝 Summarizing' + countText + '...';
+    }
+    // Banner
+    if (banner) {
+      banner.style.display = 'block';
+      banner.style.background = 'rgba(210,153,34,0.15)';
+      banner.style.borderColor = '#d29922';
+      banner.style.color = '#d29922';
+      if (bannerIcon) bannerIcon.textContent = '📝';
+      if (bannerText) bannerText.textContent = messageCount ? `Summarizing ${messageCount} messages (~${tokenK}K tokens)...` : 'Summarizing context...';
+    }
+  } else if (!isSummarizing) {
+    // Return to normal state (will be overridden by showWorkingIndicator if still working)
+    showWorkingIndicator(false, false);
+  }
+}
+
+function showWorkingIndicator(working, done = false) {
+  // Don't override summarizing state
+  if (isSummarizing && !done) return;
+  
+  const indicator = document.getElementById('workingIndicator');
+  const text = document.getElementById('workingText');
+  const banner = document.getElementById('statusBanner');
+  const bannerIcon = document.getElementById('statusIcon');
+  const bannerText = document.getElementById('statusText2');
+  
+  if (doneTimeout) {
+    clearTimeout(doneTimeout);
+    doneTimeout = null;
+  }
+  
+  if (working) {
+    // Header indicator
+    if (indicator && text) {
+      indicator.style.display = 'block';
+      indicator.style.background = 'rgba(88,166,255,0.2)';
+      indicator.style.color = 'var(--accent)';
+      text.innerHTML = '⏳ Working...';
+    }
+    // Prominent banner above input
+    if (banner) {
+      banner.style.display = 'block';
+      banner.className = 'working';
+      banner.style.background = 'rgba(88,166,255,0.15)';
+      banner.style.borderColor = 'var(--accent)';
+      banner.style.color = 'var(--accent)';
+      if (bannerIcon) bannerIcon.textContent = '⏳';
+      if (bannerText) bannerText.textContent = 'Working... (Agent is processing)';
+    }
+  } else if (done) {
+    // Clear summarizing state when done
+    isSummarizing = false;
+    // Header indicator
+    if (indicator && text) {
+      indicator.style.display = 'block';
+      indicator.style.background = 'rgba(63,185,80,0.2)';
+      indicator.style.color = 'var(--green)';
+      text.innerHTML = '✅ Done';
+    }
+    // Prominent banner - DONE!
+    if (banner) {
+      banner.style.display = 'block';
+      banner.className = 'done';
+      banner.style.background = 'rgba(63,185,80,0.2)';
+      banner.style.borderColor = 'var(--green)';
+      banner.style.color = 'var(--green)';
+      if (bannerIcon) bannerIcon.textContent = '✅';
+      if (bannerText) bannerText.textContent = 'DONE - Agent finished responding';
+    }
+    // Hide after 8 seconds
+    doneTimeout = setTimeout(() => {
+      if (indicator) indicator.style.display = 'none';
+      if (banner) banner.style.display = 'none';
+    }, 8000);
+  } else {
+    if (indicator) indicator.style.display = 'none';
+    if (banner) banner.style.display = 'none';
+  }
+}
+// kilocode_change end
+
+// Fetch usage on page load
+setTimeout(fetchAgentUsage, 500);
+// kilocode_change end
+
+// ============================================================================
+// Chat
+// ============================================================================
+
+// kilocode_change start - load history on page open
+async function loadChatHistory() {
+  try {
+    const res = await fetch(`${API}/api/agent/${AGENT_ID}/history`);
+    if (!res.ok) return;
+    const data = await res.json();
+
+    if (data.messages && data.messages.length > 0) {
+      // Hide welcome, show messages
+      const welcome = document.getElementById('welcome');
+      if (welcome) welcome.style.display = 'none';
+
+      for (const msg of data.messages) {
+        // Skip internal 'Created file:' messages from file creation
+        if (msg.role === 'assistant' && msg.content.startsWith('Created file:')) continue;
+        addMessage(msg.role === 'assistant' ? 'assistant' : 'user', msg.content, msg.role === 'assistant' ? (agentProfile?.name || 'Agent') : undefined);
+      }
+      addLog('info', `Loaded ${data.messages.length} messages from history`);
+      scrollToBottom();
+    }
+
+    // Show summary banner if available
+    if (data.summary) {
+      document.getElementById('summaryText').textContent = ` ${data.summary.substring(0, 300)}${data.summary.length > 300 ? '...' : ''}`;
+      document.getElementById('summaryBanner').style.display = 'block';
+    } else if (data.memorySummary) {
+      document.getElementById('summaryText').textContent = ` ${data.memorySummary.substring(0, 300)}${data.memorySummary.length > 300 ? '...' : ''}`;
+      document.getElementById('summaryBanner').style.display = 'block';
+    }
+  } catch (e) {
+    addLog('warn', `Could not load history: ${e.message}`);
+  }
+}
+
+async function clearChat() {
+  if (!confirm('Clear all conversation history for this agent?')) return;
+  try {
+    const res = await fetch(`${API}/api/agent/${AGENT_ID}/history`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      document.getElementById('messages').innerHTML =
+        `<div class="welcome" id="welcome"><h2>${esc(agentProfile?.name || 'Agent')}</h2><p>History cleared. Send a message to start fresh.</p></div>`;
+      document.getElementById('summaryBanner').style.display = 'none';
+      messageCount = 0;
+      addLog('info', 'Chat history cleared');
+      loadAgent(); // refresh stats
+    } else {
+      addLog('error', data.error || 'Failed to clear');
+    }
+  } catch (e) {
+    addLog('error', `Clear failed: ${e.message}`);
+  }
+}
+// kilocode_change end
+
+async function sendMessage() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if ((!text && chatAttachments.length === 0) || isStreaming) return;
+
+  const welcome = document.getElementById('welcome');
+  if (welcome) welcome.style.display = 'none';
+
+  // Show user message
+  let attachHtml = '';
+  if (chatAttachments.length > 0) {
+    attachHtml = '<div class="msg-attachments">' + chatAttachments.map(a => {
+      if (a.type.startsWith('image/')) return `<img src="${a.dataUrl}" title="${esc(a.name)}">`;
+      return `<span style="font-size:11px;color:var(--muted)">&#128196; ${esc(a.name)}</span>`;
+    }).join('') + '</div>';
+  }
+  const msgEl = addMessage('user', text);
+  if (attachHtml) msgEl.querySelector('.content').innerHTML += attachHtml;
+
+  // Build content for API
+  const contentParts = [];
+  for (const a of chatAttachments) {
+    if (a.type.startsWith('image/')) {
+      contentParts.push({ type: 'image', source: { type: 'base64', media_type: a.mediaType, data: a.base64 } });
+    } else {
+      contentParts.push({ type: 'text', text: `[Attached file: ${a.name}]\n${atob(a.base64)}` });
+    }
+  }
+  if (text) contentParts.push({ type: 'text', text });
+
+  chatAttachments = [];
+  renderAttachChips();
+  input.value = '';
+  input.style.height = 'auto';
+  messageCount++;
+
+  isStreaming = true;
+  streamDidFire = false;
+  document.getElementById('sendBtn').disabled = true;
+  document.getElementById('stopBtn').style.display = 'inline-block'; // kilocode_change - show stop button
+  showTyping();
+  showWorkingIndicator(true); // kilocode_change - show working indicator
+
+  try {
+    const res = await fetch(`${API}/api/agent/${AGENT_ID}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        description: text,
+        attachments: contentParts.length > 1 || contentParts[0]?.type === 'image' ? contentParts : undefined,
+      }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      removeTyping();
+      addMessage('system', `Error: ${data.error || 'Unknown error'}`);
+      isStreaming = false;
+      document.getElementById('sendBtn').disabled = false;
+      document.getElementById('stopBtn').style.display = 'none'; // kilocode_change - hide stop button
+      showWorkingIndicator(false); // kilocode_change - hide on error
+      return;
+    }
+
+    if (!streamDidFire && data.response) {
+      removeTyping();
+      const el = addMessage('assistant', '', agentProfile?.name || 'Agent');
+      el.querySelector('.content').innerHTML = formatMarkdown(data.response);
+      isStreaming = false;
+      document.getElementById('sendBtn').disabled = false;
+      document.getElementById('stopBtn').style.display = 'none'; // kilocode_change - hide stop button
+      showWorkingIndicator(false, true); // kilocode_change - show done
+      fetchAgentUsage(); // kilocode_change - update usage
+    }
+
+    messageCount++;
+    addLog('info', `Response (history: ${data.historyLength} messages)`);
+
+    // kilocode_change start - show filesCreated notification in chat
+    if (data.filesCreated && data.filesCreated > 0) {
+      addMessage('system', `&#128230; Created ${data.filesCreated} file(s) in project folder`);
+      refreshFiles();
+    }
+    // kilocode_change end
+
+    // kilocode_change start - show delegation results
+    if (data.delegations && data.delegations.length > 0) {
+      const delegationInfo = data.delegations.map(d =>
+        `&#9889; <strong>${d.agentName}</strong>: ${d.filesCreated} file(s) created (${Math.round(d.responseLength / 1000)}k chars)`
+      ).join('<br>');
+      const el = addMessage('system', '');
+      el.querySelector('.content').innerHTML = `&#128101; <strong>Delegation complete</strong> (${data.delegations.length} agent(s)):<br>${delegationInfo}`;
+      refreshFiles();
+    }
+    // kilocode_change end
+
+    // Refresh agent stats
+    loadAgent();
+  } catch (e) {
+    removeTyping();
+    addMessage('system', `Network error: ${e.message}`);
+    isStreaming = false;
+    document.getElementById('sendBtn').disabled = false;
+    document.getElementById('stopBtn').style.display = 'none'; // kilocode_change - hide stop button
+    showWorkingIndicator(false); // kilocode_change - hide on error
+  }
+}
+
+// kilocode_change start - Stop agent function
+function stopAgent() {
+  if (!isStreaming) return;
+  
+  socket.emit('stop-agent', { agentId: AGENT_ID });
+  addMessage('system', '⏹️ Stop requested...');
+  
+  // Disable stop button while waiting
+  const stopBtn = document.getElementById('stopBtn');
+  stopBtn.disabled = true;
+  stopBtn.textContent = 'Stopping...';
+  
+  // Reset after timeout if no response
+  setTimeout(() => {
+    stopBtn.disabled = false;
+    stopBtn.textContent = 'Stop';
+  }, 5000);
+}
+
+// Listen for stop confirmation
+socket.on('agent-stopped', (data) => {
+  if (data.agentId === AGENT_ID) {
+    addMessage('system', '⛔ Agent stopped');
+    isStreaming = false;
+    document.getElementById('sendBtn').disabled = false;
+    document.getElementById('stopBtn').style.display = 'none';
+    document.getElementById('stopBtn').disabled = false;
+    document.getElementById('stopBtn').textContent = 'Stop';
+    removeTyping();
+    showWorkingIndicator(false);
+  }
+});
+// kilocode_change end
+
+// ============================================================================
+// Agent-scoped file operations
+// ============================================================================
+let fileData = [];
+let expandedDirs = new Set(['']);
+let selectedPath = null;
+let treeEventsDelegated = false; // kilocode_change - track if delegated events attached
+
+function agentFileApi(endpoint, opts) {
+  // All file operations scoped to /api/agent/:id/workspace/...
+  return fetch(`${API}/api/agent/${AGENT_ID}/workspace${endpoint}`, opts);
+}
+
+async function refreshFiles() {
+  try {
+    const res = await agentFileApi('/files');
+    const data = await res.json();
+    fileData = data.files || [];
+    document.getElementById('fileCount').textContent = `${data.totalFiles} files, ${data.totalDirs} dirs`;
+
+    const tree = document.getElementById('fileTree');
+    if (fileData.length === 0) {
+      tree.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">No files yet</div>';
+      return;
+    }
+    renderTreeFromCache();
+  } catch (e) {
+    addLog('warn', 'Failed to refresh files');
+  }
+}
+
+// kilocode_change start - Render tree from cached data (no API call, instant)
+function renderTreeFromCache() {
+  const tree = document.getElementById('fileTree');
+  if (!tree || fileData.length === 0) return;
+  
+  const root = buildTree(fileData);
+  tree.innerHTML = renderTree(root);
+  attachTreeHandlers();
+}
+// kilocode_change end
+
+// kilocode_change start - Attach delegated event handlers (only once)
+function attachDelegatedTreeEvents() {
+  if (treeEventsDelegated) return;
+  treeEventsDelegated = true;
+  
+  const tree = document.getElementById('fileTree');
+  if (!tree) return;
+
+  // Click handler (event delegation)
+  tree.addEventListener('click', (e) => {
+    const row = e.target.closest('.tree-row');
+    if (!row) return;
+    const p = row.dataset.path, isDir = row.dataset.dir === 'true';
+    if (isDir) {
+      if (expandedDirs.has(p)) expandedDirs.delete(p); else expandedDirs.add(p);
+      renderTreeFromCache();
+      return;
+    }
+    selectedPath = p;
+    tree.querySelectorAll('.tree-row').forEach(r => r.classList.remove('selected'));
+    row.classList.add('selected');
+    viewFile(p);
+  });
+
+  // Double-click to rename
+  tree.addEventListener('dblclick', (e) => {
+    const row = e.target.closest('.tree-row');
+    if (!row) return;
+    e.preventDefault();
+    startRename(row.dataset.path, row.dataset.dir === 'true');
+  });
+
+  // Right-click context menu
+  tree.addEventListener('contextmenu', (e) => {
+    const row = e.target.closest('.tree-row');
+    if (!row) return;
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, row.dataset.path, row.dataset.dir === 'true');
+  });
+}
+// kilocode_change end
+
+function buildTree(files) {
+  const root = { children: {}, path: '', isDir: true };
+  for (const f of files) {
+    const parts = f.path.split('/');
+    let node = root;
+    let pathSoFar = '';
+    for (let i = 0; i < parts.length; i++) {
+      pathSoFar = pathSoFar ? pathSoFar + '/' + parts[i] : parts[i];
+      if (!node.children[parts[i]]) {
+        node.children[parts[i]] = {
+          name: parts[i], path: pathSoFar,
+          isDir: i < parts.length - 1 || f.isDir,
+          size: f.isDir ? 0 : f.size, children: {},
+        };
+      }
+      node = node.children[parts[i]];
+    }
+    if (!f.isDir) { node.size = f.size; node.isDir = false; }
+  }
+  return root;
+}
+
+function fileIcon(name, isDir) {
+  if (isDir) return '&#128193;';
+  const ext = name.split('.').pop().toLowerCase();
+  const icons = {
+    js:'&#128312;', ts:'&#128309;', py:'&#128013;', html:'&#127760;', css:'&#127912;',
+    json:'&#123;&#125;', md:'&#128221;', txt:'&#128196;', sh:'&#9000;',
+  };
+  return icons[ext] || '&#128196;';
+}
+
+function renderTree(node, depth = 0) {
+  const entries = Object.values(node.children).sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  return entries.map(e => {
+    const indent = depth * 16;
+    const isOpen = expandedDirs.has(e.path);
+    const sel = selectedPath === e.path ? ' selected' : '';
+    if (e.isDir) {
+      const hasKids = Object.keys(e.children).length > 0;
+      const chevCls = hasKids ? (isOpen ? 'chevron open' : 'chevron') : 'chevron empty';
+      return `<div class="tree-node" data-path="${esc(e.path)}" data-dir="true">
+        <div class="tree-row dir-row${sel}" style="padding-left:${indent+8}px"
+             draggable="true" data-path="${esc(e.path)}" data-dir="true">
+          <span class="${chevCls}">&#9654;</span>
+          <span class="icon">${fileIcon(e.name,true)}</span>
+          <span class="name">${esc(e.name)}</span>
+          <span class="actions">
+            <button class="act-btn" title="New file" onclick="event.stopPropagation();promptNewFile('${escAttr(e.path)}')">+&#128196;</button>
+            <button class="act-btn" title="New folder" onclick="event.stopPropagation();promptNewFolder('${escAttr(e.path)}')">+&#128193;</button>
+          </span>
+        </div>
+        <div class="tree-children ${isOpen?'':'collapsed'}">${hasKids?renderTree(e,depth+1):''}</div>
+      </div>`;
+    } else {
+      return `<div class="tree-node" data-path="${esc(e.path)}">
+        <div class="tree-row${sel}" style="padding-left:${indent+24}px"
+             draggable="true" data-path="${esc(e.path)}" data-dir="false">
+          <span class="icon">${fileIcon(e.name,false)}</span>
+          <span class="name">${esc(e.name)}</span>
+          <span class="size">${formatSize(e.size)}</span>
+        </div>
+      </div>`;
+    }
+  }).join('');
+}
+
+function attachTreeHandlers() {
+  const tree = document.getElementById('fileTree');
+  
+  // Attach delegated events once
+  attachDelegatedTreeEvents();
+  
+  // Drag-drop (must re-attach since rows are recreated)
+  tree.querySelectorAll('.tree-row[draggable]').forEach(row => {
+    row.addEventListener('dragstart', (e) => {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', row.dataset.path);
+      row.style.opacity = '0.4';
+    });
+    row.addEventListener('dragend', () => { row.style.opacity = ''; });
+    if (row.dataset.dir === 'true') {
+      row.addEventListener('dragover', (e) => { e.preventDefault(); row.classList.add('drag-over'); });
+      row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+      row.addEventListener('drop', async (e) => {
+        e.preventDefault(); row.classList.remove('drag-over');
+        const from = e.dataTransfer.getData('text/plain');
+        const toDir = row.dataset.path;
+        if (!from || from === toDir || toDir.startsWith(from + '/')) return;
+        await moveFile(from, toDir + '/' + from.split('/').pop());
+      });
+    }
+  });
+}
+
+// kilocode_change start - Enhanced file viewer with PDF and Markdown support
+let currentFileContent = '';
+let currentFilePath = '';
+
+async function viewFile(filePath) {
+  try {
+    const ext = filePath.split('.').pop().toLowerCase();
+    const isPdf = ext === 'pdf';
+    const isMd = ext === 'md' || ext === 'markdown';
+    const isImage = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext);
+    
+    let viewer = document.getElementById('fileViewer');
+    if (!viewer) {
+      viewer = document.createElement('div');
+      viewer.id = 'fileViewer';
+      viewer.className = 'file-viewer';
+      viewer.onclick = (e) => { if (e.target === viewer) closeFileViewer(); };
+      document.body.appendChild(viewer);
+    }
+
+    const rawUrl = `${API}/api/agent/${AGENT_ID}/workspace/file/raw?path=${encodeURIComponent(filePath)}`;
+
+    // PDF: Use iframe
+    if (isPdf) {
+      viewer.innerHTML = `<div class="file-viewer-panel pdf-viewer">
+        <div class="file-viewer-header">
+          <span class="title">&#128213; ${esc(filePath)}</span>
+          <a href="${rawUrl}" download="${esc(filePath.split('/').pop())}" 
+             style="color:var(--accent);font-size:12px;text-decoration:none;margin-right:8px;">⬇ Download</a>
+          <button class="close-btn" onclick="closeFileViewer()">&times;</button>
+        </div>
+        <div class="file-viewer-body pdf-body">
+          <iframe src="${rawUrl}"></iframe>
+        </div>
+      </div>`;
+      viewer.style.display = 'flex';
+      return;
+    }
+
+    // Image: Display inline
+    if (isImage) {
+      viewer.innerHTML = `<div class="file-viewer-panel">
+        <div class="file-viewer-header">
+          <span class="title">&#127912; ${esc(filePath)}</span>
+          <button class="close-btn" onclick="closeFileViewer()">&times;</button>
+        </div>
+        <div class="file-viewer-body" style="text-align:center;">
+          <img src="${rawUrl}" style="max-width:100%;max-height:70vh;border-radius:8px;" alt="${esc(filePath)}">
+        </div>
+      </div>`;
+      viewer.style.display = 'flex';
+      return;
+    }
+
+    // Text files: Fetch content
+    const res = await agentFileApi(`/file?path=${encodeURIComponent(filePath)}`);
+    const data = await res.json();
+    if (!res.ok) { addLog('error', data.error); return; }
+    
+    currentFileContent = data.content;
+    currentFilePath = filePath;
+
+    // Markdown: Show rendered with toggle
+    if (isMd) {
+      const rendered = renderMarkdown(data.content);
+      viewer.innerHTML = `<div class="file-viewer-panel">
+        <div class="file-viewer-header">
+          <span class="title">&#128221; ${esc(filePath)}</span>
+          <span class="meta">${formatSize(data.size)}</span>
+          <div class="view-toggle">
+            <button id="btnRendered" class="active" onclick="toggleMdView('rendered')">Rendered</button>
+            <button id="btnRaw" onclick="toggleMdView('raw')">Raw</button>
+          </div>
+          <button class="close-btn" onclick="closeFileViewer()">&times;</button>
+        </div>
+        <div class="file-viewer-body" id="fileViewerBody">
+          <div class="markdown-body">${rendered}</div>
+        </div>
+      </div>`;
+      viewer.style.display = 'flex';
+      return;
+    }
+
+    // Default: Code/text view
+    viewer.innerHTML = `<div class="file-viewer-panel">
+      <div class="file-viewer-header">
+        <span class="title">&#128196; ${esc(filePath)}</span>
+        <span class="meta">${formatSize(data.size)}</span>
+        <button class="close-btn" onclick="closeFileViewer()">&times;</button>
+      </div>
+      <div class="file-viewer-body"><pre>${esc(data.content)}</pre></div>
+    </div>`;
+    viewer.style.display = 'flex';
+  } catch (e) { addLog('error', 'Failed to read file: ' + e.message); }
+}
+
+function toggleMdView(mode) {
+  const body = document.getElementById('fileViewerBody');
+  const btnRendered = document.getElementById('btnRendered');
+  const btnRaw = document.getElementById('btnRaw');
+  if (!body) return;
+  
+  if (mode === 'raw') {
+    body.innerHTML = `<pre>${esc(currentFileContent)}</pre>`;
+    btnRendered.classList.remove('active');
+    btnRaw.classList.add('active');
+  } else {
+    body.innerHTML = `<div class="markdown-body">${renderMarkdown(currentFileContent)}</div>`;
+    btnRendered.classList.add('active');
+    btnRaw.classList.remove('active');
+  }
+}
+
+// Simple markdown renderer
+function renderMarkdown(text) {
+  if (!text) return '';
+  let html = esc(text);
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="lang-$1">$2</code></pre>');
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/^###### (.+)$/gm, '<h6>$1</h6>');
+  html = html.replace(/^##### (.+)$/gm, '<h5>$1</h5>');
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
+  html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+  html = html.replace(/^(---+|\*\*\*+|___+)$/gm, '<hr>');
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;">');
+  html = html.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n)+/g, '<ul>$&</ul>');
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/\n\n+/g, '</p><p>');
+  html = '<p>' + html + '</p>';
+  html = html.replace(/<p><\/p>/g, '');
+  html = html.replace(/<p>(<h[1-6]>)/g, '$1').replace(/(<\/h[1-6]>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<pre>)/g, '$1').replace(/(<\/pre>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<ul>)/g, '$1').replace(/(<\/ul>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<blockquote>)/g, '$1').replace(/(<\/blockquote>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<hr>)/g, '$1').replace(/(<hr>)<\/p>/g, '$1');
+  return html;
+}
+// kilocode_change end
+
+function closeFileViewer() { const v = document.getElementById('fileViewer'); if (v) v.style.display = 'none'; }
+
+async function moveFile(from, to) {
+  if (from === to) return;
+  try {
+    const res = await agentFileApi('/move', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to }),
+    });
+    const data = await res.json();
+    if (data.success) { addLog('info', `Moved: ${from} → ${to}`); refreshFiles(); }
+    else addLog('error', `Move failed: ${data.error}`);
+  } catch (e) { addLog('error', `Move error: ${e.message}`); }
+}
+
+async function deleteFile(filePath, isDir) {
+  if (!confirm(`Delete ${isDir ? 'directory' : 'file'}?\n${filePath}`)) return;
+  try {
+    const res = await agentFileApi(`/file?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) { 
+      addLog('info', `Deleted: ${filePath}`); 
+      selectedPath = ''; // kilocode_change - clear selected path after delete
+      refreshFiles(); 
+    }
+    else addLog('error', data.error);
+  } catch (e) { addLog('error', e.message); }
+}
+
+async function uploadFiles(files, targetDir = '') {
+  for (const file of files) {
+    const filePath = targetDir ? `${targetDir}/${file.name}` : file.name;
+    try {
+      const content = await readFileAsBase64(file);
+      const res = await agentFileApi('/file', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath, content, encoding: 'base64' }),
+      });
+      const data = await res.json();
+      if (data.success) addLog('info', `Uploaded: ${filePath} (${formatSize(data.size)})`);
+      else addLog('error', data.error);
+    } catch (e) { addLog('error', e.message); }
+  }
+  refreshFiles();
+}
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+function handleFileSelect(event) { if (event.target.files.length) uploadFiles(event.target.files); event.target.value = ''; }
+
+async function promptNewFile(dirPath) {
+  const name = prompt(`New file name${dirPath ? ' in ' + dirPath : ''}:`);
+  if (!name) return;
+  const fullPath = dirPath ? dirPath + '/' + name : name;
+  try {
+    const res = await agentFileApi('/file', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: fullPath, content: '' }),
+    });
+    if ((await res.json()).success) { if (dirPath) expandedDirs.add(dirPath); refreshFiles(); }
+  } catch (e) { addLog('error', e.message); }
+}
+
+async function promptNewFolder(dirPath) {
+  const name = prompt(`New folder name${dirPath ? ' in ' + dirPath : ''}:`);
+  if (!name) return;
+  const fullPath = dirPath ? dirPath + '/' + name : name;
+  try {
+    const res = await agentFileApi('/dir', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: fullPath }),
+    });
+    if ((await res.json()).success) { if (dirPath) expandedDirs.add(dirPath); expandedDirs.add(fullPath); refreshFiles(); }
+  } catch (e) { addLog('error', e.message); }
+}
+
+function startRename(filePath, isDir) {
+  const tree = document.getElementById('fileTree');
+  const row = tree.querySelector(`.tree-row[data-path="${CSS.escape(filePath)}"]`);
+  if (!row) return;
+  const nameSpan = row.querySelector('.name');
+  const oldName = filePath.split('/').pop();
+  const origHTML = nameSpan.innerHTML;
+  const input = document.createElement('input');
+  input.type = 'text'; input.className = 'rename-input'; input.value = oldName;
+  nameSpan.innerHTML = ''; nameSpan.appendChild(input); input.focus();
+  if (!isDir) { const d = oldName.lastIndexOf('.'); input.setSelectionRange(0, d > 0 ? d : oldName.length); }
+  else input.select();
+  function finish(commit) {
+    const newName = input.value.trim(); nameSpan.innerHTML = origHTML;
+    if (commit && newName && newName !== oldName) {
+      const parent = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : '';
+      moveFile(filePath, parent ? parent + '/' + newName : newName);
+    }
+  }
+  input.addEventListener('keydown', (e) => { if (e.key==='Enter'){e.preventDefault();finish(true);} if (e.key==='Escape'){e.preventDefault();finish(false);} e.stopPropagation(); });
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('click', (e) => e.stopPropagation());
+}
+
+// kilocode_change start - fix context menu issues after delete
+let ctxMenuDocListener = null;
+
+function showContextMenu(x, y, filePath, isDir) {
+  hideContextMenu(); selectedPath = filePath;
+  const menu = document.createElement('div'); menu.className = 'ctx-menu'; menu.id = 'ctxMenu';
+  const items = [];
+  if (isDir) {
+    items.push({ label: '&#128196;+ New File', action: () => promptNewFile(filePath) });
+    items.push({ label: '&#128193;+ New Folder', action: () => promptNewFolder(filePath) });
+    items.push({ type: 'sep' });
+  } else {
+    items.push({ label: '&#128065; View', action: () => viewFile(filePath) });
+    items.push({ type: 'sep' });
+  }
+  items.push({ label: '&#9998; Rename', action: () => startRename(filePath, isDir), shortcut: 'F2' });
+  items.push({ type: 'sep' });
+  items.push({ label: '&#128465; Delete', action: () => deleteFile(filePath, isDir), cls: 'danger' });
+  menu.innerHTML = items.map(it => {
+    if (it.type==='sep') return '<div class="ctx-sep"></div>';
+    return `<div class="ctx-item ${it.cls||''}" data-idx="${items.indexOf(it)}">${it.label}${it.shortcut?`<span class="shortcut">${it.shortcut}</span>`:''}</div>`;
+  }).join('');
+  menu.querySelectorAll('.ctx-item').forEach(el => {
+    const idx = parseInt(el.dataset.idx);
+    el.addEventListener('click', (e) => { 
+      e.stopPropagation(); // Prevent document listener from also firing
+      hideContextMenu(); 
+      items[idx].action(); 
+    });
+  });
+  document.body.appendChild(menu);
+  const rect = menu.getBoundingClientRect();
+  if (x+rect.width > window.innerWidth) x = window.innerWidth-rect.width-8;
+  if (y+rect.height > window.innerHeight) y = window.innerHeight-rect.height-8;
+  menu.style.left = x+'px'; menu.style.top = y+'px';
+  setTimeout(() => { 
+    ctxMenuDocListener = () => hideContextMenu();
+    document.addEventListener('click', ctxMenuDocListener, { once: true }); 
+  }, 0);
+}
+
+function hideContextMenu() { 
+  const m = document.getElementById('ctxMenu'); 
+  if (m) m.remove(); 
+  // Remove document listener if it exists
+  if (ctxMenuDocListener) {
+    document.removeEventListener('click', ctxMenuDocListener);
+    ctxMenuDocListener = null;
+  }
+}
+// kilocode_change end
+
+// Upload area drag-drop
+const uploadArea = document.getElementById('uploadArea');
+['dragenter','dragover'].forEach(ev => uploadArea.addEventListener(ev, e => { e.preventDefault(); uploadArea.classList.add('dragover'); }));
+['dragleave','drop'].forEach(ev => uploadArea.addEventListener(ev, e => { e.preventDefault(); uploadArea.classList.remove('dragover'); }));
+uploadArea.addEventListener('drop', e => { if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files); });
+
+// ============================================================================
+// Chat attachments
+// ============================================================================
+function handleChatAttach(event) {
+  const files = event.target.files;
+  for (const file of files) {
+    if (file.type.startsWith('image/')) {
+      resizeImage(file, 1024).then(({ dataUrl, base64 }) => {
+        // resizeImage converts to JPEG, so mediaType must be image/jpeg
+        chatAttachments.push({ name: file.name, type: file.type, dataUrl, base64, mediaType: 'image/jpeg' });
+        renderAttachChips();
+      });
+    } else {
+      const reader = new FileReader();
+      reader.onload = () => {
+        chatAttachments.push({ name: file.name, type: file.type || 'application/octet-stream',
+          dataUrl: reader.result, base64: reader.result.split(',')[1], mediaType: file.type });
+        renderAttachChips();
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+  event.target.value = '';
+}
+function resizeImage(file, maxPx) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxPx || height > maxPx) {
+        const scale = maxPx / Math.max(width, height);
+        width = Math.round(width * scale); height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      resolve({ dataUrl, base64: dataUrl.split(',')[1] });
+      URL.revokeObjectURL(img.src);
+    };
+    img.src = URL.createObjectURL(file);
+  });
+}
+function renderAttachChips() {
+  const c = document.getElementById('attachChips');
+  if (chatAttachments.length === 0) { c.style.display = 'none'; c.innerHTML = ''; return; }
+  c.style.display = 'flex';
+  c.innerHTML = chatAttachments.map((a,i) => {
+    const preview = a.type.startsWith('image/') ? `<img src="${a.dataUrl}" alt="">` : '&#128196;';
+    return `<span class="attach-chip">${preview} ${esc(a.name)}<span class="remove" onclick="removeAttachment(${i})">&#10005;</span></span>`;
+  }).join('');
+}
+function removeAttachment(i) { chatAttachments.splice(i,1); renderAttachChips(); }
+
+document.querySelector('.input-area').addEventListener('dragover', e => e.preventDefault());
+document.querySelector('.input-area').addEventListener('drop', e => {
+  e.preventDefault();
+  if (e.dataTransfer.files.length) handleChatAttach({ target: { files: e.dataTransfer.files, value: '' } });
+});
+
+// kilocode_change start - Paste images from clipboard
+document.getElementById('input').addEventListener('paste', async (e) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (file) {
+        // Generate a name for pasted images
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const ext = file.type.split('/')[1] || 'png';
+        const name = `pasted-image-${timestamp}.${ext}`;
+        
+        // Create a new file with the generated name
+        const namedFile = new File([file], name, { type: file.type });
+        
+        const { dataUrl, base64 } = await resizeImage(namedFile, 1024);
+        // resizeImage converts to JPEG, so mediaType must be image/jpeg
+        chatAttachments.push({ 
+          name: name, 
+          type: file.type, 
+          dataUrl, 
+          base64, 
+          mediaType: 'image/jpeg' 
+        });
+        renderAttachChips();
+        addLog('info', `Pasted image: ${name}`);
+      }
+    }
+  }
+});
+// kilocode_change end
+
+// ============================================================================
+// Tabs
+// ============================================================================
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(p => p.classList.remove('active'));
+  if (tab === 'terminal') {
+    document.getElementById('tabTerminal').classList.add('active');
+    document.getElementById('paneTerminal').classList.add('active');
+    if (!term) initTerminal();
+    else fitAddon.fit();
+  } else {
+    document.getElementById('tabChat').classList.add('active');
+    document.getElementById('paneChat').classList.add('active');
+  }
+}
+
+// ============================================================================
+// Terminal (xterm.js) — scoped to agent's workspace folder
+// ============================================================================
+let term = null, fitAddon = null, termConnected = false;
+
+function initTerminal() {
+  const container = document.getElementById('terminalContainer');
+  container.innerHTML = '';
+  term = new Terminal({
+    cursorBlink: true, fontSize: 14,
+    fontFamily: "'SF Mono', 'Cascadia Code', 'Consolas', monospace",
+    theme: { background: '#0d1117', foreground: '#e6edf3', cursor: '#58a6ff',
+      selectionBackground: 'rgba(88,166,255,0.3)',
+      black: '#484f58', red: '#f85149', green: '#3fb950', yellow: '#d29922',
+      blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#b1bac4' },
+  });
+  fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(container);
+  setTimeout(() => fitAddon.fit(), 100);
+  window.addEventListener('resize', () => { if (fitAddon) fitAddon.fit(); });
+  connectTerminal();
+  term.onData(data => { if (termConnected) socket.emit('terminal-input', data); });
+  term.onResize(({ cols, rows }) => { if (termConnected) socket.emit('terminal-resize', { cols, rows }); });
+}
+
+function connectTerminal() {
+  const shell = document.getElementById('termShell').value;
+  // kilocode_change - pass projectId so server can resolve correct home directory
+  socket.emit('terminal-start', { shell, cols: term?.cols || 80, rows: term?.rows || 24, agentId: AGENT_ID, projectId: PROJECT_ID });
+  if (term) { term.clear(); term.writeln('\x1b[33mConnecting terminal for ' + (agentProfile?.name || AGENT_ID) + '...\x1b[0m'); }
+}
+function reconnectTerminal() { socket.emit('terminal-stop'); setTimeout(() => connectTerminal(), 200); }
+
+socket.on('terminal-output', data => { if (term) term.write(data); termConnected = true; });
+socket.on('terminal-ready', () => { termConnected = true; if (term) { term.clear(); addLog('info', 'Terminal connected'); } });
+socket.on('terminal-exit', data => { termConnected = false; if (term) term.writeln(`\x1b[31m\r\nExited (${data.code})\x1b[0m`); });
+
+// ============================================================================
+// UI Helpers
+// ============================================================================
+function addMessage(role, content, sender) {
+  const el = document.createElement('div'); el.className = `message ${role}`;
+  if (role === 'assistant') {
+    el.innerHTML = `<div class="sender">${sender || 'Agent'}</div><div class="content">${formatMarkdown(content)}</div>`;
+  } else { el.innerHTML = `<div class="content">${esc(content)}</div>`; }
+  document.getElementById('messages').appendChild(el);
+  scrollToBottom();
+  return el;
+}
+function showTyping() {
+  const el = document.createElement('div'); el.className = 'typing'; el.id = 'typingIndicator';
+  el.textContent = (agentProfile?.name || 'Agent') + ' is thinking';
+  document.getElementById('messages').appendChild(el); scrollToBottom();
+}
+function removeTyping() { const el = document.getElementById('typingIndicator'); if (el) el.remove(); }
+function scrollToBottom() { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; }
+function setStatus(online) {
+  document.getElementById('statusDot').className = `dot ${online ? 'online' : 'offline'}`;
+  document.getElementById('statusText').textContent = online ? 'Connected' : 'Disconnected';
+}
+function addLog(level, text) {
+  const el = document.createElement('div'); el.className = `log-entry ${level}`;
+  el.innerHTML = `<span class="ts">${new Date().toLocaleTimeString()}</span>${esc(text)}`;
+  const panel = document.getElementById('logPanel'); panel.appendChild(el); panel.scrollTop = panel.scrollHeight;
+}
+function esc(text) { const d = document.createElement('div'); d.textContent = text; return d.innerHTML; }
+function escAttr(s) { return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
+function formatSize(bytes) {
+  if (!bytes) return '0 B';
+  const k = 1024, sizes = ['B','KB','MB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k,i)).toFixed(1)) + ' ' + sizes[i];
+}
+function formatMarkdown(text) {
+  if (!text) return '';
+  let html = esc(text);
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
+
+// Keyboard
+document.getElementById('input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeFileViewer(); hideContextMenu(); }
+  if (e.key === 'F2' && selectedPath) { e.preventDefault(); startRename(selectedPath, fileData.some(f => f.path === selectedPath && f.isDir)); }
+  if (e.key === 'Delete' && selectedPath && !document.querySelector('.rename-input')) {
+    e.preventDefault(); deleteFile(selectedPath, fileData.some(f => f.path === selectedPath && f.isDir));
+  }
+});
+document.getElementById('input').addEventListener('input', function() {
+  this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+});
+
+// Sidebar resize
+(function() {
+  const sidebar = document.getElementById('sidebar'), handle = document.getElementById('sidebarResize');
+  let startX, startW;
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault(); startX = e.clientX; startW = sidebar.offsetWidth; handle.classList.add('active');
+    document.addEventListener('mousemove', drag); document.addEventListener('mouseup', up);
+  });
+  function drag(e) { sidebar.style.width = Math.max(180, Math.min(500, startW + (e.clientX - startX))) + 'px'; }
+  function up() { handle.classList.remove('active'); document.removeEventListener('mousemove', drag); document.removeEventListener('mouseup', up);
+    try { localStorage.setItem('agent-sidebar-width', sidebar.style.width); } catch {} }
+  try { const s = localStorage.getItem('agent-sidebar-width'); if (s) sidebar.style.width = s; } catch {}
+})();
+</script>
+</body>
+</html>

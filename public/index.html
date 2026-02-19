@@ -1,0 +1,2391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Society Agent</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+
+  /* Header */
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px;
+    display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 16px; font-weight: 600; }
+  header .status { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; }
+  header .dot.online { background: var(--green); }
+  header .dot.offline { background: var(--red); }
+
+  /* Layout */
+  .main { display: flex; flex: 1; overflow: hidden; }
+  .sidebar { width: 260px; background: var(--surface); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow-y: auto; }
+  .chat-area { flex: 1; display: flex; flex-direction: column; }
+
+  /* Sidebar */
+  .sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--muted); padding: 12px 16px 8px; }
+  .stat-row { display: flex; justify-content: space-between; padding: 6px 16px; font-size: 13px; }
+  .stat-row .label { color: var(--muted); }
+  .stat-row .value { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
+  .stat-row .value.expandable { cursor: pointer; }
+  .stat-row .value.expanded { white-space: normal; word-break: break-all; max-width: none; }
+  .agent-card { padding: 10px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .agent-card:hover { background: rgba(88,166,255,0.08); }
+  .agent-card .name { font-size: 13px; font-weight: 500; }
+  .agent-card .role { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .agent-card .status-badge { display: inline-block; font-size: 10px; padding: 1px 6px;
+    border-radius: 10px; margin-top: 4px; }
+  .agent-card .status-badge.idle { background: rgba(139,148,158,0.2); color: var(--muted); }
+  .agent-card .status-badge.working { background: rgba(88,166,255,0.2); color: var(--accent); }
+  .agent-card .status-badge.completed { background: rgba(63,185,80,0.2); color: var(--green); }
+  .agent-card .status-badge.error { background: rgba(248,81,73,0.2); color: var(--red); }
+
+  /* Sidebar resizable */
+  .sidebar { min-width: 180px; max-width: 600px; position: relative; }
+  .sidebar-resize { position: absolute; top: 0; right: -3px; width: 6px; height: 100%;
+    cursor: col-resize; z-index: 10; }
+  .sidebar-resize:hover, .sidebar-resize.active { background: var(--accent); opacity: 0.5; }
+
+  /* File tree */
+  .file-tree { font-size: 12px; user-select: none; overflow-y: auto; flex: 1; }
+  .tree-node { }
+  .tree-row { display: flex; align-items: center; gap: 4px; padding: 3px 8px; cursor: pointer;
+    white-space: nowrap; border: 2px solid transparent; transition: background 0.1s; }
+  .tree-row:hover { background: rgba(88,166,255,0.08); }
+  .tree-row.selected { background: rgba(88,166,255,0.15); }
+  .tree-row.drag-over { border-color: var(--accent); background: rgba(88,166,255,0.12); }
+  .tree-row .chevron { width: 16px; text-align: center; font-size: 10px; color: var(--muted);
+    transition: transform 0.15s; flex-shrink: 0; }
+  .tree-row .chevron.open { transform: rotate(90deg); }
+  .tree-row .chevron.empty { visibility: hidden; }
+  .tree-row .icon { width: 16px; text-align: center; flex-shrink: 0; font-size: 13px; }
+  .tree-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+  .tree-row .size { color: var(--muted); font-size: 10px; margin-left: auto; flex-shrink: 0; }
+  .tree-row .actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; margin-left: 4px; }
+  .tree-row:hover .actions { opacity: 1; }
+  .tree-row .act-btn { background: none; border: none; color: var(--muted); cursor: pointer;
+    font-size: 11px; padding: 0 2px; line-height: 1; }
+  .tree-row .act-btn:hover { color: var(--text); }
+  .tree-children { }
+  .tree-children.collapsed { display: none; }
+  .tree-row.dir-row .name { color: var(--accent); font-weight: 500; }
+  /* Drag ghost */
+  .drag-ghost { position: fixed; pointer-events: none; z-index: 1000; background: var(--surface);
+    border: 1px solid var(--accent); border-radius: 4px; padding: 3px 10px; font-size: 12px;
+    color: var(--text); opacity: 0.9; }
+
+  /* Context menu */
+  .ctx-menu { position: fixed; z-index: 200; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 0; min-width: 160px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+  .ctx-menu .ctx-item { padding: 6px 14px; font-size: 12px; cursor: pointer; display: flex;
+    align-items: center; gap: 8px; }
+  .ctx-menu .ctx-item:hover { background: rgba(88,166,255,0.12); }
+  .ctx-menu .ctx-sep { height: 1px; background: var(--border); margin: 4px 0; }
+  .ctx-menu .ctx-item .shortcut { margin-left: auto; color: var(--muted); font-size: 10px; }
+  .ctx-menu .ctx-item.danger { color: var(--red); }
+  .ctx-menu .ctx-item.danger:hover { background: rgba(248,81,73,0.12); }
+
+  /* Inline rename input */
+  .rename-input { background: var(--bg); border: 1px solid var(--accent); color: var(--text);
+    font-size: 12px; padding: 1px 4px; border-radius: 3px; outline: none; width: 100%; font-family: inherit; }
+
+  /* Upload area */
+  .upload-area { border: 2px dashed var(--border); border-radius: 8px; padding: 16px; margin: 8px 12px;
+    text-align: center; cursor: pointer; transition: border-color 0.2s, background 0.2s; font-size: 12px; color: var(--muted); }
+  .upload-area:hover { border-color: var(--accent); }
+  .upload-area.dragover { border-color: var(--green); background: rgba(63,185,80,0.08); }
+  .upload-area input[type=file] { display: none; }
+  .upload-row { display: flex; gap: 6px; margin: 4px 12px; }
+  .upload-row .btn { flex: 1; font-size: 11px; padding: 5px 0; }
+
+  /* API Key Modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex;
+    align-items: center; justify-content: center; z-index: 100; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 24px; width: 440px; max-width: 90vw; }
+  .modal h2 { font-size: 18px; margin-bottom: 8px; }
+  .modal p { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
+  .modal input { width: 100%; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 14px; outline: none; }
+  .modal input:focus { border-color: var(--accent); }
+  .modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+
+  /* Chat messages */
+  .messages { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .message { max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 14px;
+    line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+  .message.user { align-self: flex-end; background: #1f6feb; border-bottom-right-radius: 4px; }
+  .message.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border);
+    border-bottom-left-radius: 4px; }
+  .message.system { align-self: center; color: var(--muted); font-size: 12px; font-style: italic; }
+  .message.assistant .sender { font-size: 11px; color: var(--accent); margin-bottom: 4px; font-weight: 500; }
+  .message code { background: rgba(110,118,129,0.2); padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+  .message pre { background: var(--bg); padding: 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; }
+  .message pre code { background: none; padding: 0; }
+  .typing { align-self: flex-start; color: var(--muted); font-size: 13px; }
+  .typing::after { content: '...'; animation: dots 1.5s steps(3) infinite; }
+  @keyframes dots { 0% { content: '.'; } 33% { content: '..'; } 66% { content: '...'; } }
+
+  /* Input area */
+  .input-area { padding: 12px 20px; border-top: 1px solid var(--border); background: var(--surface); }
+  .input-row { display: flex; gap: 8px; }
+  .input-row textarea { flex: 1; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: 14px; font-family: inherit;
+    resize: none; outline: none; min-height: 44px; max-height: 200px; }
+  .input-row textarea:focus { border-color: var(--accent); }
+
+  /* Buttons */
+  btn, button { cursor: pointer; }
+  .btn { padding: 8px 16px; border-radius: 6px; border: none; font-size: 13px; font-weight: 500;
+    cursor: pointer; transition: opacity 0.15s; }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-secondary { background: var(--border); color: var(--text); }
+  .btn-send { padding: 10px 20px; background: var(--accent); color: #fff; border: none;
+    border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; }
+  .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Attachments */
+  .attach-btn { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 6px;
+    padding: 8px 10px; cursor: pointer; font-size: 16px; line-height: 1; }
+  .attach-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .attach-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px 0; }
+  .attach-chip { display: flex; align-items: center; gap: 4px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 8px; font-size: 12px; color: var(--text); }
+  .attach-chip img { width: 20px; height: 20px; border-radius: 3px; object-fit: cover; }
+  .attach-chip .remove { cursor: pointer; color: var(--muted); margin-left: 2px; }
+  .attach-chip .remove:hover { color: var(--red); }
+  .msg-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .msg-attachments img { max-width: 200px; max-height: 150px; border-radius: 6px; cursor: pointer; }
+  .msg-attachments .file-badge { font-size: 11px; color: var(--muted); background: rgba(110,118,129,0.15);
+    padding: 2px 8px; border-radius: 4px; }
+
+  /* Log panel */
+  .log-panel { height: 180px; border-top: 1px solid var(--border); background: var(--bg);
+    overflow-y: auto; padding: 8px 16px; font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 12px; }
+  .log-entry { color: var(--muted); padding: 1px 0; }
+  .log-entry.info { color: var(--accent); }
+  .log-entry.warn { color: var(--yellow); }
+  .log-entry.error { color: var(--red); }
+  .log-entry .ts { color: #484f58; margin-right: 8px; }
+
+  /* Welcome */
+  .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    flex: 1; color: var(--muted); text-align: center; padding: 40px; }
+  .welcome h2 { font-size: 20px; color: var(--text); margin-bottom: 8px; }
+  .welcome p { font-size: 14px; max-width: 500px; line-height: 1.6; }
+  .welcome .features { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px;
+    text-align: left; }
+  .welcome .feature { padding: 12px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; }
+  .welcome .feature .title { font-size: 13px; color: var(--text); font-weight: 500; }
+  .welcome .feature .desc { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  /* Tab bar */
+  .tab-bar { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .tab-bar .tab { padding: 8px 20px; font-size: 13px; cursor: pointer; color: var(--muted);
+    border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s; }
+  .tab-bar .tab:hover { color: var(--text); }
+  .tab-bar .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-content { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+  .tab-content.active { display: flex; }
+
+  /* Terminal pane */
+  .terminal-container { flex: 1; background: #000; padding: 4px; overflow: hidden; }
+  .terminal-container .xterm { height: 100%; }
+  .terminal-toolbar { display: flex; gap: 8px; padding: 8px 12px; background: var(--surface);
+    border-bottom: 1px solid var(--border); align-items: center; font-size: 12px; }
+  .terminal-toolbar select { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+
+  /* File viewer overlay */
+  .file-viewer { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex;
+    align-items: center; justify-content: center; z-index: 90; }
+  .file-viewer-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    width: 80vw; max-width: 900px; max-height: 80vh; display: flex; flex-direction: column; overflow: hidden; }
+  .file-viewer-panel.pdf-viewer { max-width: 1100px; height: 90vh; max-height: 90vh; }
+  .file-viewer-header { display: flex; align-items: center; padding: 12px 16px;
+    border-bottom: 1px solid var(--border); gap: 8px; }
+  .file-viewer-header .title { flex: 1; font-size: 14px; font-weight: 500; }
+  .file-viewer-header .meta { font-size: 12px; color: var(--muted); }
+  .file-viewer-header .view-toggle { display: flex; gap: 4px; }
+  .file-viewer-header .view-toggle button { background: var(--bg); border: 1px solid var(--border);
+    color: var(--muted); padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+  .file-viewer-header .view-toggle button.active { background: var(--accent); color: white; border-color: var(--accent); }
+  .file-viewer-header .close-btn { background: none; border: none; color: var(--muted); font-size: 20px;
+    cursor: pointer; padding: 0 4px; line-height: 1; }
+  .file-viewer-header .close-btn:hover { color: var(--text); }
+  .file-viewer-body { flex: 1; overflow: auto; padding: 16px; }
+  .file-viewer-body pre { margin: 0; white-space: pre-wrap; word-break: break-all;
+    font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 13px; line-height: 1.5; }
+  .file-viewer-body iframe { width: 100%; height: 100%; border: none; }
+  .file-viewer-body.pdf-body { padding: 0; }
+  /* Markdown rendered view */
+  .file-viewer-body .markdown-body { font-size: 14px; line-height: 1.6; padding: 8px; }
+  .file-viewer-body .markdown-body h1 { font-size: 1.8em; margin: 0.5em 0 0.3em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  .file-viewer-body .markdown-body h2 { font-size: 1.5em; margin: 0.4em 0 0.2em; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }
+  .file-viewer-body .markdown-body h3 { font-size: 1.25em; margin: 0.3em 0 0.15em; }
+  .file-viewer-body .markdown-body p { margin: 0.5em 0; }
+  .file-viewer-body .markdown-body ul, .file-viewer-body .markdown-body ol { margin: 0.5em 0; padding-left: 1.5em; }
+  .file-viewer-body .markdown-body li { margin: 0.2em 0; }
+  .file-viewer-body .markdown-body code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+  .file-viewer-body .markdown-body pre { background: var(--bg); padding: 12px; border-radius: 8px;
+    overflow-x: auto; margin: 0.5em 0; }
+  .file-viewer-body .markdown-body pre code { background: none; padding: 0; }
+  .file-viewer-body .markdown-body blockquote { border-left: 4px solid var(--accent); margin: 0.5em 0;
+    padding-left: 1em; color: var(--muted); }
+  .file-viewer-body .markdown-body table { border-collapse: collapse; width: 100%; margin: 0.5em 0; }
+  .file-viewer-body .markdown-body th, .file-viewer-body .markdown-body td { border: 1px solid var(--border);
+    padding: 8px 12px; text-align: left; }
+  .file-viewer-body .markdown-body th { background: var(--bg); font-weight: 600; }
+  .file-viewer-body .markdown-body a { color: var(--accent); text-decoration: none; }
+  .file-viewer-body .markdown-body a:hover { text-decoration: underline; }
+  .file-viewer-body .markdown-body img { max-width: 100%; height: auto; border-radius: 8px; }
+
+  /* Agent selector (above chat input) */
+  .agent-selector { display: flex; align-items: center; gap: 8px; padding: 6px 20px;
+    border-bottom: 1px solid var(--border); background: var(--surface); font-size: 12px; }
+  .agent-selector label { color: var(--muted); }
+  .agent-selector select { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 8px; border-radius: 4px; font-size: 12px; min-width: 140px; }
+  .agent-selector .agent-info { color: var(--muted); font-size: 11px; margin-left: 4px; }
+  .agent-selector .agent-indicator { display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    margin-right: 4px; }
+  .agent-selector .agent-indicator.active { background: var(--green); }
+  .agent-selector .agent-indicator.idle { background: var(--yellow); }
+  .agent-selector .agent-indicator.disabled { background: var(--red); }
+
+  /* Project management panel (tab) */
+  .projects-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px; padding: 16px 20px; overflow-y: auto; flex: 1; }
+  .project-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; display: flex; flex-direction: column; gap: 10px; transition: border-color 0.2s; }
+  .project-card:hover { border-color: var(--accent); }
+  .project-card .project-header { display: flex; align-items: center; gap: 10px; }
+  .project-card .project-icon { width: 40px; height: 40px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center; font-size: 20px;
+    background: rgba(88,166,255,0.15); }
+  .project-card .project-meta { flex: 1; }
+  .project-card .project-name { font-size: 15px; font-weight: 600; }
+  .project-card .project-desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .project-card .project-folder { font-size: 11px; color: var(--accent); font-family: monospace; }
+  .project-card .project-agents { display: flex; flex-wrap: wrap; gap: 6px; }
+  .project-card .project-agent-chip { font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: rgba(88,166,255,0.08); color: var(--text); border: 1px solid var(--border); display: flex; align-items: center; gap: 4px; }
+  .project-card .project-agent-chip .chip-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .project-card .project-agent-chip .chip-dot.supervisor { background: var(--yellow); }
+  .project-card .project-agent-chip .chip-dot.worker { background: var(--green); }
+  .project-card .project-stats { display: flex; gap: 12px; font-size: 11px; color: var(--muted); }
+  .project-card .project-actions { display: flex; gap: 6px; margin-top: 4px; }
+  .project-card .project-actions .btn { font-size: 11px; padding: 4px 10px; }
+  .project-add-card { background: var(--surface); border: 2px dashed var(--border); border-radius: 10px;
+    padding: 30px 16px; display: flex; align-items: center; justify-content: center;
+    font-size: 14px; color: var(--muted); cursor: pointer; transition: border-color 0.2s, color 0.2s; }
+  .project-add-card:hover { border-color: var(--accent); color: var(--accent); }
+  .agent-add-card { background: transparent; border: 2px dashed var(--border); border-radius: 10px;
+    display: flex; align-items: center; justify-content: center; min-height: 140px;
+    cursor: pointer; color: var(--muted); font-size: 14px; transition: border-color 0.2s; }
+  .agent-add-card:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Agent edit modal */
+  .modal.wide { width: 560px; }
+  .modal .form-group { margin-bottom: 12px; }
+  .modal .form-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .modal .form-group input, .modal .form-group textarea, .modal .form-group select {
+    width: 100%; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 13px; outline: none; font-family: inherit; }
+  .modal .form-group input:focus, .modal .form-group textarea:focus { border-color: var(--accent); }
+  .modal .form-group textarea { min-height: 80px; resize: vertical; }
+  .modal .form-row { display: flex; gap: 12px; }
+  .modal .form-row .form-group { flex: 1; }
+  .modal .form-group .checkbox-row { display: flex; align-items: center; gap: 8px; }
+  .modal .form-group .checkbox-row input { width: auto; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>&#9670; Society Agent</h1>
+  <div class="status">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">Connecting...</span>
+    <!-- kilocode_change - manual reconnect button -->
+    <button id="reconnectBtn" onclick="manualReconnect()" style="margin-left:8px;background:none;border:1px solid var(--border);color:var(--muted);cursor:pointer;font-size:11px;padding:2px 8px;border-radius:4px;display:none" title="Click to reconnect">↻ Reconnect</button>
+  </div>
+  <div style="flex:1"></div>
+  <!-- kilocode_change - Clear & Reset button for troubleshooting -->
+  <button class="btn btn-secondary" onclick="clearAndReset()" style="font-size:11px;margin-right:8px;color:var(--yellow)" title="Clear all state and reload">&#9888; Reset</button>
+  <button class="btn btn-secondary" onclick="showApiKeyModal()" style="font-size:12px">&#9881; Settings</button>
+</header>
+
+<div class="main">
+  <div class="sidebar" id="sidebar" style="width:280px">
+    <div class="sidebar-resize" id="sidebarResize"></div>
+    <!-- System Info -->
+    <h2>System</h2>
+    <div class="stat-row"><span class="label">Status</span><span class="value" id="sysStatus">-</span></div>
+    <div class="stat-row"><span class="label">Messages</span><span class="value" id="msgCount">0</span></div>
+    <div class="stat-row"><span class="label">API Key</span><span class="value" id="apiKeyStatus">-</span></div>
+    <div class="stat-row"><span class="label">Output</span><span class="value expandable" id="outputDir" title="" onclick="this.classList.toggle('expanded')">projects/</span></div>
+    <div class="stat-row"><span class="label">Files</span><span class="value" id="fileCount">0</span></div>
+    <!-- kilocode_change start - usage tracking display -->
+    <div class="stat-row" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+      <span class="label">💰 Tokens</span>
+      <span class="value" id="tokenCount" title="Click to see details" style="cursor:pointer" onclick="showUsageDetails()">0</span>
+    </div>
+    <div class="stat-row"><span class="label">💵 Est. Cost</span><span class="value" id="costDisplay" style="color:var(--green)">$0.00</span></div>
+    <div class="stat-row"><span class="label">📊 API Calls</span><span class="value" id="callCount">0</span></div>
+    <!-- kilocode_change end -->
+
+    <!-- File Explorer -->
+    <h2 style="margin-top:12px;display:flex;align-items:center;gap:6px">
+      Explorer
+      <span style="flex:1"></span>
+      <button class="act-btn" onclick="promptNewFileInTree()" title="New File" style="font-size:14px;background:none;border:none;color:var(--muted);cursor:pointer">&#128196;+</button>
+      <button class="act-btn" onclick="promptNewFolderInTree()" title="New Folder" style="font-size:14px;background:none;border:none;color:var(--muted);cursor:pointer">&#128193;+</button>
+      <button class="act-btn" onclick="refreshFiles()" title="Refresh" style="font-size:13px;background:none;border:none;color:var(--muted);cursor:pointer">&#8635;</button>
+    </h2>
+    <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()" style="margin:4px 8px;padding:8px">
+      &#128228; Drop files or click
+      <input type="file" id="fileInput" multiple onchange="handleFileSelect(event)">
+    </div>
+    <div id="fileTree" class="file-tree">
+      <div style="padding:16px;color:var(--muted);font-size:12px">No files yet</div>
+    </div>
+
+    <!-- Projects -->
+    <h2 style="margin-top:8px">Projects</h2>
+    <div id="projectList">
+      <div style="padding:8px 16px;color:var(--muted);font-size:12px">No projects</div>
+    </div>
+  </div>
+
+  <div class="chat-area">
+    <div class="tab-bar">
+      <div class="tab active" onclick="switchTab('chat')" id="tabChat">&#128172; Chat</div>
+      <div class="tab" onclick="switchTab('projects')" id="tabProjects">&#128193; Projects</div>
+      <div class="tab" onclick="switchTab('terminal')" id="tabTerminal">&#9000; Terminal</div>
+    </div>
+
+    <div class="tab-content active" id="paneChat">
+    <!-- Agent selector bar (organized by project) -->
+    <div class="agent-selector" id="agentSelector">
+      <label>Agent:</label>
+      <select id="agentSelect" onchange="onAgentChange()">
+        <option value="">Default (Society Agent)</option>
+      </select>
+      <span class="agent-info" id="agentSelectInfo"></span>
+    </div>
+    <div class="messages" id="messages">
+      <div class="welcome" id="welcome">
+        <h2>Society Agent Server</h2>
+        <p>Multi-agent collaboration system. Chat naturally, or ask it to build something &mdash; files appear in the sidebar.</p>
+        <div class="features">
+          <div class="feature">
+            <div class="title">&#128172; Chat</div>
+            <div class="desc">Conversational AI with persistent memory</div>
+          </div>
+          <div class="feature">
+            <div class="title">&#128196; Create Files</div>
+            <div class="desc">"Build a calculator" &rarr; files in projects/</div>
+          </div>
+          <div class="feature">
+            <div class="title">&#129302; Multi-Agent</div>
+            <div class="desc">Complex tasks get supervisor + worker teams</div>
+          </div>
+          <div class="feature">
+            <div class="title">&#128065; Workspace View</div>
+            <div class="desc">See created files, click to view contents</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <div id="attachChips" class="attach-chips" style="display:none"></div>
+      <div class="input-row">
+        <button class="attach-btn" onclick="document.getElementById('chatFileInput').click()" title="Attach files">&#128206;</button>
+        <input type="file" id="chatFileInput" multiple style="display:none" onchange="handleChatAttach(event)" accept="image/*,.txt,.md,.json,.js,.ts,.py,.html,.css,.csv,.xml,.yaml,.yml,.log,.sh,.sql">
+        <textarea id="input" placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
+          rows="1" autofocus></textarea>
+        <button class="btn-send" id="sendBtn" onclick="sendMessage()">Send</button>
+        <button class="btn-stop" id="stopBtn" onclick="stopAgent()" title="Stop agent">&#9632; Stop</button>
+      </div>
+    </div>
+
+    <div class="log-panel" id="logPanel"></div>
+  </div><!-- /paneChat -->
+
+    <!-- Projects management pane -->
+    <div class="tab-content" id="paneProjects">
+      <div style="padding:12px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
+        <h3 style="font-size:14px;font-weight:600;flex:1">Projects</h3>
+        <span style="font-size:12px;color:var(--muted)" id="projectCountInfo">-</span>
+      </div>
+      <div class="projects-grid" id="projectsGrid">
+        <div style="padding:20px;color:var(--muted);font-size:13px">Loading projects...</div>
+      </div>
+    </div><!-- /paneProjects -->
+
+    <div class="tab-content" id="paneTerminal">
+      <div class="terminal-toolbar">
+        <span style="color:var(--muted)">Shell:</span>
+        <select id="termShell">
+          <option value="/bin/bash">bash</option>
+          <option value="/bin/sh">sh</option>
+        </select>
+        <span style="color:var(--muted);margin-left:8px">CWD:</span>
+        <span id="termCwd" style="color:var(--text)">/workspace</span>
+        <div style="flex:1"></div>
+        <button class="btn btn-secondary" onclick="reconnectTerminal()" style="font-size:11px;padding:3px 10px">&#8635; Reconnect</button>
+      </div>
+      <div class="terminal-container" id="terminalContainer"></div>
+    </div><!-- /paneTerminal -->
+  </div>
+</div>
+
+<!-- API Key Modal -->
+<div class="modal-overlay" id="apiKeyModal" style="display:none">
+  <div class="modal">
+    <h2>API Configuration</h2>
+    <p>Enter your Anthropic API key. It will be saved to the server's .env file.</p>
+    <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-...">
+    <div class="actions">
+      <button class="btn btn-secondary" onclick="hideApiKeyModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveApiKey()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Agent Edit/Create Modal -->
+<div class="modal-overlay" id="projectModal" style="display:none">
+  <div class="modal wide">
+    <h2 id="projectModalTitle">Create Project</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px" id="projectModalDesc">Create a project to organize agents around a shared folder and knowledge base.</p>
+    <!-- kilocode_change start - simplified: name becomes folder/id -->
+    <div class="form-group">
+      <label>Project Name (also used as folder name)</label>
+      <input type="text" id="projectFormName" placeholder="my-project">
+      <span style="font-size:11px;color:var(--muted)">Will create folder: <code id="projectFolderPreview">projects/</code></span>
+    </div>
+    <!-- kilocode_change end -->
+    <div class="form-group">
+      <label>Description</label>
+      <input type="text" id="projectFormDesc" placeholder="What is this project about?">
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" onclick="hideProjectModal()">Cancel</button>
+      <button class="btn btn-primary" id="projectFormSubmit" onclick="submitProjectForm()">Create</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+// kilocode_change start - Enhanced Socket.IO with auto-reconnect and status
+
+// Global error handler - prevent page from breaking
+window.onerror = function(msg, url, line, col, error) {
+  console.error('Global error:', msg, error);
+  try { addLog('error', `JS Error: ${msg}`); } catch {}
+  return false; // Don't suppress error in console
+};
+
+// Handle unhandled promise rejections
+window.addEventListener('unhandledrejection', function(event) {
+  console.error('Unhandled rejection:', event.reason);
+  try { addLog('error', `Promise Error: ${event.reason}`); } catch {}
+});
+
+const socket = io(API, {
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000,
+  timeout: 20000,
+  forceNew: false, // Reuse connection
+});
+let messageCount = 0;
+let isStreaming = false;
+let currentStreamEl = null;
+let streamText = '';
+let chatAttachments = []; // { name, type, dataUrl, base64, mediaType }
+let reconnectAttempt = 0;
+
+// ============================================================================
+// Socket.IO Events
+// ============================================================================
+
+socket.on('connect', () => {
+  try {
+    reconnectAttempt = 0;
+    setStatus(true);
+    addLog('info', 'Connected to Society Agent server');
+    checkApiKey();
+    checkServerStatus();
+    // Reload data after reconnect
+    loadProjects();
+  } catch (e) {
+    console.error('Error in connect handler:', e);
+  }
+});
+
+socket.on('disconnect', (reason) => {
+  setStatus(false);
+  addLog('warn', `Disconnected: ${reason}`);
+  if (reason === 'io server disconnect') {
+    // Server disconnected us, try to reconnect
+    socket.connect();
+  }
+});
+
+socket.on('reconnect_attempt', (attempt) => {
+  reconnectAttempt = attempt;
+  setStatus(false, `Reconnecting... (${attempt})`);
+  addLog('info', `Reconnection attempt ${attempt}`);
+});
+
+socket.on('reconnect', (attempt) => {
+  addLog('info', `Reconnected after ${attempt} attempts`);
+});
+
+socket.on('reconnect_error', (error) => {
+  addLog('error', `Reconnection error: ${error.message}`);
+});
+
+socket.on('reconnect_failed', () => {
+  addLog('error', 'Reconnection failed - please refresh page');
+  setStatus(false, 'Disconnected - refresh page');
+});
+// kilocode_change end
+
+// kilocode_change start - Usage tracking events
+socket.on('usage', (data) => {
+  // Individual usage entry - update totals
+  console.log('[Usage]', data);
+  fetchUsageSummary();
+});
+
+socket.on('usage-summary', (summary) => {
+  updateUsageDisplay(summary);
+});
+
+socket.on('activity', (data) => {
+  console.log('[Activity]', data.type, data.summary);
+  // Could show a toast or update activity feed
+});
+
+function updateUsageDisplay(summary) {
+  const tokenEl = document.getElementById('tokenCount');
+  const costEl = document.getElementById('costDisplay');
+  const callEl = document.getElementById('callCount');
+  
+  if (tokenEl) tokenEl.textContent = formatNumber(summary.totalTokens);
+  if (costEl) {
+    const cost = summary.totalCostUsd;
+    costEl.textContent = cost < 0.01 ? `$${(cost * 100).toFixed(2)}¢` : `$${cost.toFixed(4)}`;
+    // Color code by cost
+    if (cost > 1) costEl.style.color = 'var(--red)';
+    else if (cost > 0.1) costEl.style.color = 'var(--yellow)';
+    else costEl.style.color = 'var(--green)';
+  }
+  if (callEl) callEl.textContent = summary.callCount;
+}
+
+function formatNumber(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return n.toString();
+}
+
+async function fetchUsageSummary() {
+  try {
+    const res = await fetch('/api/usage');
+    if (res.ok) {
+      const summary = await res.json();
+      updateUsageDisplay(summary);
+    }
+  } catch (e) {
+    console.warn('Failed to fetch usage:', e);
+  }
+}
+
+function showUsageDetails() {
+  fetch('/api/usage').then(r => r.json()).then(summary => {
+    let html = `<h3>Token Usage Summary</h3>
+      <p><strong>Total:</strong> ${formatNumber(summary.totalTokens)} tokens</p>
+      <p><strong>Input:</strong> ${formatNumber(summary.totalInputTokens)} | <strong>Output:</strong> ${formatNumber(summary.totalOutputTokens)}</p>
+      <p><strong>Cost:</strong> $${summary.totalCostUsd.toFixed(4)}</p>
+      <p><strong>API Calls:</strong> ${summary.callCount}</p>
+      <h4 style="margin-top:12px">By Agent:</h4>
+      <ul style="font-size:12px;margin:0;padding-left:20px">`;
+    for (const [agentId, data] of Object.entries(summary.byAgent || {})) {
+      html += `<li>${agentId}: ${formatNumber(data.inputTokens + data.outputTokens)} tokens ($${data.costUsd.toFixed(4)}, ${data.callCount} calls)</li>`;
+    }
+    html += '</ul>';
+    
+    // Simple alert-style modal
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML = `<div class="modal" style="max-width:500px">
+      ${html}
+      <div class="actions"><button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Close</button></div>
+    </div>`;
+    document.body.appendChild(overlay);
+  }).catch(e => alert('Failed to load usage: ' + e.message));
+}
+
+// Fetch initial usage on connect
+setTimeout(fetchUsageSummary, 1000);
+// kilocode_change end
+
+// Streaming agent messages
+let streamDidFire = false;
+socket.on('agent-message', (data) => {
+  // kilocode_change - Filter to only show messages for selected agent
+  // If an agent is selected and this message is from a different agent, ignore it
+  if (selectedAgentId && data.agentId && data.agentId !== selectedAgentId) {
+    // Log it but don't display in chat
+    addLog('info', `[${data.agentName || data.agentId}] ${(data.message || '').substring(0, 50)}...`);
+    return;
+  }
+  
+  if (data.isStreaming) {
+    streamDidFire = true;
+    if (!currentStreamEl) {
+      removeTyping();
+      const senderName = data.agentName || 'Society Agent';
+      currentStreamEl = addMessage('assistant', '', senderName);
+      streamText = '';
+    }
+    streamText += data.message;
+    // kilocode_change - Null check in case element was removed from DOM
+    const contentEl = currentStreamEl?.querySelector('.content');
+    if (contentEl) {
+      contentEl.textContent = streamText;
+    }
+    scrollToBottom();
+  } else if (data.isDone) {
+    // Streaming complete - format the final message
+    if (currentStreamEl && streamText) {
+      const contentEl = currentStreamEl.querySelector('.content');
+      if (contentEl) {
+        contentEl.innerHTML = formatMarkdown(streamText);
+      }
+    }
+    currentStreamEl = null;
+    streamText = '';
+    isStreaming = false;
+    document.getElementById('sendBtn').disabled = false;
+    document.getElementById('stopBtn').style.display = 'none'; // kilocode_change - hide stop
+    removeTyping();
+  }
+});
+
+// Purpose events
+socket.on('purpose-started', (data) => {
+  addLog('info', `Purpose started: ${data.description}`);
+});
+
+// kilocode_change start - Stop agent function
+function stopAgent() {
+  if (!isStreaming) return;
+  
+  // Tell server to stop
+  const agentId = selectedAgentId || 'default';
+  socket.emit('stop-agent', { agentId });
+  
+  // Update UI immediately
+  if (currentStreamEl) {
+    streamText += '\n\n*[Stopped by user]*';
+    const contentEl = currentStreamEl.querySelector('.content');
+    if (contentEl) contentEl.innerHTML = formatMarkdown(streamText);
+  }
+  currentStreamEl = null;
+  streamText = '';
+  isStreaming = false;
+  document.getElementById('sendBtn').disabled = false;
+  document.getElementById('stopBtn').style.display = 'none';
+  removeTyping();
+  addLog('info', 'Agent stopped by user');
+}
+// kilocode_change end
+
+// kilocode_change start - Show tool executions in chat so user sees what agent is doing
+socket.on('tool-execution', (data) => {
+  // Only show for selected agent (or if no agent selected, show all)
+  if (selectedAgentId && data.agentId && data.agentId !== selectedAgentId) {
+    addLog('info', `[${data.agentName || data.agentId}] ${data.details}`);
+    return;
+  }
+  
+  // Show tool execution as a progress message
+  if (data.status === 'started') {
+    const toolMsg = `\n🔧 **${data.details}**\n`;
+    if (currentStreamEl) {
+      streamText += toolMsg;
+      const contentEl = currentStreamEl.querySelector('.content');
+      if (contentEl) contentEl.textContent = streamText;
+      scrollToBottom();
+    } else {
+      // No stream active - show as system message
+      addMessage('system', `🔧 ${escapeHtml(data.details)}`);
+    }
+  }
+});
+// kilocode_change end
+
+socket.on('team-formed', (data) => {
+  addLog('info', `Team formed: ${data.teamSize} agents`);
+  loadProjects();
+});
+
+socket.on('progress-update', (data) => {
+  addLog('info', `Progress: ${JSON.stringify(data.progress)}`);
+});
+
+socket.on('agent-status-change', (data) => {
+  addLog('info', `Agent ${data.agentId}: ${data.status}`);
+  loadProjects();
+});
+
+// File creation events
+socket.on('file-created', (data) => {
+  addLog('info', `File created: ${data.relativePath} (${formatSize(data.size)})`);
+  addMessage('system', `&#128196; Created: ${data.relativePath} (${formatSize(data.size)})`);
+  refreshFiles();
+});
+
+socket.on('file-deleted', (data) => {
+  addLog('info', `Deleted: ${data.relativePath}${data.wasDir ? ' (directory)' : ''}`);
+  refreshFiles();
+});
+
+// System events (multi-agent)
+socket.on('system-event', (data) => {
+  addLog(data.type.includes('error') ? 'error' : 'info', data.message);
+  if (data.type === 'purpose-launching') {
+    addMessage('system', data.message);
+  }
+});
+
+// ============================================================================
+// API Functions
+// ============================================================================
+
+async function checkServerStatus() {
+  try {
+    const res = await fetch(`${API}/api/status`);
+    const data = await res.json();
+    document.getElementById('sysStatus').textContent = data.status === 'ok' ? 'Online' : 'Error';
+    if (data.outputDir) {
+      const el = document.getElementById('outputDir');
+      // Show short path, full path in tooltip
+      const short = data.outputDir.replace(/^\/workspace\//, '');
+      el.textContent = short;
+      el.title = data.outputDir;
+    }
+    addLog('info', `Server: ${data.environment} | Output: ${data.outputDir || 'projects/'}`);
+    refreshFiles();
+  } catch (e) {
+    document.getElementById('sysStatus').textContent = 'Error';
+    addLog('error', 'Failed to reach server');
+  }
+}
+
+async function checkApiKey() {
+  try {
+    const res = await fetch(`${API}/api/config/api-key`);
+    const data = await res.json();
+    const el = document.getElementById('apiKeyStatus');
+    if (data.configured) {
+      el.textContent = data.masked || 'Set';
+      el.style.color = 'var(--green)';
+    } else {
+      el.textContent = 'Not set';
+      el.style.color = 'var(--red)';
+    }
+  } catch (e) {
+    addLog('error', 'Failed to check API key');
+  }
+}
+
+async function sendMessage() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if ((!text && chatAttachments.length === 0) || isStreaming) return;
+
+  // Hide welcome
+  const welcome = document.getElementById('welcome');
+  if (welcome) welcome.style.display = 'none';
+
+  // Show user message with attachment previews
+  let attachHtml = '';
+  if (chatAttachments.length > 0) {
+    attachHtml = '<div class="msg-attachments">' + chatAttachments.map(a => {
+      if (a.type.startsWith('image/')) {
+        return `<img src="${a.dataUrl}" title="${escapeHtml(a.name)}">`;
+      }
+      return `<span class="file-badge">&#128196; ${escapeHtml(a.name)}</span>`;
+    }).join('') + '</div>';
+  }
+  const msgEl = addMessage('user', text);
+  if (attachHtml) msgEl.querySelector('.content').innerHTML += attachHtml;
+
+  // Build content array for API
+  const contentParts = [];
+  for (const a of chatAttachments) {
+    if (a.type.startsWith('image/')) {
+      contentParts.push({ type: 'image', source: { type: 'base64', media_type: a.mediaType, data: a.base64 } });
+    } else {
+      // Send text files as text content
+      contentParts.push({ type: 'text', text: `[Attached file: ${a.name}]\n${atob(a.base64)}` });
+    }
+  }
+  if (text) contentParts.push({ type: 'text', text: text });
+
+  // Clear attachments
+  chatAttachments = [];
+  renderAttachChips();
+
+  input.value = '';
+  input.style.height = 'auto';
+  messageCount++;
+  document.getElementById('msgCount').textContent = messageCount;
+
+  isStreaming = true;
+  streamDidFire = false;
+  document.getElementById('sendBtn').disabled = true;
+  document.getElementById('stopBtn').style.display = 'inline-block'; // kilocode_change - show stop
+  showTyping();
+
+  try {
+    const agentId = selectedAgentId || undefined;
+    const agentName = selectedAgentId ? (allProjectAgents.find(a => a.id === selectedAgentId)?.name || selectedAgentId) : undefined;
+
+    const res = await fetch(`${API}/api/purpose/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        description: text,
+        attachments: contentParts.length > 1 || contentParts[0]?.type === 'image' ? contentParts : undefined,
+        agentId,
+      }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      removeTyping();
+      addMessage('system', `Error: ${data.error || 'Unknown error'}`);
+      isStreaming = false;
+      document.getElementById('sendBtn').disabled = false;
+      if (res.status === 401) showApiKeyModal();
+      return;
+    }
+
+    // Only show HTTP response if WebSocket streaming didn't already handle it
+    if (!streamDidFire && data.response) {
+      removeTyping();
+      const displayName = data.agentName || agentName || 'Society Agent';
+      const el = addMessage('assistant', '', displayName);
+      el.querySelector('.content').innerHTML = formatMarkdown(data.response);
+      isStreaming = false;
+      document.getElementById('sendBtn').disabled = false;
+    }
+
+    messageCount++;
+    document.getElementById('msgCount').textContent = messageCount;
+    addLog('info', `Response from ${data.agentName || agentName || 'Society Agent'} (history: ${data.historyLength} messages)`);
+  } catch (e) {
+    removeTyping();
+    addMessage('system', `Network error: ${e.message}`);
+    isStreaming = false;
+    document.getElementById('sendBtn').disabled = false;
+  }
+}
+
+async function saveApiKey() {
+  const input = document.getElementById('apiKeyInput');
+  const key = input.value.trim();
+  if (!key) return;
+
+  try {
+    const res = await fetch(`${API}/api/config/api-key`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: key }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      hideApiKeyModal();
+      checkApiKey();
+      addLog('info', 'API key saved successfully');
+    } else {
+      alert(data.error || 'Failed to save');
+    }
+  } catch (e) {
+    alert('Network error');
+  }
+}
+
+async function refreshAgents() {
+  try {
+    const res = await fetch(`${API}/api/agents`);
+    const data = await res.json();
+    const list = document.getElementById('agentList');
+    if (!data.agents || data.agents.length === 0) {
+      list.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">No active agents</div>';
+      return;
+    }
+    list.innerHTML = data.agents.map(a => `
+      <div class="agent-card">
+        <div class="name">${a.name || a.id}</div>
+        <div class="role">${a.role}</div>
+        <span class="status-badge ${a.status}">${a.status}</span>
+      </div>
+    `).join('');
+  } catch (e) {}
+}
+
+// ============================================================================
+// File Explorer - Tree with expand/collapse, drag-drop, context menu
+// ============================================================================
+
+let fileData = [];       // flat list from server
+let expandedDirs = new Set(['']);  // track open folders ('' = root always open)
+let selectedPath = null; // currently selected item
+let dragSrc = null;      // path being dragged
+let treeEventsDelegated = false; // kilocode_change - track if delegated events attached
+
+// Build nested tree from flat file list
+function buildTree(files) {
+  const root = { children: {}, path: '', isDir: true };
+  for (const f of files) {
+    const parts = f.path.split('/');
+    let node = root;
+    let pathSoFar = '';
+    for (let i = 0; i < parts.length; i++) {
+      pathSoFar = pathSoFar ? pathSoFar + '/' + parts[i] : parts[i];
+      if (!node.children[parts[i]]) {
+        node.children[parts[i]] = {
+          name: parts[i], path: pathSoFar,
+          isDir: i < parts.length - 1 || f.isDir,
+          size: f.isDir ? 0 : f.size,
+          children: {},
+        };
+      }
+      node = node.children[parts[i]];
+    }
+    if (!f.isDir) { node.size = f.size; node.isDir = false; }
+  }
+  return root;
+}
+
+function fileIcon(name, isDir) {
+  if (isDir) return '&#128193;';
+  const ext = name.split('.').pop().toLowerCase();
+  const icons = {
+    js:'&#128312;', ts:'&#128309;', py:'&#128013;', html:'&#127760;', css:'&#127912;',
+    json:'&#123;&#125;', md:'&#128221;', txt:'&#128196;', sh:'&#9000;', sql:'&#128451;',
+    yaml:'&#9881;', yml:'&#9881;', xml:'&#128220;', csv:'&#128202;', log:'&#128203;',
+    png:'&#127912;', jpg:'&#127912;', jpeg:'&#127912;', gif:'&#127912;', svg:'&#127912;',
+    pdf:'&#128213;', zip:'&#128230;', tar:'&#128230;', gz:'&#128230;',
+  };
+  return icons[ext] || '&#128196;';
+}
+
+function renderTree(node, depth = 0) {
+  const entries = Object.values(node.children);
+  // Sort: dirs first, then alpha
+  entries.sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  return entries.map(e => {
+    const indent = depth * 16;
+    const isOpen = expandedDirs.has(e.path);
+    const sel = selectedPath === e.path ? ' selected' : '';
+
+    if (e.isDir) {
+      const hasKids = Object.keys(e.children).length > 0;
+      const chevCls = hasKids ? (isOpen ? 'chevron open' : 'chevron') : 'chevron empty';
+      let html = `<div class="tree-node" data-path="${escapeHtml(e.path)}" data-dir="true">
+        <div class="tree-row dir-row${sel}" style="padding-left:${indent + 8}px"
+             draggable="true" data-path="${escapeHtml(e.path)}" data-dir="true">
+          <span class="${chevCls}">&#9654;</span>
+          <span class="icon">${fileIcon(e.name, true)}</span>
+          <span class="name">${escapeHtml(e.name)}</span>
+          <span class="actions">
+            <button class="act-btn" title="New file here" onclick="event.stopPropagation();promptNewFileInDir('${escapeAttr(e.path)}')">+&#128196;</button>
+            <button class="act-btn" title="New folder here" onclick="event.stopPropagation();promptNewFolderInDir('${escapeAttr(e.path)}')">+&#128193;</button>
+          </span>
+        </div>
+        <div class="tree-children ${isOpen ? '' : 'collapsed'}">
+          ${hasKids ? renderTree(e, depth + 1) : ''}
+        </div>
+      </div>`;
+      return html;
+    } else {
+      return `<div class="tree-node" data-path="${escapeHtml(e.path)}">
+        <div class="tree-row${sel}" style="padding-left:${indent + 24}px"
+             draggable="true" data-path="${escapeHtml(e.path)}" data-dir="false">
+          <span class="icon">${fileIcon(e.name, false)}</span>
+          <span class="name">${escapeHtml(e.name)}</span>
+          <span class="size">${formatSize(e.size)}</span>
+        </div>
+      </div>`;
+    }
+  }).join('');
+}
+
+async function refreshFiles() {
+  try {
+    const res = await fetch(`${API}/api/workspace/files`);
+    const data = await res.json();
+    fileData = data.files || [];
+    document.getElementById('fileCount').textContent = `${data.totalFiles} files, ${data.totalDirs} dirs`;
+
+    const tree = document.getElementById('fileTree');
+    if (fileData.length === 0) {
+      tree.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">No files yet &mdash; ask the agent to create something</div>';
+      return;
+    }
+
+    renderTreeFromCache();
+  } catch (e) {
+    addLog('warn', 'Failed to refresh files');
+  }
+}
+
+// kilocode_change start - Render tree from cached data (no API call, instant)
+function renderTreeFromCache() {
+  const tree = document.getElementById('fileTree');
+  if (!tree || fileData.length === 0) return;
+  
+  const root = buildTree(fileData);
+  tree.innerHTML = renderTree(root);
+  attachTreeHandlers();
+}
+// kilocode_change end
+
+// kilocode_change start - Attach delegated event handlers (only once)
+function attachDelegatedTreeEvents() {
+  if (treeEventsDelegated) return;
+  treeEventsDelegated = true;
+  
+  const tree = document.getElementById('fileTree');
+  if (!tree) return;
+
+  // Click handler (event delegation)
+  tree.addEventListener('click', (e) => {
+    const row = e.target.closest('.tree-row');
+    if (!row) return;
+
+    const nodePath = row.dataset.path;
+    const isDir = row.dataset.dir === 'true';
+
+    // Toggle folder expand/collapse
+    if (isDir) {
+      if (expandedDirs.has(nodePath)) {
+        expandedDirs.delete(nodePath);
+      } else {
+        expandedDirs.add(nodePath);
+      }
+      renderTreeFromCache();
+      return;
+    }
+
+    // Select / view file
+    selectedPath = nodePath;
+    tree.querySelectorAll('.tree-row').forEach(r => r.classList.remove('selected'));
+    row.classList.add('selected');
+
+    if (!isDir) {
+      viewFile(nodePath);
+    }
+  });
+
+  // Double-click to rename
+  tree.addEventListener('dblclick', (e) => {
+    const row = e.target.closest('.tree-row');
+    if (!row) return;
+    e.preventDefault();
+    startRename(row.dataset.path, row.dataset.dir === 'true');
+  });
+
+  // Right-click context menu
+  tree.addEventListener('contextmenu', (e) => {
+    const row = e.target.closest('.tree-row');
+    if (!row) return;
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, row.dataset.path, row.dataset.dir === 'true');
+  });
+}
+// kilocode_change end
+
+function attachTreeHandlers() {
+  const tree = document.getElementById('fileTree');
+  
+  // Attach delegated events once
+  attachDelegatedTreeEvents();
+
+  // Drag-and-drop (must re-attach since rows are recreated)
+  tree.querySelectorAll('.tree-row[draggable]').forEach(row => {
+    row.addEventListener('dragstart', (e) => {
+      dragSrc = row.dataset.path;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', row.dataset.path);
+      // Custom ghost
+      const ghost = document.createElement('div');
+      ghost.className = 'drag-ghost';
+      ghost.textContent = row.dataset.path.split('/').pop();
+      document.body.appendChild(ghost);
+      e.dataTransfer.setDragImage(ghost, 0, 0);
+      setTimeout(() => ghost.remove(), 0);
+      row.style.opacity = '0.4';
+    });
+
+    row.addEventListener('dragend', () => {
+      dragSrc = null;
+      row.style.opacity = '';
+      tree.querySelectorAll('.tree-row.drag-over').forEach(r => r.classList.remove('drag-over'));
+    });
+
+    // Only dirs receive drops
+    if (row.dataset.dir === 'true') {
+      row.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        row.classList.add('drag-over');
+      });
+      row.addEventListener('dragleave', () => {
+        row.classList.remove('drag-over');
+      });
+      row.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        row.classList.remove('drag-over');
+        const from = e.dataTransfer.getData('text/plain');
+        const toDir = row.dataset.path;
+        if (!from || from === toDir) return;
+        // Don't drop into self
+        if (toDir.startsWith(from + '/')) return;
+        const fileName = from.split('/').pop();
+        const to = toDir + '/' + fileName;
+        await moveFile(from, to);
+      });
+    }
+  });
+
+  // Also allow drop on root (file tree container) — drop at root level
+  tree.addEventListener('dragover', (e) => {
+    if (e.target === tree) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    }
+  });
+  tree.addEventListener('drop', async (e) => {
+    if (e.target !== tree) return;
+    e.preventDefault();
+    const from = e.dataTransfer.getData('text/plain');
+    if (!from) return;
+    const fileName = from.split('/').pop();
+    await moveFile(from, fileName);
+  });
+
+  // Also support file upload drag-drop onto folder rows
+  tree.querySelectorAll('.tree-row[data-dir="true"]').forEach(row => {
+    row.addEventListener('dragover', (e) => {
+      // Check if it's an external file (not internal drag)
+      if (e.dataTransfer.types.includes('Files')) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        row.classList.add('drag-over');
+      }
+    });
+    row.addEventListener('drop', (e) => {
+      row.classList.remove('drag-over');
+      if (e.dataTransfer.files.length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        uploadFiles(e.dataTransfer.files, row.dataset.path);
+      }
+    });
+  });
+}
+
+// ============================================================================
+// Context Menu
+// ============================================================================
+
+function showContextMenu(x, y, filePath, isDir) {
+  hideContextMenu();
+  selectedPath = filePath;
+
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'ctxMenu';
+
+  const items = [];
+  if (isDir) {
+    items.push({ label: '&#128196;+ New File', action: () => promptNewFileInDir(filePath) });
+    items.push({ label: '&#128193;+ New Folder', action: () => promptNewFolderInDir(filePath) });
+    items.push({ type: 'sep' });
+    items.push({ label: '&#128228; Upload Here', action: () => uploadToDir(filePath) });
+    items.push({ type: 'sep' });
+  } else {
+    items.push({ label: '&#128065; View', action: () => viewFile(filePath) });
+    items.push({ type: 'sep' });
+  }
+  items.push({ label: '&#9998; Rename', action: () => startRename(filePath, isDir), shortcut: 'F2' });
+  items.push({ type: 'sep' });
+  items.push({ label: '&#128465; Delete', action: () => deleteFile(filePath, isDir), cls: 'danger', shortcut: 'Del' });
+
+  menu.innerHTML = items.map(it => {
+    if (it.type === 'sep') return '<div class="ctx-sep"></div>';
+    return `<div class="ctx-item ${it.cls || ''}" data-idx="${items.indexOf(it)}">${it.label}${it.shortcut ? `<span class="shortcut">${it.shortcut}</span>` : ''}</div>`;
+  }).join('');
+
+  // Attach click handlers
+  menu.querySelectorAll('.ctx-item').forEach(el => {
+    const idx = parseInt(el.dataset.idx);
+    el.addEventListener('click', () => { hideContextMenu(); items[idx].action(); });
+  });
+
+  // Position (keep on screen)
+  document.body.appendChild(menu);
+  const rect = menu.getBoundingClientRect();
+  if (x + rect.width > window.innerWidth) x = window.innerWidth - rect.width - 8;
+  if (y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - 8;
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+
+  // Close on click outside
+  setTimeout(() => {
+    document.addEventListener('click', hideContextMenu, { once: true });
+    document.addEventListener('contextmenu', hideContextMenu, { once: true });
+  }, 0);
+}
+
+function hideContextMenu() {
+  const m = document.getElementById('ctxMenu');
+  if (m) m.remove();
+}
+
+// ============================================================================
+// Rename (inline editing)
+// ============================================================================
+
+function startRename(filePath, isDir) {
+  const tree = document.getElementById('fileTree');
+  const row = tree.querySelector(`.tree-row[data-path="${CSS.escape(filePath)}"]`);
+  if (!row) return;
+
+  const nameSpan = row.querySelector('.name');
+  const oldName = filePath.split('/').pop();
+  const origHTML = nameSpan.innerHTML;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'rename-input';
+  input.value = oldName;
+  nameSpan.innerHTML = '';
+  nameSpan.appendChild(input);
+  input.focus();
+  // Select name without extension for files
+  if (!isDir) {
+    const dotIdx = oldName.lastIndexOf('.');
+    input.setSelectionRange(0, dotIdx > 0 ? dotIdx : oldName.length);
+  } else {
+    input.select();
+  }
+
+  function finish(commit) {
+    const newName = input.value.trim();
+    nameSpan.innerHTML = origHTML;
+    if (commit && newName && newName !== oldName) {
+      const parentPath = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : '';
+      const newPath = parentPath ? parentPath + '/' + newName : newName;
+      moveFile(filePath, newPath);
+    }
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    e.stopPropagation();
+  });
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('click', (e) => e.stopPropagation());
+}
+
+// ============================================================================
+// File Operations (move, delete, upload, create)
+// ============================================================================
+
+async function moveFile(from, to) {
+  if (from === to) return;
+  try {
+    const res = await fetch(`${API}/api/workspace/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      addLog('info', `Moved: ${from} → ${to}`);
+      refreshFiles();
+    } else {
+      addLog('error', `Move failed: ${data.error}`);
+    }
+  } catch (e) {
+    addLog('error', `Move error: ${e.message}`);
+  }
+}
+
+async function deleteFile(filePath, isDir) {
+  const kind = isDir ? 'directory and all its contents' : 'file';
+  if (!confirm(`Delete ${kind}?\n${filePath}`)) return;
+  try {
+    const res = await fetch(`${API}/api/workspace/file?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      addLog('info', `Deleted: ${filePath}`);
+      refreshFiles();
+    } else {
+      addLog('error', `Delete failed: ${data.error}`);
+    }
+  } catch (e) {
+    addLog('error', `Delete error: ${e.message}`);
+  }
+}
+
+async function uploadFiles(files, targetDir = '') {
+  for (const file of files) {
+    const filePath = targetDir ? `${targetDir}/${file.name}` : file.name;
+    addLog('info', `Uploading: ${filePath} (${formatSize(file.size)})...`);
+    try {
+      const content = await readFileAsBase64(file);
+      const res = await fetch(`${API}/api/workspace/file`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath, content, encoding: 'base64' }),
+      });
+      const data = await res.json();
+      if (data.success) addLog('info', `Uploaded: ${filePath} (${formatSize(data.size)})`);
+      else addLog('error', `Upload failed: ${data.error}`);
+    } catch (e) {
+      addLog('error', `Upload error: ${e.message}`);
+    }
+  }
+  refreshFiles();
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function uploadToDir(dirPath) {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.multiple = true;
+  inp.onchange = () => { if (inp.files.length) uploadFiles(inp.files, dirPath); };
+  inp.click();
+}
+
+function handleFileSelect(event) {
+  const files = event.target.files;
+  if (files.length) uploadFiles(files);
+  event.target.value = '';
+}
+
+// Upload area drag-drop
+const uploadArea = document.getElementById('uploadArea');
+['dragenter', 'dragover'].forEach(ev => {
+  uploadArea.addEventListener(ev, (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+});
+['dragleave', 'drop'].forEach(ev => {
+  uploadArea.addEventListener(ev, (e) => { e.preventDefault(); uploadArea.classList.remove('dragover'); });
+});
+uploadArea.addEventListener('drop', (e) => {
+  if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+});
+
+// Prompt helpers
+async function promptNewFileInTree() { promptNewFileInDir(''); }
+async function promptNewFolderInTree() { promptNewFolderInDir(''); }
+
+async function promptNewFileInDir(dirPath) {
+  const name = prompt(`New file name${dirPath ? ' in ' + dirPath : ''}:`);
+  if (!name) return;
+  const fullPath = dirPath ? dirPath + '/' + name : name;
+  try {
+    const res = await fetch(`${API}/api/workspace/file`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: fullPath, content: '' }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      addLog('info', `Created: ${fullPath}`);
+      if (dirPath) expandedDirs.add(dirPath);
+      refreshFiles();
+    } else addLog('error', data.error);
+  } catch (e) { addLog('error', `Error: ${e.message}`); }
+}
+
+async function promptNewFolderInDir(dirPath) {
+  const name = prompt(`New folder name${dirPath ? ' in ' + dirPath : ''}:`);
+  if (!name) return;
+  const fullPath = dirPath ? dirPath + '/' + name : name;
+  try {
+    const res = await fetch(`${API}/api/workspace/dir`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: fullPath }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      addLog('info', `Folder created: ${fullPath}`);
+      if (dirPath) expandedDirs.add(dirPath);
+      expandedDirs.add(fullPath);
+      refreshFiles();
+    } else addLog('error', data.error);
+  } catch (e) { addLog('error', `Error: ${e.message}`); }
+}
+
+// ============================================================================
+// File Viewer Overlay
+// ============================================================================
+
+// kilocode_change start - Enhanced file viewer with PDF and Markdown support
+let currentFileContent = ''; // Store for toggle between raw/rendered
+let currentFilePath = '';
+
+async function viewFile(filePath) {
+  console.log('[viewFile] Opening:', filePath); // Debug log
+  
+  // Validation: ensure path is not empty
+  if (!filePath) {
+    addLog('error', 'Cannot view file: empty path');
+    return;
+  }
+  
+  try {
+    const ext = filePath.split('.').pop().toLowerCase();
+    const isPdf = ext === 'pdf';
+    const isMd = ext === 'md' || ext === 'markdown';
+    const isImage = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext);
+    
+    let viewer = document.getElementById('fileViewer');
+    if (!viewer) {
+      viewer = document.createElement('div');
+      viewer.id = 'fileViewer';
+      viewer.className = 'file-viewer';
+      viewer.onclick = (e) => { if (e.target === viewer) closeFileViewer(); };
+      document.body.appendChild(viewer);
+    }
+
+    // PDF: Use iframe (browsers have built-in PDF viewers)
+    if (isPdf) {
+      viewer.innerHTML = `<div class="file-viewer-panel pdf-viewer">
+        <div class="file-viewer-header">
+          <span class="title">&#128213; ${escapeHtml(filePath)}</span>
+          <a href="${API}/api/workspace/raw?path=${encodeURIComponent(filePath)}" 
+             download="${escapeAttr(filePath.split('/').pop())}" 
+             style="color:var(--accent);font-size:12px;text-decoration:none;margin-right:8px;">⬇ Download</a>
+          <button class="close-btn" onclick="closeFileViewer()" title="Close">&times;</button>
+        </div>
+        <div class="file-viewer-body pdf-body">
+          <iframe src="${API}/api/workspace/raw?path=${encodeURIComponent(filePath)}"></iframe>
+        </div>
+      </div>`;
+      viewer.style.display = 'flex';
+      return;
+    }
+
+    // Image: Display inline
+    if (isImage) {
+      viewer.innerHTML = `<div class="file-viewer-panel">
+        <div class="file-viewer-header">
+          <span class="title">&#127912; ${escapeHtml(filePath)}</span>
+          <a href="${API}/api/workspace/raw?path=${encodeURIComponent(filePath)}" 
+             download="${escapeAttr(filePath.split('/').pop())}" 
+             style="color:var(--accent);font-size:12px;text-decoration:none;margin-right:8px;">⬇ Download</a>
+          <button class="close-btn" onclick="closeFileViewer()" title="Close">&times;</button>
+        </div>
+        <div class="file-viewer-body" style="text-align:center;">
+          <img src="${API}/api/workspace/raw?path=${encodeURIComponent(filePath)}" 
+               style="max-width:100%;max-height:70vh;border-radius:8px;" alt="${escapeAttr(filePath)}">
+        </div>
+      </div>`;
+      viewer.style.display = 'flex';
+      return;
+    }
+
+    // Text files: Fetch content
+    const res = await fetch(`${API}/api/workspace/file?path=${encodeURIComponent(filePath)}`);
+    const data = await res.json();
+    if (!res.ok) { addLog('error', data.error); return; }
+    
+    currentFileContent = data.content;
+    currentFilePath = filePath;
+
+    // Markdown: Show rendered with toggle to raw
+    if (isMd) {
+      const rendered = renderMarkdown(data.content);
+      viewer.innerHTML = `<div class="file-viewer-panel">
+        <div class="file-viewer-header">
+          <span class="title">&#128221; ${escapeHtml(filePath)}</span>
+          <span class="meta">${formatSize(data.size)}</span>
+          <div class="view-toggle">
+            <button id="btnRendered" class="active" onclick="toggleMdView('rendered')">Rendered</button>
+            <button id="btnRaw" onclick="toggleMdView('raw')">Raw</button>
+          </div>
+          <button class="close-btn" onclick="closeFileViewer()" title="Close">&times;</button>
+        </div>
+        <div class="file-viewer-body" id="fileViewerBody">
+          <div class="markdown-body">${rendered}</div>
+        </div>
+      </div>`;
+      viewer.style.display = 'flex';
+      return;
+    }
+
+    // Default: Code/text view
+    viewer.innerHTML = `<div class="file-viewer-panel">
+      <div class="file-viewer-header">
+        <span class="title">&#128196; ${escapeHtml(filePath)}</span>
+        <span class="meta">${formatSize(data.size)}</span>
+        <button class="close-btn" onclick="closeFileViewer()" title="Close">&times;</button>
+      </div>
+      <div class="file-viewer-body"><pre>${escapeHtml(data.content)}</pre></div>
+    </div>`;
+    viewer.style.display = 'flex';
+  } catch (e) { addLog('error', 'Failed to read file: ' + e.message); }
+}
+
+function toggleMdView(mode) {
+  const body = document.getElementById('fileViewerBody');
+  const btnRendered = document.getElementById('btnRendered');
+  const btnRaw = document.getElementById('btnRaw');
+  if (!body) return;
+  
+  if (mode === 'raw') {
+    body.innerHTML = `<pre>${escapeHtml(currentFileContent)}</pre>`;
+    btnRendered.classList.remove('active');
+    btnRaw.classList.add('active');
+  } else {
+    body.innerHTML = `<div class="markdown-body">${renderMarkdown(currentFileContent)}</div>`;
+    btnRendered.classList.add('active');
+    btnRaw.classList.remove('active');
+  }
+}
+
+// Simple markdown renderer (no external dependencies)
+function renderMarkdown(text) {
+  if (!text) return '';
+  let html = escapeHtml(text);
+  
+  // Code blocks (``` ... ```)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="lang-$1">$2</code></pre>');
+  
+  // Inline code (`code`)
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  
+  // Headers (# to ######)
+  html = html.replace(/^###### (.+)$/gm, '<h6>$1</h6>');
+  html = html.replace(/^##### (.+)$/gm, '<h5>$1</h5>');
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  
+  // Bold (**text** or __text__)
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  
+  // Italic (*text* or _text_)
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
+  
+  // Strikethrough (~~text~~)
+  html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
+  
+  // Blockquotes (> text)
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+  
+  // Horizontal rules (---, ***, ___)
+  html = html.replace(/^(---+|\*\*\*+|___+)$/gm, '<hr>');
+  
+  // Links [text](url)
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  
+  // Images ![alt](url)
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;">');
+  
+  // Unordered lists (- item or * item)
+  html = html.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n)+/g, '<ul>$&</ul>');
+  
+  // Ordered lists (1. item)
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  
+  // Tables (basic support)
+  html = html.replace(/^\|(.+)\|$/gm, (match, content) => {
+    const cells = content.split('|').map(c => c.trim());
+    if (cells.every(c => /^[-:]+$/.test(c))) return ''; // separator row
+    const isHeader = content.includes('---');
+    const tag = isHeader ? 'th' : 'td';
+    return '<tr>' + cells.map(c => `<${tag}>${c}</${tag}>`).join('') + '</tr>';
+  });
+  html = html.replace(/(<tr>.*<\/tr>\n?)+/g, '<table>$&</table>');
+  
+  // Paragraphs (double newlines)
+  html = html.replace(/\n\n+/g, '</p><p>');
+  html = '<p>' + html + '</p>';
+  
+  // Clean up empty paragraphs and fix nesting
+  html = html.replace(/<p><\/p>/g, '');
+  html = html.replace(/<p>(<h[1-6]>)/g, '$1');
+  html = html.replace(/(<\/h[1-6]>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<pre>)/g, '$1');
+  html = html.replace(/(<\/pre>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<ul>)/g, '$1');
+  html = html.replace(/(<\/ul>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<table>)/g, '$1');
+  html = html.replace(/(<\/table>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<blockquote>)/g, '$1');
+  html = html.replace(/(<\/blockquote>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<hr>)/g, '$1');
+  html = html.replace(/(<hr>)<\/p>/g, '$1');
+  
+  return html;
+}
+// kilocode_change end
+
+function closeFileViewer() {
+  const v = document.getElementById('fileViewer');
+  if (v) v.style.display = 'none';
+}
+
+function formatSize(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function escapeAttr(s) {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+// ============================================================================
+// Sidebar Resize Handle
+// ============================================================================
+
+(function initSidebarResize() {
+  const sidebar = document.getElementById('sidebar');
+  const handle = document.getElementById('sidebarResize');
+  let startX, startWidth;
+
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    startX = e.clientX;
+    startWidth = sidebar.offsetWidth;
+    handle.classList.add('active');
+    document.addEventListener('mousemove', onDrag);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  function onDrag(e) {
+    const w = startWidth + (e.clientX - startX);
+    sidebar.style.width = Math.max(180, Math.min(600, w)) + 'px';
+  }
+
+  function onUp() {
+    handle.classList.remove('active');
+    document.removeEventListener('mousemove', onDrag);
+    document.removeEventListener('mouseup', onUp);
+    // Persist sidebar width
+    try { localStorage.setItem('sidebar-width', sidebar.style.width); } catch {}
+  }
+
+  // Restore saved width
+  try {
+    const saved = localStorage.getItem('sidebar-width');
+    if (saved) sidebar.style.width = saved;
+  } catch {}
+})();
+
+// Listen for file-moved events from server
+socket.on('file-moved', () => refreshFiles());
+
+// ============================================================================
+// UI Helpers
+// ============================================================================
+
+function addMessage(role, content, sender) {
+  const el = document.createElement('div');
+  el.className = `message ${role}`;
+  if (role === 'assistant') {
+    el.innerHTML = `<div class="sender">${sender || 'Agent'}</div><div class="content">${formatMarkdown(content)}</div>`;
+  } else {
+    el.innerHTML = `<div class="content">${escapeHtml(content)}</div>`;
+  }
+  document.getElementById('messages').appendChild(el);
+  scrollToBottom();
+  return el;
+}
+
+function showTyping() {
+  const el = document.createElement('div');
+  el.className = 'typing';
+  el.id = 'typingIndicator';
+  el.textContent = 'Agent is thinking';
+  document.getElementById('messages').appendChild(el);
+  scrollToBottom();
+}
+
+function removeTyping() {
+  const el = document.getElementById('typingIndicator');
+  if (el) el.remove();
+}
+
+function scrollToBottom() {
+  const m = document.getElementById('messages');
+  m.scrollTop = m.scrollHeight;
+}
+
+// kilocode_change start - Enhanced status with reconnection message
+function setStatus(online, statusMsg) {
+  const dot = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  const btn = document.getElementById('reconnectBtn');
+  dot.className = `dot ${online ? 'online' : 'offline'}`;
+  if (statusMsg) {
+    text.textContent = statusMsg;
+  } else {
+    text.textContent = online ? 'Connected' : 'Disconnected';
+  }
+  // Show reconnect button when disconnected
+  btn.style.display = online ? 'none' : 'inline-block';
+}
+
+function manualReconnect() {
+  addLog('info', 'Manual reconnect requested...');
+  setStatus(false, 'Reconnecting...');
+  socket.disconnect();
+  setTimeout(() => socket.connect(), 500);
+}
+
+// kilocode_change - Clear all state and reload page
+function clearAndReset() {
+  if (!confirm('This will clear all local state and reload the page. Continue?')) return;
+  
+  // Clear localStorage
+  try { localStorage.clear(); } catch {}
+  
+  // Clear sessionStorage
+  try { sessionStorage.clear(); } catch {}
+  
+  // Disconnect socket cleanly
+  try { socket.disconnect(); } catch {}
+  
+  // Clear any IndexedDB (if used)
+  try {
+    if (indexedDB && indexedDB.databases) {
+      indexedDB.databases().then(dbs => {
+        dbs.forEach(db => indexedDB.deleteDatabase(db.name));
+      });
+    }
+  } catch {}
+  
+  // Force hard reload bypassing cache
+  window.location.reload(true);
+}
+// kilocode_change end
+
+function addLog(level, text) {
+  const el = document.createElement('div');
+  el.className = `log-entry ${level}`;
+  const ts = new Date().toLocaleTimeString();
+  el.innerHTML = `<span class="ts">${ts}</span>${escapeHtml(text)}`;
+  const panel = document.getElementById('logPanel');
+  panel.appendChild(el);
+  panel.scrollTop = panel.scrollHeight;
+}
+
+function showApiKeyModal() { document.getElementById('apiKeyModal').style.display = 'flex'; }
+function hideApiKeyModal() { document.getElementById('apiKeyModal').style.display = 'none'; }
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+function formatMarkdown(text) {
+  if (!text) return '';
+  let html = escapeHtml(text);
+  // Code blocks
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bold
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Line breaks
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
+
+// ============================================================================
+// Chat Attachments
+// ============================================================================
+
+function handleChatAttach(event) {
+  const files = event.target.files;
+  for (const file of files) {
+    if (file.type.startsWith('image/')) {
+      // Resize images to avoid token limit (max 1024px on longest side)
+      // resizeImage converts to JPEG, so mediaType must be image/jpeg
+      resizeImage(file, 1024).then(({ dataUrl, base64 }) => {
+        chatAttachments.push({
+          name: file.name,
+          type: file.type,
+          dataUrl,
+          base64,
+          mediaType: 'image/jpeg',
+        });
+        renderAttachChips();
+      });
+    } else {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        const base64 = dataUrl.split(',')[1];
+        chatAttachments.push({
+          name: file.name,
+          type: file.type || 'application/octet-stream',
+          dataUrl,
+          base64,
+          mediaType: file.type || 'application/octet-stream',
+        });
+        renderAttachChips();
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+  event.target.value = '';
+}
+
+// Resize image to fit within maxPx on the longest side, returns JPEG base64
+function resizeImage(file, maxPx) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxPx || height > maxPx) {
+        const scale = maxPx / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      // Use JPEG at 85% quality for smaller size
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      const base64 = dataUrl.split(',')[1];
+      resolve({ dataUrl, base64 });
+      URL.revokeObjectURL(img.src);
+    };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+function renderAttachChips() {
+  const container = document.getElementById('attachChips');
+  if (chatAttachments.length === 0) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+  container.style.display = 'flex';
+  container.innerHTML = chatAttachments.map((a, i) => {
+    const preview = a.type.startsWith('image/')
+      ? `<img src="${a.dataUrl}" alt="${escapeHtml(a.name)}">`
+      : '&#128196;';
+    return `<span class="attach-chip">${preview} ${escapeHtml(a.name)}<span class="remove" onclick="removeAttachment(${i})">&#10005;</span></span>`;
+  }).join('');
+}
+
+function removeAttachment(index) {
+  chatAttachments.splice(index, 1);
+  renderAttachChips();
+}
+
+// Also support drag-drop onto the chat input area
+document.querySelector('.input-area').addEventListener('dragover', (e) => e.preventDefault());
+document.querySelector('.input-area').addEventListener('drop', (e) => {
+  e.preventDefault();
+  if (e.dataTransfer.files.length) {
+    const fakeEvent = { target: { files: e.dataTransfer.files, value: '' } };
+    handleChatAttach(fakeEvent);
+  }
+});
+
+// kilocode_change start - Paste images from clipboard
+document.getElementById('input').addEventListener('paste', async (e) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (file) {
+        // Generate a name for pasted images
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const ext = file.type.split('/')[1] || 'png';
+        const name = `pasted-image-${timestamp}.${ext}`;
+        
+        // Create a new file with the generated name
+        const namedFile = new File([file], name, { type: file.type });
+        
+        const { dataUrl, base64 } = await resizeImage(namedFile, 1024);
+        // resizeImage converts to JPEG, so mediaType must be image/jpeg
+        chatAttachments.push({ 
+          name: name, 
+          type: file.type, 
+          dataUrl, 
+          base64, 
+          mediaType: 'image/jpeg' 
+        });
+        renderAttachChips();
+        addLog('info', `Pasted image: ${name}`);
+      }
+    }
+  }
+});
+// kilocode_change end
+
+// ============================================================================
+// Keyboard
+// ============================================================================
+
+document.getElementById('input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+// Close file viewer with Escape; F2 to rename; Delete to delete
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeFileViewer(); hideContextMenu(); }
+  // F2 to rename selected file
+  if (e.key === 'F2' && selectedPath) {
+    e.preventDefault();
+    const isDir = fileData.some(f => f.path === selectedPath && f.isDir);
+    startRename(selectedPath, isDir);
+  }
+  // Delete key to delete selected file
+  if (e.key === 'Delete' && selectedPath && !document.querySelector('.rename-input')) {
+    e.preventDefault();
+    const isDir = fileData.some(f => f.path === selectedPath && f.isDir);
+    deleteFile(selectedPath, isDir);
+  }
+});
+
+// Auto-resize textarea
+document.getElementById('input').addEventListener('input', function() {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+});
+
+// ============================================================================
+// Project Management
+// ============================================================================
+
+let projects = [];
+let allProjectAgents = []; // flattened list of all agents across projects
+let selectedAgentId = ''; // '' means default society agent
+let editingProjectId = null; // null = create, string = editing
+
+async function loadProjects() {
+  try {
+    const res = await fetch(`${API}/api/projects`);
+    const data = await res.json();
+    projects = data.projects || [];
+    // Flatten agents for the selector
+    allProjectAgents = [];
+    projects.forEach(p => {
+      (p.agents || []).forEach(a => {
+        allProjectAgents.push({ ...a, projectId: p.id, projectName: p.name });
+      });
+    });
+    renderAgentSelector();
+    renderProjectsGrid();
+    renderSidebarProjects();
+  } catch (e) {
+    addLog('warn', 'Failed to load projects');
+  }
+}
+
+function renderAgentSelector() {
+  const sel = document.getElementById('agentSelect');
+  const prev = sel.value;
+  let html = '<option value="">Default (Society Agent)</option>';
+  projects.forEach(p => {
+    if (!p.agents || p.agents.length === 0) return;
+    html += `<optgroup label="${escapeHtml(p.name)}">`;
+    p.agents.forEach(a => {
+      html += `<option value="${escapeHtml(a.id)}" ${a.id === prev ? 'selected' : ''}>${escapeHtml(a.name)} — ${escapeHtml(a.role)}</option>`;
+    });
+    html += '</optgroup>';
+  });
+  sel.innerHTML = html;
+  // Restore selection
+  if (prev && allProjectAgents.some(a => a.id === prev)) {
+    sel.value = prev;
+  }
+  onAgentChange();
+}
+
+function onAgentChange() {
+  const sel = document.getElementById('agentSelect');
+  selectedAgentId = sel.value;
+  const info = document.getElementById('agentSelectInfo');
+  
+  // kilocode_change start - Clear chat when switching agents
+  // Reset streaming state
+  currentStreamEl = null;
+  streamText = '';
+  isStreaming = false;
+  
+  // Clear chat messages area (keep it simple - start fresh)
+  const messages = document.getElementById('messages');
+  messages.innerHTML = '';
+  
+  // Show which agent is selected
+  if (selectedAgentId) {
+    const agent = allProjectAgents.find(a => a.id === selectedAgentId);
+    if (agent) {
+      addMessage('system', `Now chatting with <b>${escapeHtml(agent.name)}</b> (${escapeHtml(agent.role)})`);
+    }
+  } else {
+    addMessage('system', 'Select an agent from the dropdown above to start chatting');
+  }
+  // kilocode_change end
+  
+  if (!selectedAgentId) {
+    info.innerHTML = '';
+    return;
+  }
+  const agent = allProjectAgents.find(a => a.id === selectedAgentId);
+  if (agent) {
+    info.innerHTML = `<span style="color:var(--muted);font-size:10px">${escapeHtml(agent.projectName)}</span> · ${escapeHtml((agent.capabilities || []).slice(0, 3).join(', '))}`;
+  }
+}
+
+function renderProjectsGrid() {
+  const grid = document.getElementById('projectsGrid');
+  const countEl = document.getElementById('projectCountInfo');
+  countEl.textContent = `${projects.length} project${projects.length !== 1 ? 's' : ''}`;
+
+  let html = projects.map(p => {
+    const agentChips = (p.agents || []).map(a => {
+      const dotCls = !a.ephemeral ? 'supervisor' : 'worker'; // kilocode_change - Use !ephemeral
+      return `<span class="project-agent-chip"><span class="chip-dot ${dotCls}"></span>${escapeHtml(a.name)}</span>`;
+    }).join('');
+
+    const totalMsgs = (p.agents || []).reduce((sum, a) => sum + (a.totalMessages || 0), 0);
+    const totalTasks = (p.agents || []).reduce((sum, a) => sum + (a.tasksCompleted || 0), 0);
+
+    return `<div class="project-card">
+      <div class="project-header">
+        <div class="project-icon">&#128193;</div>
+        <div class="project-meta">
+          <div class="project-name">${escapeHtml(p.name)}</div>
+          <div class="project-desc">${escapeHtml(p.description || '')}</div>
+        </div>
+        <span class="status-badge ${p.status === 'active' ? 'active' : 'idle'}">${p.status || 'active'}</span>
+      </div>
+      <div class="project-folder">&#128194; ${escapeHtml(p.folder || '/')}</div>
+      <div class="project-agents">${agentChips || '<span style="color:var(--muted);font-size:11px">No agents</span>'}</div>
+      <div class="project-stats">
+        <span>&#129302; ${(p.agents || []).length} agent${(p.agents || []).length !== 1 ? 's' : ''}</span>
+        <span>&#128172; ${totalMsgs} msgs</span>
+        <span>&#9989; ${totalTasks} tasks</span>
+      </div>
+      <div class="project-actions">
+        <button class="btn btn-primary" onclick="window.open('/project/${escapeAttr(p.id)}','_blank')" style="font-size:12px">&#128279; Open</button>
+        <button class="btn btn-secondary" onclick="editProject('${escapeAttr(p.id)}')">&#9998; Edit</button>
+        <button class="btn btn-secondary" style="color:var(--red)" onclick="deleteProject('${escapeAttr(p.id)}', '${escapeAttr(p.name)}')">&#128465;</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  html += `<div class="project-add-card" onclick="showCreateProjectModal()">+ Create New Project</div>`;
+  grid.innerHTML = html;
+}
+
+function renderSidebarProjects() {
+  const list = document.getElementById('projectList');
+  if (projects.length === 0) {
+    list.innerHTML = '<div style="padding:8px 16px;color:var(--muted);font-size:12px">No projects — go to Projects tab</div>';
+    return;
+  }
+  // kilocode_change start - show folder as main identifier (matches disk folder name)
+  list.innerHTML = projects.map(p => {
+    const agentCount = (p.agents || []).length;
+    const folderName = p.folder || p.id; // Folder name = directory on disk
+    return `<div class="agent-card" onclick="window.open('/project/${escapeAttr(p.id)}','_blank')" style="cursor:pointer" title="${escapeHtml(p.name || folderName)}">
+      <div class="name">${escapeHtml(folderName)}</div>
+      <div class="role">${agentCount} agent${agentCount !== 1 ? 's' : ''}</div>
+      <span class="status-badge ${p.status === 'active' ? 'working' : 'idle'}">${p.status || 'active'}</span>
+    </div>`;
+  }).join('');
+  // kilocode_change end
+}
+
+// Project CRUD
+
+// kilocode_change start - simplified project creation
+function slugify(text) {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 50);
+}
+
+function showCreateProjectModal() {
+  editingProjectId = null;
+  document.getElementById('projectModalTitle').textContent = 'Create Project';
+  document.getElementById('projectModalDesc').textContent = 'Create a project to organize agents around a shared folder.';
+  document.getElementById('projectFormName').value = '';
+  document.getElementById('projectFormName').disabled = false;
+  document.getElementById('projectFormDesc').value = '';
+  document.getElementById('projectFormSubmit').textContent = 'Create';
+  document.getElementById('projectFolderPreview').textContent = 'projects/';
+  document.getElementById('projectModal').style.display = 'flex';
+  
+  // Update folder preview as user types
+  document.getElementById('projectFormName').oninput = function() {
+    const slug = slugify(this.value);
+    document.getElementById('projectFolderPreview').textContent = slug ? 'projects/' + slug + '/' : 'projects/';
+  };
+}
+// kilocode_change end
+
+// kilocode_change start - simplified edit modal
+function editProject(id) {
+  const project = projects.find(p => p.id === id);
+  if (!project) return;
+  editingProjectId = id;
+  document.getElementById('projectModalTitle').textContent = `Edit: ${project.name}`;
+  document.getElementById('projectModalDesc').textContent = 'Update project settings. Agents are managed from the project page.';
+  document.getElementById('projectFormName').value = project.name;
+  document.getElementById('projectFormName').disabled = true; // Can't rename existing project
+  document.getElementById('projectFormDesc').value = project.description || '';
+  document.getElementById('projectFormSubmit').textContent = 'Save';
+  document.getElementById('projectFolderPreview').textContent = 'projects/' + (project.folder || project.id) + '/';
+  document.getElementById('projectModal').style.display = 'flex';
+}
+// kilocode_change end
+
+function hideProjectModal() {
+  document.getElementById('projectModal').style.display = 'none';
+  editingProjectId = null;
+}
+
+// kilocode_change start - simplified: name is the id/folder
+async function submitProjectForm() {
+  const name = document.getElementById('projectFormName').value.trim();
+  const id = slugify(name); // Auto-generate ID from name
+  const description = document.getElementById('projectFormDesc').value.trim();
+  const folder = id; // Folder is same as ID
+
+  if (!name) {
+    alert('Please enter a project name');
+    return;
+  }
+// kilocode_change end
+
+  try {
+    let res;
+    if (editingProjectId) {
+      res = await fetch(`${API}/api/projects/${editingProjectId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, description, folder }),
+      });
+    } else {
+      res = await fetch(`${API}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, name, description, folder }),
+      });
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || 'Failed');
+      return;
+    }
+    hideProjectModal();
+    addLog('info', editingProjectId ? `Project ${name} updated` : `Project ${name} created`);
+    loadProjects();
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+async function deleteProject(id, name) {
+  if (!confirm(`Delete project "${name}" and all its agents? This cannot be undone.`)) return;
+  try {
+    const res = await fetch(`${API}/api/projects/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      addLog('info', `Project ${name} deleted`);
+      if (allProjectAgents.some(a => a.projectId === id && a.id === selectedAgentId)) {
+        selectedAgentId = '';
+      }
+      loadProjects();
+    } else {
+      addLog('error', `Delete failed: ${data.error}`);
+    }
+  } catch (e) {
+    addLog('error', `Delete error: ${e.message}`);
+  }
+}
+
+// Load projects on startup
+socket.on('connect', () => { loadProjects(); });
+// Refresh on agent events
+socket.on('system-event', (data) => {
+  if (data.type === 'agent-created' || data.type === 'agent-deleted') loadProjects();
+});
+
+// ============================================================================
+// Tab Switching
+// ============================================================================
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(p => p.classList.remove('active'));
+  if (tab === 'terminal') {
+    document.getElementById('tabTerminal').classList.add('active');
+    document.getElementById('paneTerminal').classList.add('active');
+    if (!term) initTerminal();
+    else fitAddon.fit();
+  } else if (tab === 'projects') {
+    document.getElementById('tabProjects').classList.add('active');
+    document.getElementById('paneProjects').classList.add('active');
+    loadProjects(); // refresh when switching to tab
+  } else {
+    document.getElementById('tabChat').classList.add('active');
+    document.getElementById('paneChat').classList.add('active');
+  }
+}
+
+// ============================================================================
+// Terminal (xterm.js + node-pty via WebSocket)
+// ============================================================================
+
+let term = null;
+let fitAddon = null;
+let termConnected = false;
+
+function initTerminal() {
+  const container = document.getElementById('terminalContainer');
+  container.innerHTML = '';
+
+  term = new Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: "'SF Mono', 'Cascadia Code', 'Consolas', monospace",
+    theme: {
+      background: '#0d1117',
+      foreground: '#e6edf3',
+      cursor: '#58a6ff',
+      selectionBackground: 'rgba(88,166,255,0.3)',
+      black: '#484f58', red: '#f85149', green: '#3fb950', yellow: '#d29922',
+      blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#b1bac4',
+    },
+  });
+
+  fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(container);
+
+  // Small delay for the container to be laid out before fitting
+  setTimeout(() => fitAddon.fit(), 100);
+
+  window.addEventListener('resize', () => { if (fitAddon) fitAddon.fit(); });
+
+  connectTerminal();
+
+  term.onData((data) => {
+    if (termConnected) {
+      socket.emit('terminal-input', data);
+    }
+  });
+
+  term.onResize(({ cols, rows }) => {
+    if (termConnected) {
+      socket.emit('terminal-resize', { cols, rows });
+    }
+  });
+}
+
+function connectTerminal() {
+  const shell = document.getElementById('termShell').value;
+  socket.emit('terminal-start', { shell, cols: term.cols, rows: term.rows });
+  term.clear();
+  term.writeln('\x1b[33mConnecting to terminal...\x1b[0m');
+}
+
+function reconnectTerminal() {
+  socket.emit('terminal-stop');
+  setTimeout(() => connectTerminal(), 200);
+}
+
+socket.on('terminal-output', (data) => {
+  if (term) term.write(data);
+  termConnected = true;
+});
+
+socket.on('terminal-ready', () => {
+  termConnected = true;
+  if (term) {
+    term.clear();
+    addLog('info', 'Terminal connected');
+  }
+});
+
+socket.on('terminal-exit', (data) => {
+  termConnected = false;
+  if (term) term.writeln(`\x1b[31m\r\nProcess exited (code ${data.code})\x1b[0m`);
+  addLog('warn', `Terminal exited (code ${data.code})`);
+});
+</script>
+</body>
+</html>

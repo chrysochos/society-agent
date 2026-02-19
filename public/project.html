@@ -1,0 +1,1593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Project</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+
+  /* Header */
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 24px;
+    display: flex; align-items: center; gap: 14px; }
+  header .back-link { color: var(--muted); text-decoration: none; font-size: 14px; }
+  header .back-link:hover { color: var(--accent); }
+  header .project-icon { width: 36px; height: 36px; border-radius: 10px; display: flex;
+    align-items: center; justify-content: center; font-size: 20px; background: rgba(88,166,255,0.15); }
+  header .project-info { flex: 1; }
+  header .project-name { font-size: 18px; font-weight: 600; }
+  header .project-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  header .project-folder { font-size: 11px; color: var(--accent); font-family: monospace; }
+  header .header-actions { display: flex; gap: 8px; }
+
+  /* Buttons */
+  .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border); cursor: pointer;
+    font-size: 13px; transition: all 0.15s; background: var(--surface); color: var(--text); }
+  .btn:hover { border-color: var(--accent); }
+  .btn-primary { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+  .btn-primary:hover { opacity: 0.9; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+  /* Main content */
+  .main { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 24px; }
+
+  /* Section cards */
+  .section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .section-header { padding: 14px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px; }
+  .section-header h3 { font-size: 14px; font-weight: 600; flex: 1; }
+  .section-header .count { font-size: 12px; color: var(--muted); }
+  .section-body { padding: 16px 20px; overflow-x: auto; display: flex; justify-content: center; }
+  .section-body > .agent-grid { width: max-content; min-width: 100%; }
+
+  /* Agent grid */
+  .agent-grid { display: block; }
+  .agent-grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+  .agent-card { background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; display: flex; flex-direction: column; gap: 8px; cursor: pointer;
+    transition: border-color 0.2s, background 0.2s; }
+  .agent-card:hover { border-color: var(--accent); background: rgba(88,166,255,0.04); }
+  .agent-card .agent-header { display: flex; align-items: center; gap: 10px; }
+  .agent-card .agent-avatar { width: 32px; height: 32px; border-radius: 8px; display: flex;
+    align-items: center; justify-content: center; font-size: 16px; background: rgba(88,166,255,0.12); }
+  .agent-card .agent-meta { flex: 1; }
+  .agent-card .agent-name { font-size: 13px; font-weight: 600; }
+  .agent-card .agent-role { font-size: 11px; color: var(--muted); }
+  .agent-card .agent-home { font-size: 10px; color: var(--accent); font-family: monospace; }
+  .agent-card .agent-caps { display: flex; flex-wrap: wrap; gap: 4px; }
+  .agent-card .cap-tag { font-size: 10px; padding: 1px 6px; border-radius: 8px;
+    background: rgba(88,166,255,0.1); color: var(--accent); border: 1px solid rgba(88,166,255,0.2); }
+  .agent-card .agent-stats { display: flex; gap: 10px; font-size: 11px; color: var(--muted); }
+  .agent-card .agent-actions { display: flex; gap: 6px; }
+  .agent-card .agent-actions .btn { font-size: 11px; padding: 3px 8px; }
+  .agent-add-card { border: 2px dashed var(--border); border-radius: 10px; padding: 24px;
+    display: flex; align-items: center; justify-content: center; color: var(--muted);
+    cursor: pointer; transition: border-color 0.2s, color 0.2s; font-size: 13px; }
+  .agent-add-card:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Heartbeat status indicator */
+  .heartbeat-indicator { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; padding: 2px 6px;
+    border-radius: 8px; margin-left: auto; }
+  .heartbeat-indicator.idle { background: rgba(139,148,158,0.15); color: var(--muted); }
+  .heartbeat-indicator.working { background: rgba(63,185,80,0.15); color: var(--green); }
+  .heartbeat-indicator.working::before { content: ''; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green); animation: pulse 1s infinite; }
+  .heartbeat-indicator.blocked { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .heartbeat-indicator.waiting-for-boss { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .heartbeat-indicator.offline { background: rgba(248,81,73,0.15); color: var(--red); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  /* Ephemeral workers */
+  .ephemeral-list { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ephemeral-card { background: var(--surface); border: 1px dashed var(--border); border-radius: 8px;
+    padding: 8px 12px; font-size: 12px; display: flex; align-items: center; gap: 8px; }
+  .ephemeral-card .worker-icon { font-size: 16px; }
+  .ephemeral-card .worker-info { display: flex; flex-direction: column; }
+  .ephemeral-card .worker-name { font-weight: 500; color: var(--text); }
+  .ephemeral-card .worker-status { font-size: 11px; color: var(--muted); }
+  .ephemeral-card.working { border-color: var(--green); background: rgba(63,185,80,0.05); }
+  .ephemeral-card.working .worker-status { color: var(--green); }
+  .ephemeral-empty { color: var(--muted); font-size: 13px; font-style: italic; }
+
+  /* File tree */
+  .file-list { max-height: 400px; overflow-y: auto; }
+  .file-row { display: flex; align-items: center; gap: 6px; padding: 5px 0; font-size: 13px;
+    border-bottom: 1px solid rgba(48,54,61,0.5); }
+  .file-row:last-child { border-bottom: none; }
+  .file-row .file-icon { width: 16px; text-align: center; font-size: 12px; }
+  .file-row .file-name { flex: 1; font-family: monospace; font-size: 12px; }
+  .file-row .file-size { color: var(--muted); font-size: 11px; }
+  .file-row.dir .file-name { color: var(--accent); font-weight: 500; }
+
+  /* Task pool */
+  .task-stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .stat-pill { font-size: 12px; padding: 4px 10px; border-radius: 12px; background: var(--bg);
+    border: 1px solid var(--border); }
+  .stat-pill.available { border-color: var(--accent); }
+  .stat-pill.in-progress { border-color: var(--yellow); }
+  .stat-pill.completed { border-color: var(--green); }
+  .stat-pill.failed { border-color: var(--red); }
+  .task-list { max-height: 300px; overflow-y: auto; }
+  .task-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px;
+    border-bottom: 1px solid rgba(48,54,61,0.5); }
+  .task-row:last-child { border-bottom: none; }
+  .task-status-icon { font-size: 14px; padding-top: 2px; }
+  .task-content { flex: 1; min-width: 0; }
+  .task-title { font-size: 13px; font-weight: 500; }
+  .task-desc { font-size: 11px; color: var(--muted); margin-top: 2px; 
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .task-meta { display: flex; gap: 8px; margin-top: 4px; font-size: 10px; color: var(--muted); }
+  .task-priority { padding: 1px 6px; border-radius: 6px; background: rgba(88,166,255,0.1); color: var(--accent); }
+  .task-priority.high { background: rgba(248,81,73,0.15); color: var(--red); }
+  .task-priority.medium { background: rgba(210,153,34,0.15); color: var(--yellow); }
+
+  /* Status badge */
+  .status-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; text-transform: uppercase;
+    letter-spacing: 0.5px; font-weight: 600; }
+  .status-badge.active { background: rgba(63,185,80,0.15); color: var(--green); }
+  .status-badge.idle { background: rgba(139,148,158,0.15); color: var(--muted); }
+
+  /* Modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex;
+    align-items: center; justify-content: center; z-index: 100; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 24px; width: 480px; max-width: 90vw; max-height: 80vh; overflow-y: auto; }
+  .modal h2 { font-size: 16px; margin-bottom: 4px; }
+  .modal .form-group { margin-bottom: 12px; }
+  .modal .form-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .modal .form-group input, .modal .form-group textarea, .modal .form-group select {
+    width: 100%; padding: 8px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 13px; }
+  .modal .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .modal .checkbox-row { display: flex; align-items: center; gap: 8px; }
+  .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+  /* Toast */
+  .toast { position: fixed; bottom: 20px; right: 20px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; font-size: 13px;
+    z-index: 200; animation: fadeIn 0.2s; }
+  .toast.success { border-color: var(--green); }
+  .toast.error { border-color: var(--red); }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* Scheduled Tasks */
+  .sched-task-list { margin-top: 8px; }
+  .sched-task { display: flex; align-items: center; gap: 10px; padding: 8px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; }
+  .sched-task .sched-status { font-size: 14px; width: 20px; text-align: center; }
+  .sched-task .sched-info { flex: 1; min-width: 0; }
+  .sched-task .sched-name { font-size: 13px; font-weight: 500; }
+  .sched-task .sched-cron { font-size: 11px; color: var(--muted); font-family: monospace; }
+  .sched-task .sched-last { font-size: 10px; color: var(--muted); }
+  .sched-task .sched-actions { display: flex; gap: 4px; }
+  .sched-task .sched-actions button { padding: 4px 8px; font-size: 11px; }
+  .sched-task.disabled { opacity: 0.5; }
+  .sched-task.running .sched-status { color: var(--yellow); animation: pulse 1s infinite; }
+  .sched-task.success .sched-status { color: var(--green); }
+  .sched-task.failed .sched-status { color: var(--red); }
+
+  /* Org Chart / Tree View */
+  .org-tree { display: inline-flex; flex-direction: column; align-items: center; gap: 0; padding: 20px; min-width: 100%; }
+  .org-node { position: relative; display: flex; flex-direction: column; align-items: center; flex-shrink: 0; }
+  .org-node-content { background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 16px; min-width: 180px; max-width: 240px; cursor: pointer;
+    transition: border-color 0.2s, background 0.2s, transform 0.15s; }
+  .org-node-content:hover { border-color: var(--accent); background: rgba(88,166,255,0.04); transform: translateY(-2px); }
+  .org-node-content.supervisor { border-color: var(--accent); }
+  .org-node-content .node-header { display: flex; align-items: center; gap: 8px; }
+  .org-node-content .node-avatar { width: 28px; height: 28px; border-radius: 6px; display: flex;
+    align-items: center; justify-content: center; font-size: 14px; background: rgba(88,166,255,0.12); }
+  .org-node-content .node-name { font-size: 13px; font-weight: 600; }
+  .org-node-content .node-role { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .org-node-content .node-status { margin-top: 6px; }
+  .org-node-content .node-actions { display: flex; gap: 4px; margin-top: 8px; justify-content: center; }
+  .org-node-content .node-actions .btn { font-size: 10px; padding: 2px 6px; }
+
+  /* User node (top of tree) */
+  .org-user { background: linear-gradient(135deg, rgba(88,166,255,0.15), rgba(63,185,80,0.1));
+    border: 2px solid var(--accent); padding: 10px 20px; border-radius: 20px;
+    display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+  .org-user .user-icon { font-size: 18px; }
+
+  /* Connector lines */
+  .org-connector { width: 2px; height: 20px; background: var(--border); }
+  .org-children { display: flex; gap: 24px; margin-top: 0; position: relative; justify-content: center; flex-shrink: 0; }
+  .org-children::before { content: ''; position: absolute; top: -10px; left: 50%; transform: translateX(-50%);
+    width: calc(100% - 60px); height: 2px; background: var(--border); }
+  .org-children > .org-node { position: relative; flex-shrink: 0; }
+  .org-children > .org-node::before { content: ''; position: absolute; top: -10px; left: 50%;
+    width: 2px; height: 10px; background: var(--border); }
+  .org-children.single::before { display: none; }
+  .org-children.single > .org-node::before { display: none; }
+
+  /* Add agent button in tree */
+  .org-add-node { background: transparent; border: 2px dashed var(--border); border-radius: 10px;
+    padding: 12px 20px; color: var(--muted); cursor: pointer;
+    transition: border-color 0.2s, color 0.2s; font-size: 12px; min-width: 120px; }
+  .org-add-node:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* File Viewer Modal */
+  .viewer-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex;
+    align-items: center; justify-content: center; z-index: 150; }
+  .viewer-modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    width: 90vw; height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+  .viewer-header { padding: 12px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+  .viewer-header .viewer-title { flex: 1; font-size: 14px; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .viewer-header .viewer-path { font-size: 11px; color: var(--muted); font-family: monospace;
+    max-width: 50%; overflow: hidden; text-overflow: ellipsis; }
+  .viewer-header .viewer-close { background: none; border: none; cursor: pointer;
+    color: var(--muted); font-size: 20px; padding: 4px 8px; border-radius: 4px; }
+  .viewer-header .viewer-close:hover { background: rgba(255,255,255,0.1); color: var(--text); }
+  .viewer-body { flex: 1; overflow: auto; padding: 0; background: var(--bg); }
+
+  /* Viewer: Image */
+  .viewer-body.image-viewer { display: flex; align-items: center; justify-content: center;
+    padding: 20px; background: #1a1a1a; }
+  .viewer-body.image-viewer img { max-width: 100%; max-height: 100%; object-fit: contain;
+    border-radius: 4px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+
+  /* Viewer: PDF */
+  .viewer-body.pdf-viewer { padding: 0; }
+  .viewer-body.pdf-viewer iframe { width: 100%; height: 100%; border: none; }
+
+  /* Viewer: Markdown */
+  .viewer-body.markdown-viewer { padding: 24px 32px; overflow-y: auto; }
+  .viewer-body.markdown-viewer .md-content { max-width: 900px; margin: 0 auto;
+    font-size: 14px; line-height: 1.7; color: var(--text); }
+  .viewer-body.markdown-viewer .md-content h1,
+  .viewer-body.markdown-viewer .md-content h2,
+  .viewer-body.markdown-viewer .md-content h3,
+  .viewer-body.markdown-viewer .md-content h4 { margin-top: 24px; margin-bottom: 12px; font-weight: 600; }
+  .viewer-body.markdown-viewer .md-content h1 { font-size: 24px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  .viewer-body.markdown-viewer .md-content h2 { font-size: 20px; }
+  .viewer-body.markdown-viewer .md-content h3 { font-size: 16px; }
+  .viewer-body.markdown-viewer .md-content p { margin-bottom: 12px; }
+  .viewer-body.markdown-viewer .md-content code { background: rgba(88,166,255,0.1);
+    padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px; }
+  .viewer-body.markdown-viewer .md-content pre { background: rgba(0,0,0,0.3);
+    padding: 16px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+  .viewer-body.markdown-viewer .md-content pre code { background: none; padding: 0; }
+  .viewer-body.markdown-viewer .md-content blockquote { border-left: 3px solid var(--accent);
+    margin: 16px 0; padding: 8px 16px; color: var(--muted); background: rgba(88,166,255,0.05); }
+  .viewer-body.markdown-viewer .md-content ul, .viewer-body.markdown-viewer .md-content ol {
+    margin: 12px 0; padding-left: 24px; }
+  .viewer-body.markdown-viewer .md-content li { margin-bottom: 6px; }
+  .viewer-body.markdown-viewer .md-content a { color: var(--accent); text-decoration: none; }
+  .viewer-body.markdown-viewer .md-content a:hover { text-decoration: underline; }
+  .viewer-body.markdown-viewer .md-content table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+  .viewer-body.markdown-viewer .md-content th, .viewer-body.markdown-viewer .md-content td {
+    border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+  .viewer-body.markdown-viewer .md-content th { background: var(--surface); font-weight: 600; }
+  .viewer-body.markdown-viewer .md-content img { max-width: 100%; border-radius: 4px; }
+  .viewer-body.markdown-viewer .md-content hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+
+  /* Viewer: Code/Text */
+  .viewer-body.code-viewer { padding: 16px; overflow: auto; }
+  .viewer-body.code-viewer pre { margin: 0; font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+
+  /* Clickable file rows */
+  .file-row { cursor: pointer; transition: background 0.15s; }
+  .file-row:hover { background: rgba(88,166,255,0.08); }
+  .file-row.dir:hover { background: rgba(88,166,255,0.12); }
+</style>
+</head>
+<body>
+
+<header>
+  <a href="/" class="back-link">&#8592; Dashboard</a>
+  <div class="project-icon">&#128193;</div>
+  <div class="project-info">
+    <div class="project-name" id="projectName">Loading...</div>
+    <div class="project-desc" id="projectDesc"></div>
+    <div class="project-folder" id="projectFolder"></div>
+  </div>
+  <div class="header-actions">
+    <button class="btn btn-sm" onclick="editProjectSettings()">&#9881; Settings</button>
+  </div>
+</header>
+
+<div class="main">
+  <!-- Agents section -->
+  <div class="section">
+    <div class="section-header">
+      <h3>&#129302; Agents</h3>
+      <span class="count" id="agentCount">0 agents</span>
+    </div>
+    <div class="section-body">
+      <div class="agent-grid" id="agentGrid">
+        <div style="color:var(--muted);font-size:13px">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ephemeral Workers section -->
+  <div class="section" id="ephemeralSection" style="display:none">
+    <div class="section-header">
+      <h3>&#9889; Ephemeral Workers</h3>
+      <span class="count" id="ephemeralCount">0 workers</span>
+    </div>
+    <div class="section-body">
+      <div class="ephemeral-list" id="ephemeralList">
+        <div class="ephemeral-empty">No ephemeral workers active.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Task Pool section -->
+  <div class="section">
+    <div class="section-header">
+      <h3>&#128203; Task Pool</h3>
+      <span class="count" id="taskCount">0 tasks</span>
+      <button class="btn btn-sm" onclick="refreshTasks()">&#8635; Refresh</button>
+    </div>
+    <div class="section-body">
+      <div class="task-stats" id="taskStats">
+        <span class="stat-pill available">&#9899; Available: <strong>0</strong></span>
+        <span class="stat-pill in-progress">&#9898; In Progress: <strong>0</strong></span>
+        <span class="stat-pill completed">&#9989; Completed: <strong>0</strong></span>
+        <span class="stat-pill failed">&#10060; Failed: <strong>0</strong></span>
+      </div>
+      <div class="task-list" id="taskList">
+        <div style="color:var(--muted);font-size:13px">No tasks yet.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Files section -->
+  <div class="section">
+    <div class="section-header">
+      <h3>&#128194; Project Files</h3>
+      <span class="count" id="fileCount">-</span>
+      <button class="btn btn-sm" onclick="refreshFiles()">&#8635; Refresh</button>
+    </div>
+    <div class="section-body">
+      <div class="file-list" id="fileList">
+        <div style="color:var(--muted);font-size:13px">Loading...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Agent Modal -->
+<div class="modal-overlay" id="addAgentModal" style="display:none">
+  <div class="modal">
+    <h2 id="agentModalTitle">Add Agent</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px" id="agentModalDesc">Add an agent to this project.</p>
+    <div class="form-row">
+      <div class="form-group">
+        <label>ID (unique, lowercase)</label>
+        <input type="text" id="agentFormId" placeholder="coder">
+      </div>
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="agentFormName" placeholder="Coder">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Role / Specialty</label>
+      <input type="text" id="agentFormRole" placeholder="e.g. Full-Stack Developer">
+    </div>
+    <div class="form-group">
+      <label>Reports To (Boss)</label>
+      <select id="agentFormReportsTo">
+        <option value="">(None - Top Level)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Capabilities (comma-separated)</label>
+      <input type="text" id="agentFormCaps" placeholder="coding, debugging, testing">
+    </div>
+    <div class="form-group">
+      <label>Home Folder (relative to project root)</label>
+      <input type="text" id="agentFormHome" placeholder="/ (full project access)">
+    </div>
+    <div class="form-group">
+      <div class="checkbox-row">
+        <input type="checkbox" id="agentFormSpawn">
+        <label for="agentFormSpawn" style="margin-bottom:0">Can spawn ephemeral workers (supervisor)</label>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="hideAgentModal()">Cancel</button>
+      <button class="btn btn-primary" id="agentFormSubmit" onclick="submitAgentForm()">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Project Modal -->
+<div class="modal-overlay" id="editProjectModal" style="display:none">
+  <div class="modal">
+    <h2>Project Settings</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Update project metadata.</p>
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" id="editProjectName">
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <input type="text" id="editProjectDesc">
+    </div>
+    <div class="form-group">
+      <label>Folder</label>
+      <input type="text" id="editProjectFolder">
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="hideEditProjectModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveProjectSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Scheduled Tasks Modal -->
+<div class="modal-overlay" id="schedTaskModal" style="display:none">
+  <div class="modal">
+    <h2 id="schedTaskModalTitle">Add Scheduled Task</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Schedule this agent to run automatically on a cron schedule.</p>
+    <div class="form-group">
+      <label>Task Name</label>
+      <input type="text" id="schedTaskName" placeholder="Daily code review">
+    </div>
+    <div class="form-group">
+      <label>Task Type</label>
+      <select id="schedTaskType" onchange="toggleSchedTaskType()">
+        <option value="ai">🤖 AI Task (uses tokens)</option>
+        <option value="command">💻 Shell Command (no tokens)</option>
+      </select>
+    </div>
+    <div class="form-group" id="schedTaskPromptGroup">
+      <label>Prompt (what the agent should do)</label>
+      <textarea id="schedTaskPrompt" rows="4" placeholder="Review all code changes from the last 24 hours and provide feedback."></textarea>
+    </div>
+    <div class="form-group" id="schedTaskCommandGroup" style="display:none">
+      <label>Shell Command</label>
+      <input type="text" id="schedTaskCommand" placeholder="npm run build">
+      <p style="font-size:10px;color:var(--muted);margin-top:4px">Runs in the agent's home folder. Examples: "npm test", "./backup.sh", "git pull"</p>
+    </div>
+    <div class="form-group">
+      <label>Schedule</label>
+      <select id="schedTaskQuick" onchange="applyQuickSchedule()">
+        <option value="">-- Quick presets --</option>
+        <option value="*/5 * * * *">Every 5 minutes</option>
+        <option value="*/15 * * * *">Every 15 minutes</option>
+        <option value="*/30 * * * *">Every 30 minutes</option>
+        <option value="0 * * * *">Every hour (on the hour)</option>
+        <option value="0 */2 * * *">Every 2 hours</option>
+        <option value="0 */4 * * *">Every 4 hours</option>
+        <option value="0 9 * * *">Daily at 9:00 AM</option>
+        <option value="0 12 * * *">Daily at 12:00 PM (noon)</option>
+        <option value="0 18 * * *">Daily at 6:00 PM</option>
+        <option value="0 0 * * *">Daily at midnight</option>
+        <option value="0 9 * * 1-5">Weekdays at 9:00 AM</option>
+        <option value="0 9 * * 1">Every Monday at 9:00 AM</option>
+        <option value="0 9 1 * *">1st of month at 9:00 AM</option>
+        <option value="custom">Custom (enter cron below)</option>
+      </select>
+    </div>
+    <div class="form-group" id="schedTaskCronGroup" style="display:none">
+      <label>Cron Expression (advanced)</label>
+      <input type="text" id="schedTaskCron" placeholder="0 9 * * *">
+      <p style="font-size:10px;color:var(--muted);margin-top:4px">Format: minute hour day-of-month month day-of-week</p>
+    </div>
+    <div id="schedTaskPreview" style="background:var(--surface);padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:12px;display:none">
+      <span style="color:var(--muted)">Schedule:</span> <span id="schedTaskPreviewText"></span>
+    </div>
+    <div class="form-group">
+      <div class="checkbox-row">
+        <input type="checkbox" id="schedTaskEnabled" checked>
+        <label for="schedTaskEnabled" style="margin-bottom:0">Enabled</label>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="hideSchedTaskModal()">Cancel</button>
+      <button class="btn btn-primary" id="schedTaskSubmit" onclick="submitSchedTask()">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- Scheduled Tasks List Modal -->
+<div class="modal-overlay" id="schedTaskListModal" style="display:none">
+  <div class="modal" style="width:600px">
+    <h2>Scheduled Tasks - <span id="schedTaskListAgent"></span></h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Manage scheduled tasks for this agent.</p>
+    <div id="schedTaskListContainer"></div>
+    <div class="actions" style="margin-top:16px">
+      <button class="btn btn-primary" onclick="showAddSchedTask()">+ Add Task</button>
+      <button class="btn" onclick="hideSchedTaskListModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- File Viewer Modal -->
+<div class="viewer-overlay" id="fileViewer" style="display:none" onclick="closeViewerIfOverlay(event)">
+  <div class="viewer-modal">
+    <div class="viewer-header">
+      <span class="viewer-title" id="viewerTitle">File</span>
+      <span class="viewer-path" id="viewerPath"></span>
+      <a id="viewerDownload" href="#" download class="btn btn-sm" style="margin-left:auto">&#128190; Download</a>
+      <button class="viewer-close" onclick="closeViewer()">&times;</button>
+    </div>
+    <div class="viewer-body" id="viewerBody">
+      <!-- Content inserted dynamically -->
+    </div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+const socket = io(API);
+
+// Extract project ID from URL: /project/:projectId
+const pathParts = window.location.pathname.split('/');
+const projectId = pathParts[2];
+
+let project = null;
+let editingAgentId = null;
+let heartbeats = {};  // agentId -> heartbeat entry
+
+// ============================================================================
+// Load project data
+// ============================================================================
+
+async function loadProject() {
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}`);
+    if (!res.ok) {
+      document.getElementById('projectName').textContent = 'Project not found';
+      return;
+    }
+    project = await res.json();
+    renderProject();
+  } catch (e) {
+    document.getElementById('projectName').textContent = 'Error loading project';
+  }
+}
+
+function renderProject() {
+  document.title = `${project.name} - Project`;
+  document.getElementById('projectName').textContent = project.name;
+  document.getElementById('projectDesc').textContent = project.description || '';
+  document.getElementById('projectFolder').textContent = project.folder || '/';
+
+  fetchHeartbeats();
+  renderAgents();
+  renderEphemeralWorkers();
+  refreshTasks();
+  refreshFiles();
+}
+
+async function fetchHeartbeats() {
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/heartbeats`);
+    if (res.ok) {
+      const list = await res.json();
+      heartbeats = {};
+      list.forEach(h => heartbeats[h.agentId] = h);
+    }
+  } catch (e) {
+    console.error('Failed to fetch heartbeats:', e);
+  }
+}
+
+// ============================================================================
+// Agents - Hierarchical Tree View
+// ============================================================================
+
+function renderAgents() {
+  const grid = document.getElementById('agentGrid');
+  const count = document.getElementById('agentCount');
+  const agents = project.agents || [];
+  const persistentAgents = agents.filter(a => !a.ephemeral);
+  count.textContent = `${persistentAgents.length} agent${persistentAgents.length !== 1 ? 's' : ''}`;
+
+  // Build agent lookup
+  const agentMap = {};
+  agents.forEach(a => agentMap[a.id] = a);
+
+  // Find top-level agents (no reportsTo, not ephemeral)
+  const topLevel = persistentAgents.filter(a => !a.reportsTo);
+
+  // Build the org tree
+  let html = '<div class="org-tree">';
+  
+  // User at the top
+  html += '<div class="org-user"><span class="user-icon">&#128100;</span> You</div>';
+  html += '<div class="org-connector"></div>';
+
+  if (topLevel.length === 0) {
+    // No agents yet - show add button
+    html += `<div class="org-add-node" onclick="showAddAgentModal(null)">+ Add Lead Agent</div>`;
+  } else {
+    // Show top-level agent(s) and their children
+    html += `<div class="org-children ${topLevel.length === 1 ? 'single' : ''}">`;
+    for (const agent of topLevel) {
+      html += renderAgentNode(agent, agentMap, agents);
+    }
+    html += '</div>';
+  }
+
+  html += '</div>';
+  grid.innerHTML = html;
+}
+
+function renderAgentNode(agent, agentMap, allAgents) {
+  // kilocode_change - Use !ephemeral instead of canSpawnWorkers
+  const isSupervisor = !agent.ephemeral;
+  const avatar = isSupervisor ? '&#128081;' : '&#129302;';
+  const hb = heartbeats[agent.id];
+  
+  // Status indicator
+  let statusHtml = '';
+  if (hb) {
+    const statusLabels = { idle: 'Idle', working: 'Working', blocked: 'Blocked', 'waiting-for-boss': 'Waiting', offline: 'Offline' };
+    const label = statusLabels[hb.status] || hb.status;
+    statusHtml = `<div class="heartbeat-indicator ${hb.status}">${label}</div>`;
+  }
+
+  // Find direct reports (excluding ephemeral)
+  const children = allAgents.filter(a => a.reportsTo === agent.id && !a.ephemeral);
+
+  let html = '<div class="org-node">';
+  html += `<div class="org-node-content ${isSupervisor ? 'supervisor' : ''}" onclick="openAgent('${escapeAttr(agent.id)}')">`;
+  html += `<div class="node-header">`;
+  html += `<div class="node-avatar">${avatar}</div>`;
+  html += `<div><div class="node-name">${escapeHtml(agent.name)}</div>`;
+  html += `<div class="node-role">${escapeHtml(agent.role)}</div></div>`;
+  html += `</div>`;
+  if (statusHtml) html += `<div class="node-status">${statusHtml}</div>`;
+  html += `<div class="node-actions" onclick="event.stopPropagation()">`;
+  html += `<button class="btn btn-sm" onclick="editAgentInProject('${escapeAttr(agent.id)}')">&#9998;</button>`;
+  html += `<button class="btn btn-sm" onclick="showSchedTaskList('${escapeAttr(agent.id)}')" title="Tasks">&#128337;</button>`;
+  html += `<button class="btn btn-sm" style="color:var(--red)" onclick="removeAgent('${escapeAttr(agent.id)}','${escapeAttr(agent.name)}')">&#128465;</button>`;
+  html += `</div>`;
+  html += `</div>`;
+
+  // Render children if any
+  if (children.length > 0 || isSupervisor) {
+    html += '<div class="org-connector"></div>';
+    html += `<div class="org-children ${children.length <= 1 ? 'single' : ''}">`;
+    for (const child of children) {
+      html += renderAgentNode(child, agentMap, allAgents);
+    }
+    // Add button for supervisors to add sub-agents
+    if (isSupervisor) {
+      html += `<div class="org-node"><div class="org-add-node" onclick="showAddAgentModal('${escapeAttr(agent.id)}')">+ Add</div></div>`;
+    }
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function renderEphemeralWorkers() {
+  const agents = project.agents || [];
+  const ephemeral = agents.filter(a => a.ephemeral);
+  const section = document.getElementById('ephemeralSection');
+  const list = document.getElementById('ephemeralList');
+  const count = document.getElementById('ephemeralCount');
+
+  if (ephemeral.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = 'block';
+  count.textContent = `${ephemeral.length} worker${ephemeral.length !== 1 ? 's' : ''}`;
+
+  const html = ephemeral.map(w => {
+    const hb = heartbeats[w.id];
+    const status = hb?.status || 'idle';
+    const statusLabel = hb?.currentTask || status;
+    const isWorking = status === 'working';
+    
+    return `<div class="ephemeral-card ${isWorking ? 'working' : ''}" onclick="openAgent('${escapeAttr(w.id)}')">
+      <span class="worker-icon">&#9889;</span>
+      <div class="worker-info">
+        <span class="worker-name">${escapeHtml(w.name)}</span>
+        <span class="worker-status">${escapeHtml(statusLabel)}</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  list.innerHTML = html || '<div class="ephemeral-empty">No ephemeral workers active.</div>';
+}
+
+function openAgent(agentId) {
+  window.open(`/project/${projectId}/agent/${agentId}`, '_blank');
+}
+
+function showAddAgentModal(parentAgentId = null) {
+  const agents = (project.agents || []).filter(a => !a.ephemeral);
+  const hasTopLevel = agents.some(a => !a.reportsTo);
+
+  editingAgentId = null;
+  document.getElementById('agentModalTitle').textContent = parentAgentId ? 'Add Sub-Agent' : 'Add Lead Agent';
+  document.getElementById('agentModalDesc').textContent = parentAgentId 
+    ? 'Add a worker agent under a supervisor.'
+    : 'Add the lead agent for this project.';
+  document.getElementById('agentFormId').value = '';
+  document.getElementById('agentFormId').disabled = false;
+  document.getElementById('agentFormName').value = '';
+  document.getElementById('agentFormRole').value = '';
+  document.getElementById('agentFormCaps').value = '';
+  document.getElementById('agentFormHome').value = '/';
+  document.getElementById('agentFormPrompt').value = '';
+  document.getElementById('agentFormSpawn').checked = !parentAgentId; // Default supervisor for lead agent
+  document.getElementById('agentFormSubmit').textContent = 'Add';
+  
+  populateReportsToDropdown();
+  const reportsToSelect = document.getElementById('agentFormReportsTo');
+  
+  if (parentAgentId) {
+    // Adding sub-agent - set parent and hide dropdown
+    reportsToSelect.value = parentAgentId;
+    reportsToSelect.closest('.form-group').style.display = 'none';
+  } else if (hasTopLevel) {
+    // Already has top-level - must select a boss
+    reportsToSelect.value = '';
+    reportsToSelect.closest('.form-group').style.display = 'block';
+  } else {
+    // No top-level yet - this will be the lead agent
+    reportsToSelect.value = '';
+    reportsToSelect.closest('.form-group').style.display = 'none';
+  }
+  
+  document.getElementById('addAgentModal').style.display = 'flex';
+}
+
+function editAgentInProject(agentId) {
+  const agent = (project.agents || []).find(a => a.id === agentId);
+  if (!agent) return;
+  editingAgentId = agentId;
+  document.getElementById('agentModalTitle').textContent = `Edit: ${agent.name}`;
+  document.getElementById('agentModalDesc').textContent = 'Update agent configuration.';
+  document.getElementById('agentFormId').value = agent.id;
+  document.getElementById('agentFormId').disabled = true;
+  document.getElementById('agentFormName').value = agent.name;
+  document.getElementById('agentFormRole').value = agent.role;
+  document.getElementById('agentFormCaps').value = (agent.capabilities || []).join(', ');
+  document.getElementById('agentFormHome').value = agent.homeFolder || '/';
+  // kilocode_change - Use !ephemeral for supervisor checkbox
+  document.getElementById('agentFormSpawn').checked = !agent.ephemeral;
+  document.getElementById('agentFormSubmit').textContent = 'Save';
+  populateReportsToDropdown(agentId);
+  document.getElementById('agentFormReportsTo').value = agent.reportsTo || '';
+  document.getElementById('addAgentModal').style.display = 'flex';
+}
+
+function populateReportsToDropdown(excludeId = null) {
+  const select = document.getElementById('agentFormReportsTo');
+  const agents = (project.agents || []).filter(a => !a.ephemeral && a.id !== excludeId);
+  select.innerHTML = '<option value="">(None - Top Level)</option>' +
+    agents.map(a => `<option value="${escapeAttr(a.id)}">${escapeHtml(a.name)} (${escapeHtml(a.role)})</option>`).join('');
+}
+
+function hideAgentModal() {
+  document.getElementById('addAgentModal').style.display = 'none';
+  editingAgentId = null;
+}
+
+async function submitAgentForm() {
+  const id = document.getElementById('agentFormId').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  const name = document.getElementById('agentFormName').value.trim();
+  const role = document.getElementById('agentFormRole').value.trim();
+  const capabilities = document.getElementById('agentFormCaps').value.split(',').map(s => s.trim()).filter(Boolean);
+  const homeFolder = document.getElementById('agentFormHome').value.trim() || '/';
+  // kilocode_change - Use ephemeral (inverted) instead of canSpawnWorkers
+  const isSupervisor = document.getElementById('agentFormSpawn').checked;
+  const ephemeral = !isSupervisor;
+  const reportsTo = document.getElementById('agentFormReportsTo').value || undefined;
+
+  if (!id || !name || !role) {
+    alert('Please fill in ID, Name, and Role');
+    return;
+  }
+
+  try {
+    let res;
+    if (editingAgentId) {
+      res = await fetch(`${API}/api/projects/${projectId}/agents/${editingAgentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, role, capabilities, homeFolder, ephemeral, reportsTo }),
+      });
+    } else {
+      res = await fetch(`${API}/api/projects/${projectId}/agents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, name, role, capabilities, homeFolder, ephemeral, reportsTo }),
+      });
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || 'Failed');
+      return;
+    }
+    hideAgentModal();
+    showToast(editingAgentId ? `${name} updated` : `${name} added`, 'success');
+    loadProject();
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+async function removeAgent(agentId, agentName) {
+  if (!confirm(`Remove ${agentName} from this project?`)) return;
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/agents/${agentId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`${agentName} removed`, 'success');
+      loadProject();
+    } else {
+      alert(data.error || 'Failed');
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+async function resetAgentMemory(agentId) {
+  const agent = (project.agents || []).find(a => a.id === agentId);
+  if (!agent) return;
+  if (!confirm(`Reset ${agent.name}'s memory? Conversation history will be cleared.`)) return;
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/agents/${agentId}/reset`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`${agent.name} memory reset`, 'success');
+      loadProject();
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+// ============================================================================
+// Task Pool
+// ============================================================================
+
+async function refreshTasks() {
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/tasks`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderTasks(data.tasks, data.counts);
+  } catch (e) {
+    console.error('Failed to load tasks:', e);
+  }
+}
+
+function renderTasks(tasks, counts) {
+  const countEl = document.getElementById('taskCount');
+  const statsEl = document.getElementById('taskStats');
+  const listEl = document.getElementById('taskList');
+
+  countEl.textContent = `${counts.total} task${counts.total !== 1 ? 's' : ''}`;
+
+  statsEl.innerHTML = `
+    <span class="stat-pill available">&#9899; Available: <strong>${counts.available}</strong></span>
+    <span class="stat-pill in-progress">&#9898; In Progress: <strong>${counts.inProgress}</strong></span>
+    <span class="stat-pill completed">&#9989; Completed: <strong>${counts.completed}</strong></span>
+    <span class="stat-pill failed">&#10060; Failed: <strong>${counts.failed}</strong></span>
+  `;
+
+  if (!tasks || tasks.length === 0) {
+    listEl.innerHTML = '<div style="color:var(--muted);font-size:13px">No tasks in the pool yet.</div>';
+    return;
+  }
+
+  listEl.innerHTML = tasks.map(t => {
+    const icon = getTaskIcon(t.status);
+    const priorityClass = t.priority >= 8 ? 'high' : (t.priority >= 5 ? 'medium' : '');
+    const claimedInfo = t.claimedBy ? `Claimed by ${t.claimedBy}` : '';
+    return `<div class="task-row">
+      <div class="task-status-icon">${icon}</div>
+      <div class="task-content">
+        <div class="task-title">${escapeHtml(t.title)}</div>
+        <div class="task-desc">${escapeHtml(t.description)}</div>
+        <div class="task-meta">
+          <span class="task-priority ${priorityClass}">P${t.priority}</span>
+          <span>${t.status}</span>
+          ${claimedInfo ? `<span>${claimedInfo}</span>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function getTaskIcon(status) {
+  switch (status) {
+    case 'available': return '&#9899;';  // circle
+    case 'claimed': return '&#128073;';  // pointing hand
+    case 'in-progress': return '&#9881;'; // gear
+    case 'completed': return '&#9989;';  // check
+    case 'failed': return '&#10060;';    // x
+    default: return '&#8226;';
+  }
+}
+
+// ============================================================================
+// Files
+// ============================================================================
+
+async function refreshFiles() {
+  const list = document.getElementById('fileList');
+  const count = document.getElementById('fileCount');
+  try {
+    // Use the project folder for workspace browsing
+    const folder = project.folder || '/';
+    const res = await fetch(`${API}/api/workspace?path=${encodeURIComponent(folder)}`);
+    const data = await res.json();
+    const entries = data.entries || [];
+    count.textContent = `${entries.length} items`;
+
+    if (entries.length === 0) {
+      list.innerHTML = '<div style="color:var(--muted);font-size:13px">No files yet</div>';
+      return;
+    }
+
+    // Sort: dirs first, then files
+    entries.sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    list.innerHTML = entries.map(e => {
+      const icon = e.isDir ? '&#128194;' : '&#128196;';
+      const cls = e.isDir ? ' dir' : '';
+      const size = e.isDir ? '' : formatSize(e.size || 0);
+      const filePath = (folder === '/' ? '' : folder + '/') + e.name;
+      const fileIcon = e.isDir ? '&#128194;' : getFileIcon(e.name);
+      const onclick = e.isDir ? '' : `onclick="openFileViewer('${escapeAttr(filePath)}', '${escapeAttr(e.name)}')"`;
+      return `<div class="file-row${cls}" ${onclick}>
+        <span class="file-icon">${fileIcon}</span>
+        <span class="file-name">${escapeHtml(e.name)}</span>
+        <span class="file-size">${size}</span>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = '<div style="color:var(--red);font-size:13px">Error loading files</div>';
+  }
+}
+
+// Get icon based on file extension
+function getFileIcon(name) {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  const icons = {
+    // Images
+    png: '&#128247;', jpg: '&#128247;', jpeg: '&#128247;', gif: '&#128247;',
+    webp: '&#128247;', svg: '&#128247;', bmp: '&#128247;', ico: '&#128247;',
+    // Documents
+    pdf: '&#128196;', doc: '&#128196;', docx: '&#128196;',
+    // Markdown
+    md: '&#128221;', markdown: '&#128221;',
+    // Code
+    js: '&#128295;', ts: '&#128295;', jsx: '&#128295;', tsx: '&#128295;',
+    py: '&#128295;', java: '&#128295;', c: '&#128295;', cpp: '&#128295;',
+    h: '&#128295;', go: '&#128295;', rs: '&#128295;', rb: '&#128295;',
+    php: '&#128295;', swift: '&#128295;', kt: '&#128295;',
+    // Config/Data
+    json: '&#128203;', yaml: '&#128203;', yml: '&#128203;', xml: '&#128203;',
+    toml: '&#128203;', ini: '&#128203;', env: '&#128203;',
+    // Web
+    html: '&#127760;', css: '&#127960;', scss: '&#127960;', less: '&#127960;',
+    // Text
+    txt: '&#128196;', log: '&#128196;', csv: '&#128203;',
+    // Archives
+    zip: '&#128230;', tar: '&#128230;', gz: '&#128230;', rar: '&#128230;',
+  };
+  return icons[ext] || '&#128196;';
+}
+
+// ============================================================================
+// File Viewer
+// ============================================================================
+
+let currentViewerPath = null;
+
+function openFileViewer(filePath, fileName) {
+  currentViewerPath = filePath;
+  const ext = (fileName.split('.').pop() || '').toLowerCase();
+  
+  document.getElementById('viewerTitle').textContent = fileName;
+  document.getElementById('viewerPath').textContent = filePath;
+  document.getElementById('viewerDownload').href = `${API}/api/workspace/raw?path=${encodeURIComponent(filePath)}`;
+  
+  const body = document.getElementById('viewerBody');
+  body.className = 'viewer-body';
+  body.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted)">Loading...</div>';
+  
+  document.getElementById('fileViewer').style.display = 'flex';
+  
+  // Determine viewer type
+  const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'];
+  const pdfExts = ['pdf'];
+  const markdownExts = ['md', 'markdown'];
+  const codeExts = ['js', 'ts', 'jsx', 'tsx', 'py', 'java', 'c', 'cpp', 'h', 'go', 'rs', 'rb', 'php',
+                    'swift', 'kt', 'json', 'yaml', 'yml', 'xml', 'toml', 'ini', 'html', 'css', 'scss',
+                    'less', 'txt', 'log', 'csv', 'sh', 'bash', 'sql', 'env'];
+  
+  if (imageExts.includes(ext)) {
+    showImageViewer(filePath);
+  } else if (pdfExts.includes(ext)) {
+    showPdfViewer(filePath);
+  } else if (markdownExts.includes(ext)) {
+    showMarkdownViewer(filePath);
+  } else if (codeExts.includes(ext)) {
+    showCodeViewer(filePath);
+  } else {
+    // Try as text, fall back to download prompt
+    showCodeViewer(filePath, true);
+  }
+}
+
+function showImageViewer(filePath) {
+  const body = document.getElementById('viewerBody');
+  body.className = 'viewer-body image-viewer';
+  body.innerHTML = `<img src="${API}/api/workspace/raw?path=${encodeURIComponent(filePath)}" alt="Image" onerror="this.src=''; this.alt='Failed to load image'">`;
+}
+
+function showPdfViewer(filePath) {
+  const body = document.getElementById('viewerBody');
+  body.className = 'viewer-body pdf-viewer';
+  body.innerHTML = `<iframe src="${API}/api/workspace/raw?path=${encodeURIComponent(filePath)}"></iframe>`;
+}
+
+async function showMarkdownViewer(filePath) {
+  const body = document.getElementById('viewerBody');
+  body.className = 'viewer-body markdown-viewer';
+  
+  try {
+    const res = await fetch(`${API}/api/workspace/file?path=${encodeURIComponent(filePath)}`);
+    if (!res.ok) throw new Error('Failed to load file');
+    const data = await res.json();
+    const content = data.content || '';
+    
+    // Simple markdown renderer (basic support)
+    const html = renderMarkdown(content);
+    body.innerHTML = `<div class="md-content">${html}</div>`;
+  } catch (e) {
+    body.innerHTML = `<div style="padding:40px;text-align:center;color:var(--red)">Error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function showCodeViewer(filePath, unknownType = false) {
+  const body = document.getElementById('viewerBody');
+  body.className = 'viewer-body code-viewer';
+  
+  try {
+    const res = await fetch(`${API}/api/workspace/file?path=${encodeURIComponent(filePath)}`);
+    if (!res.ok) throw new Error('Failed to load file');
+    const data = await res.json();
+    const content = data.content || '';
+    
+    // Check if content is binary (has lots of non-printable chars)
+    if (unknownType && isBinaryContent(content)) {
+      body.innerHTML = `<div style="padding:40px;text-align:center;">
+        <div style="font-size:48px;margin-bottom:16px">&#128196;</div>
+        <div style="color:var(--muted);margin-bottom:16px">This file appears to be binary and cannot be displayed.</div>
+        <a href="${API}/api/workspace/raw?path=${encodeURIComponent(filePath)}" download class="btn btn-primary">Download File</a>
+      </div>`;
+      return;
+    }
+    
+    body.innerHTML = `<pre>${escapeHtml(content)}</pre>`;
+  } catch (e) {
+    body.innerHTML = `<div style="padding:40px;text-align:center;color:var(--red)">Error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function isBinaryContent(content) {
+  // Check first 1000 chars for binary indicators
+  const sample = content.slice(0, 1000);
+  let nonPrintable = 0;
+  for (let i = 0; i < sample.length; i++) {
+    const c = sample.charCodeAt(i);
+    // Allow tabs, newlines, carriage returns, and printable ASCII
+    if (c !== 9 && c !== 10 && c !== 13 && (c < 32 || c > 126) && c < 128) {
+      nonPrintable++;
+    }
+  }
+  return nonPrintable > sample.length * 0.1; // More than 10% non-printable = binary
+}
+
+// Simple markdown renderer
+function renderMarkdown(md) {
+  let html = escapeHtml(md);
+  
+  // Code blocks (```...```)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  
+  // Headers
+  html = html.replace(/^######\s+(.+)$/gm, '<h6>$1</h6>');
+  html = html.replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>');
+  html = html.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
+  
+  // Bold and italic
+  html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  html = html.replace(/___(.+?)___/g, '<strong><em>$1</em></strong>');
+  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  html = html.replace(/_(.+?)_/g, '<em>$1</em>');
+  
+  // Links
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  
+  // Images (after links to avoid conflict)
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">');
+  
+  // Blockquotes
+  html = html.replace(/^&gt;\s+(.+)$/gm, '<blockquote>$1</blockquote>');
+  
+  // Horizontal rules
+  html = html.replace(/^---+$/gm, '<hr>');
+  html = html.replace(/^\*\*\*+$/gm, '<hr>');
+  
+  // Unordered lists
+  html = html.replace(/^[\*\-]\s+(.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+  
+  // Ordered lists
+  html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+  
+  // Paragraphs (double newlines)
+  html = html.replace(/\n\n+/g, '</p><p>');
+  html = '<p>' + html + '</p>';
+  
+  // Clean up empty paragraphs
+  html = html.replace(/<p>\s*<\/p>/g, '');
+  html = html.replace(/<p>(<h[1-6]>)/g, '$1');
+  html = html.replace(/(<\/h[1-6]>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<pre>)/g, '$1');
+  html = html.replace(/(<\/pre>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<ul>)/g, '$1');
+  html = html.replace(/(<\/ul>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<blockquote>)/g, '$1');
+  html = html.replace(/(<\/blockquote>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<hr>)/g, '$1');
+  html = html.replace(/(<hr>)<\/p>/g, '$1');
+  
+  return html;
+}
+
+function closeViewer() {
+  document.getElementById('fileViewer').style.display = 'none';
+  currentViewerPath = null;
+}
+
+function closeViewerIfOverlay(event) {
+  if (event.target.classList.contains('viewer-overlay')) {
+    closeViewer();
+  }
+}
+
+// Keyboard shortcut to close viewer
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.getElementById('fileViewer').style.display === 'flex') {
+    closeViewer();
+  }
+});
+
+// ============================================================================
+// Project Settings
+// ============================================================================
+
+function editProjectSettings() {
+  document.getElementById('editProjectName').value = project.name;
+  document.getElementById('editProjectDesc').value = project.description || '';
+  document.getElementById('editProjectFolder').value = project.folder || '';
+  document.getElementById('editProjectModal').style.display = 'flex';
+}
+
+function hideEditProjectModal() {
+  document.getElementById('editProjectModal').style.display = 'none';
+}
+
+async function saveProjectSettings() {
+  const name = document.getElementById('editProjectName').value.trim();
+  const description = document.getElementById('editProjectDesc').value.trim();
+  const folder = document.getElementById('editProjectFolder').value.trim();
+
+  if (!name) { alert('Name is required'); return; }
+
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description, folder }),
+    });
+    if (res.ok) {
+      hideEditProjectModal();
+      showToast('Project updated', 'success');
+      loadProject();
+    } else {
+      const data = await res.json();
+      alert(data.error || 'Failed');
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+function escapeAttr(s) {
+  return (s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function showToast(msg, type = 'success') {
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+// ============================================================================
+// Init
+// ============================================================================
+
+loadProject();
+
+// Refresh on events
+socket.on('file-created', () => refreshFiles());
+socket.on('file-deleted', () => refreshFiles());
+socket.on('task-claimed', () => refreshTasks());
+socket.on('task-completed', () => refreshTasks());
+socket.on('task-failed', () => refreshTasks());
+
+// Agent events - refresh when agents are created/deleted
+socket.on('agent-created', (data) => {
+  if (data.projectId === projectId) {
+    loadProject(); // Reload to see new agent
+  }
+});
+socket.on('agent-deleted', (data) => {
+  if (data.projectId === projectId) {
+    loadProject(); // Reload to remove deleted agent
+  }
+});
+
+// Heartbeat events
+socket.on('heartbeat', (data) => {
+  if (data.projectId === projectId) {
+    heartbeats[data.agentId] = data;
+    renderAgents();
+    renderEphemeralWorkers();
+  }
+});
+socket.on('heartbeat-removed', (data) => {
+  if (data.projectId === projectId) {
+    delete heartbeats[data.agentId];
+    renderAgents();
+    renderEphemeralWorkers();
+  }
+});
+
+// Scheduled task events
+socket.on('scheduled-task-created', (data) => {
+  if (data.projectId === projectId) {
+    loadProject(); // Reload to get updated agent data
+  }
+});
+socket.on('scheduled-task-updated', (data) => {
+  if (data.projectId === projectId) {
+    loadProject();
+  }
+});
+socket.on('scheduled-task-deleted', (data) => {
+  if (data.projectId === projectId) {
+    loadProject();
+  }
+});
+
+// ============================================================================
+// Scheduled Tasks
+// ============================================================================
+
+let currentSchedAgentId = null;
+let editingSchedTaskId = null;
+
+async function showSchedTaskList(agentId) {
+  currentSchedAgentId = agentId;
+  // Refresh project data to get latest scheduled tasks
+  await loadProject();
+  const agent = (project.agents || []).find(a => a.id === agentId);
+  if (!agent) return;
+  
+  document.getElementById('schedTaskListAgent').textContent = agent.name;
+  renderSchedTaskList(agent);
+  document.getElementById('schedTaskListModal').style.display = 'flex';
+}
+
+function hideSchedTaskListModal() {
+  document.getElementById('schedTaskListModal').style.display = 'none';
+  currentSchedAgentId = null;
+}
+
+function renderSchedTaskList(agent) {
+  const container = document.getElementById('schedTaskListContainer');
+  const tasks = agent.scheduledTasks || [];
+  
+  if (tasks.length === 0) {
+    container.innerHTML = '<p style="color:var(--muted);font-size:13px">No scheduled tasks yet. Click "Add Task" to create one.</p>';
+    return;
+  }
+  
+  const html = tasks.map(t => {
+    const taskType = t.type || 'ai';
+    const typeIcon = taskType === 'command' ? '💻' : '🤖';
+    const statusIcon = t.lastRunStatus === 'running' ? '⏳' : 
+                       t.lastRunStatus === 'success' ? '✓' : 
+                       t.lastRunStatus === 'failed' ? '✗' : '⏰';
+    const statusClass = t.lastRunStatus || '';
+    const disabledClass = !t.enabled ? 'disabled' : '';
+    const lastRun = t.lastRunAt ? `Last: ${new Date(t.lastRunAt).toLocaleString()}` : 'Never run';
+    const nextRun = t.nextRunAt ? `Next: ${new Date(t.nextRunAt).toLocaleString()}` : '';
+    const scheduleDesc = describeCron(t.cron);
+    
+    return `<div class="sched-task ${statusClass} ${disabledClass}">
+      <span class="sched-status">${statusIcon}</span>
+      <div class="sched-info">
+        <div class="sched-name">${typeIcon} ${escapeHtml(t.name)}</div>
+        <div class="sched-cron">📅 ${scheduleDesc}</div>
+        <div class="sched-last">${lastRun} ${nextRun ? '· ' + nextRun : ''} · ${t.runCount || 0} runs</div>
+      </div>
+      <div class="sched-actions">
+        <button class="btn btn-sm" onclick="toggleSchedTask('${t.id}')" title="${t.enabled ? 'Disable' : 'Enable'}">${t.enabled ? '⏸' : '▶'}</button>
+        <button class="btn btn-sm" onclick="runSchedTaskNow('${t.id}')" title="Run Now">⚡</button>
+        <button class="btn btn-sm" onclick="editSchedTask('${t.id}')" title="Edit">✏</button>
+        <button class="btn btn-sm" style="color:var(--red)" onclick="deleteSchedTask('${t.id}')" title="Delete">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+  
+  container.innerHTML = html;
+}
+
+function toggleSchedTaskType() {
+  const type = document.getElementById('schedTaskType').value;
+  document.getElementById('schedTaskPromptGroup').style.display = type === 'ai' ? 'block' : 'none';
+  document.getElementById('schedTaskCommandGroup').style.display = type === 'command' ? 'block' : 'none';
+}
+
+function applyQuickSchedule() {
+  const quick = document.getElementById('schedTaskQuick').value;
+  const cronGroup = document.getElementById('schedTaskCronGroup');
+  const preview = document.getElementById('schedTaskPreview');
+  const previewText = document.getElementById('schedTaskPreviewText');
+  const cronInput = document.getElementById('schedTaskCron');
+  
+  if (quick === 'custom') {
+    cronGroup.style.display = 'block';
+    preview.style.display = 'none';
+  } else if (quick) {
+    cronInput.value = quick;
+    cronGroup.style.display = 'none';
+    preview.style.display = 'block';
+    previewText.textContent = describeCron(quick);
+  } else {
+    cronGroup.style.display = 'none';
+    preview.style.display = 'none';
+  }
+}
+
+function describeCron(cron) {
+  const descriptions = {
+    '*/5 * * * *': 'Every 5 minutes',
+    '*/15 * * * *': 'Every 15 minutes',
+    '*/30 * * * *': 'Every 30 minutes',
+    '0 * * * *': 'Every hour (on the hour)',
+    '0 */2 * * *': 'Every 2 hours',
+    '0 */4 * * *': 'Every 4 hours',
+    '0 9 * * *': 'Daily at 9:00 AM',
+    '0 12 * * *': 'Daily at 12:00 PM (noon)',
+    '0 18 * * *': 'Daily at 6:00 PM',
+    '0 0 * * *': 'Daily at midnight',
+    '0 9 * * 1-5': 'Weekdays at 9:00 AM',
+    '0 9 * * 1': 'Every Monday at 9:00 AM',
+    '0 9 1 * *': '1st of every month at 9:00 AM',
+  };
+  return descriptions[cron] || cron;
+}
+
+function showAddSchedTask() {
+  // Close the list modal first
+  document.getElementById('schedTaskListModal').style.display = 'none';
+  
+  editingSchedTaskId = null;
+  document.getElementById('schedTaskModalTitle').textContent = 'Add Scheduled Task';
+  document.getElementById('schedTaskName').value = '';
+  document.getElementById('schedTaskType').value = 'ai';
+  document.getElementById('schedTaskPrompt').value = '';
+  document.getElementById('schedTaskCommand').value = '';
+  document.getElementById('schedTaskQuick').value = '0 9 * * *';
+  document.getElementById('schedTaskCron').value = '0 9 * * *';
+  document.getElementById('schedTaskEnabled').checked = true;
+  document.getElementById('schedTaskSubmit').textContent = 'Add';
+  toggleSchedTaskType();
+  applyQuickSchedule();
+  document.getElementById('schedTaskModal').style.display = 'flex';
+}
+
+function editSchedTask(taskId) {
+  const agent = (project.agents || []).find(a => a.id === currentSchedAgentId);
+  if (!agent) return;
+  const task = (agent.scheduledTasks || []).find(t => t.id === taskId);
+  if (!task) return;
+  
+  // Close the list modal first
+  document.getElementById('schedTaskListModal').style.display = 'none';
+  
+  editingSchedTaskId = taskId;
+  document.getElementById('schedTaskModalTitle').textContent = 'Edit Scheduled Task';
+  document.getElementById('schedTaskName').value = task.name;
+  document.getElementById('schedTaskType').value = task.type || 'ai';
+  document.getElementById('schedTaskPrompt').value = task.prompt || '';
+  document.getElementById('schedTaskCommand').value = task.command || '';
+  document.getElementById('schedTaskCron').value = task.cron;
+  document.getElementById('schedTaskEnabled').checked = task.enabled;
+  document.getElementById('schedTaskSubmit').textContent = 'Save';
+  
+  // Try to match cron to a preset, otherwise show custom
+  const quickSelect = document.getElementById('schedTaskQuick');
+  const options = Array.from(quickSelect.options).map(o => o.value);
+  if (options.includes(task.cron)) {
+    quickSelect.value = task.cron;
+  } else {
+    quickSelect.value = 'custom';
+  }
+  
+  toggleSchedTaskType();
+  applyQuickSchedule();
+  document.getElementById('schedTaskModal').style.display = 'flex';
+}
+
+function hideSchedTaskModal() {
+  document.getElementById('schedTaskModal').style.display = 'none';
+  editingSchedTaskId = null;
+  // Return to the list modal
+  document.getElementById('schedTaskListModal').style.display = 'flex';
+}
+
+async function submitSchedTask() {
+  const name = document.getElementById('schedTaskName').value.trim();
+  const type = document.getElementById('schedTaskType').value;
+  const prompt = document.getElementById('schedTaskPrompt').value.trim();
+  const command = document.getElementById('schedTaskCommand').value.trim();
+  const cron = document.getElementById('schedTaskCron').value.trim();
+  const enabled = document.getElementById('schedTaskEnabled').checked;
+  
+  if (!name || !cron) {
+    showToast('Please fill task name and cron', 'error');
+    return;
+  }
+  
+  if (type === 'ai' && !prompt) {
+    showToast('AI task requires a prompt', 'error');
+    return;
+  }
+  
+  if (type === 'command' && !command) {
+    showToast('Command task requires a shell command', 'error');
+    return;
+  }
+  
+  const payload = { name, type, cron, enabled };
+  if (type === 'ai') payload.prompt = prompt;
+  if (type === 'command') payload.command = command;
+  
+  try {
+    if (editingSchedTaskId) {
+      // Update
+      await fetch(`${API}/api/projects/${projectId}/agents/${currentSchedAgentId}/scheduled-tasks/${editingSchedTaskId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      showToast('Scheduled task updated');
+    } else {
+      // Create
+      await fetch(`${API}/api/projects/${projectId}/agents/${currentSchedAgentId}/scheduled-tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      showToast('Scheduled task created');
+    }
+    
+    hideSchedTaskModal();
+    await loadProject();
+    const agent = (project.agents || []).find(a => a.id === currentSchedAgentId);
+    if (agent) renderSchedTaskList(agent);
+  } catch (e) {
+    showToast('Failed to save scheduled task', 'error');
+  }
+}
+
+async function toggleSchedTask(taskId) {
+  const agent = (project.agents || []).find(a => a.id === currentSchedAgentId);
+  if (!agent) return;
+  const task = (agent.scheduledTasks || []).find(t => t.id === taskId);
+  if (!task) return;
+  
+  try {
+    await fetch(`${API}/api/projects/${projectId}/agents/${currentSchedAgentId}/scheduled-tasks/${taskId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: !task.enabled })
+    });
+    showToast(task.enabled ? 'Task disabled' : 'Task enabled');
+    await loadProject();
+    const refreshedAgent = (project.agents || []).find(a => a.id === currentSchedAgentId);
+    if (refreshedAgent) renderSchedTaskList(refreshedAgent);
+  } catch (e) {
+    showToast('Failed to toggle task', 'error');
+  }
+}
+
+async function runSchedTaskNow(taskId) {
+  try {
+    await fetch(`${API}/api/projects/${projectId}/agents/${currentSchedAgentId}/scheduled-tasks/${taskId}/run`, {
+      method: 'POST'
+    });
+    showToast('Task triggered');
+    await loadProject();
+    const agent = (project.agents || []).find(a => a.id === currentSchedAgentId);
+    if (agent) renderSchedTaskList(agent);
+  } catch (e) {
+    showToast('Failed to run task', 'error');
+  }
+}
+
+async function deleteSchedTask(taskId) {
+  if (!confirm('Delete this scheduled task?')) return;
+  
+  try {
+    await fetch(`${API}/api/projects/${projectId}/agents/${currentSchedAgentId}/scheduled-tasks/${taskId}`, {
+      method: 'DELETE'
+    });
+    showToast('Task deleted');
+    await loadProject();
+    const agent = (project.agents || []).find(a => a.id === currentSchedAgentId);
+    if (agent) renderSchedTaskList(agent);
+  } catch (e) {
+    showToast('Failed to delete task', 'error');
+  }
+}
+</script>
+</body>
+</html>
