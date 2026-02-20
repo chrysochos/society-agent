@@ -1596,6 +1596,99 @@ function attachTreeHandlers() {
 let currentFileContent = '';
 let currentFilePath = '';
 
+const editableExts = ['js', 'ts', 'jsx', 'tsx', 'py', 'java', 'c', 'cpp', 'h', 'go', 'rs', 'rb', 'php',
+                      'swift', 'kt', 'json', 'yaml', 'yml', 'xml', 'toml', 'ini', 'html', 'css', 'scss',
+                      'less', 'txt', 'log', 'csv', 'sh', 'bash', 'sql', 'env', 'md', 'markdown', 'tex', 'bib'];
+
+function isEditableFile(path) {
+  const ext = (path.split('.').pop() || '').toLowerCase();
+  return editableExts.includes(ext);
+}
+
+async function editFile(filePath) {
+  console.log('[editFile] Opening for edit:', filePath);
+  
+  if (!filePath || !isEditableFile(filePath)) {
+    addLog('error', 'Cannot edit this file type');
+    return;
+  }
+  
+  try {
+    const res = await agentFileApi(`/file?path=${encodeURIComponent(filePath)}`);
+    const data = await res.json();
+    if (!res.ok) { addLog('error', data.error); return; }
+    
+    currentFileContent = data.content;
+    currentFilePath = filePath;
+    
+    let viewer = document.getElementById('fileViewer');
+    if (!viewer) {
+      viewer = document.createElement('div');
+      viewer.id = 'fileViewer';
+      viewer.className = 'file-viewer';
+      viewer.onclick = (e) => { if (e.target === viewer) closeFileViewer(); };
+      document.body.appendChild(viewer);
+    }
+    
+    viewer.innerHTML = `<div class="file-viewer-panel" style="max-width:900px;height:80vh;">
+      <div class="file-viewer-header">
+        <span class="title">&#9998; Editing: ${esc(filePath)}</span>
+        <span class="meta">${formatSize(data.size)}</span>
+        <button onclick="saveFileEdit()" id="saveBtn" style="margin-right:8px;background:var(--accent);border:none;color:#fff;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">&#128190; Save</button>
+        <button onclick="closeFileViewer()" style="margin-right:8px;background:var(--surface);border:1px solid var(--border);color:var(--fg);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">Cancel</button>
+        <button class="close-btn" onclick="closeFileViewer()">&times;</button>
+      </div>
+      <div class="file-viewer-body" style="padding:0;">
+        <textarea id="editTextarea" style="width:100%;height:100%;box-sizing:border-box;resize:none;border:none;font-family:'Monaco','Menlo','Consolas',monospace;font-size:13px;line-height:1.5;background:var(--surface);color:var(--fg);padding:16px;outline:none;">${esc(data.content)}</textarea>
+      </div>
+    </div>`;
+    viewer.style.display = 'flex';
+    
+    const ta = document.getElementById('editTextarea');
+    ta.focus();
+    ta.setSelectionRange(0, 0);
+  } catch (e) {
+    addLog('error', 'Failed to open file for edit: ' + e.message);
+  }
+}
+
+async function saveFileEdit() {
+  const ta = document.getElementById('editTextarea');
+  if (!ta || !currentFilePath) return;
+  
+  const content = ta.value;
+  const saveBtn = document.getElementById('saveBtn');
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = 'Saving...';
+  }
+  
+  try {
+    const res = await agentFileApi('/file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: currentFilePath, content })
+    });
+    
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to save');
+    }
+    
+    currentFileContent = content;
+    addLog('info', `Saved: ${currentFilePath}`);
+    closeFileViewer();
+    refreshFiles();
+  } catch (e) {
+    alert('Error saving file: ' + e.message);
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = '&#128190; Save';
+    }
+  }
+}
+
 async function viewFile(filePath) {
   try {
     const ext = filePath.split('.').pop().toLowerCase();
@@ -1879,6 +1972,9 @@ function showContextMenu(x, y, filePath, isDir) {
     items.push({ type: 'sep' });
   } else {
     items.push({ label: '&#128065; View', action: () => viewFile(filePath) });
+    if (isEditableFile(filePath)) {
+      items.push({ label: '&#9998; Edit', action: () => editFile(filePath) });
+    }
     items.push({ type: 'sep' });
   }
   items.push({ label: '&#128203; Copy Path', action: () => copyToClipboard(filePath) });

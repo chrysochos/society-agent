@@ -1431,6 +1431,9 @@ function showContextMenu(x, y, filePath, isDir) {
     items.push({ type: 'sep' });
   } else {
     items.push({ label: '&#128065; View', action: () => viewFile(filePath) });
+    if (isEditableFile(filePath)) {
+      items.push({ label: '&#9998; Edit', action: () => editFile(filePath) });
+    }
     items.push({ type: 'sep' });
   }
   items.push({ label: '&#9998; Rename', action: () => startRename(filePath, isDir), shortcut: 'F2' });
@@ -1659,6 +1662,66 @@ async function promptNewFolderInDir(dirPath) {
 // kilocode_change start - Enhanced file viewer with PDF and Markdown support
 let currentFileContent = ''; // Store for toggle between raw/rendered
 let currentFilePath = '';
+let isEditing = false;
+
+const editableExts = ['js', 'ts', 'jsx', 'tsx', 'py', 'java', 'c', 'cpp', 'h', 'go', 'rs', 'rb', 'php',
+                      'swift', 'kt', 'json', 'yaml', 'yml', 'xml', 'toml', 'ini', 'html', 'css', 'scss',
+                      'less', 'txt', 'log', 'csv', 'sh', 'bash', 'sql', 'env', 'md', 'markdown', 'tex', 'bib'];
+
+function isEditableFile(path) {
+  const ext = (path.split('.').pop() || '').toLowerCase();
+  return editableExts.includes(ext);
+}
+
+async function editFile(filePath) {
+  console.log('[editFile] Opening for edit:', filePath);
+  
+  if (!filePath || !isEditableFile(filePath)) {
+    addLog('error', 'Cannot edit this file type');
+    return;
+  }
+  
+  try {
+    const res = await fetch(`${API}/api/workspace/file?path=${encodeURIComponent(filePath)}`);
+    const data = await res.json();
+    if (!res.ok) { addLog('error', data.error); return; }
+    
+    currentFileContent = data.content;
+    currentFilePath = filePath;
+    isEditing = true;
+    
+    let viewer = document.getElementById('fileViewer');
+    if (!viewer) {
+      viewer = document.createElement('div');
+      viewer.id = 'fileViewer';
+      viewer.className = 'file-viewer';
+      viewer.onclick = (e) => { if (e.target === viewer) closeFileViewer(); };
+      document.body.appendChild(viewer);
+    }
+    
+    const saveBtn = `<button class="save-btn" onclick="saveFileEdit()" id="saveBtn" style="margin-right:8px;background:var(--accent);border:none;color:#fff;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">&#128190; Save</button>`;
+    const cancelBtn = `<button class="cancel-btn" onclick="closeFileViewer()" id="cancelBtn" style="margin-right:8px;background:var(--surface);border:1px solid var(--border);color:var(--fg);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">Cancel</button>`;
+    
+    viewer.innerHTML = `<div class="file-viewer-panel" style="max-width:900px;height:80vh;">
+      <div class="file-viewer-header">
+        <span class="title">&#9998; Editing: ${escapeHtml(filePath)}</span>
+        <span class="meta">${formatSize(data.size)}</span>
+        ${saveBtn}${cancelBtn}
+        <button class="close-btn" onclick="closeFileViewer()" title="Close">&times;</button>
+      </div>
+      <div class="file-viewer-body" id="fileViewerBody" style="padding:0;">
+        <textarea id="editTextarea" style="width:100%;height:100%;box-sizing:border-box;resize:none;border:none;font-family:'Monaco','Menlo','Consolas',monospace;font-size:13px;line-height:1.5;background:var(--surface);color:var(--fg);padding:16px;outline:none;">${escapeHtml(data.content)}</textarea>
+      </div>
+    </div>`;
+    viewer.style.display = 'flex';
+    
+    const ta = document.getElementById('editTextarea');
+    ta.focus();
+    ta.setSelectionRange(0, 0);
+  } catch (e) {
+    addLog('error', 'Failed to open file for edit: ' + e.message);
+  }
+}
 
 async function viewFile(filePath) {
   console.log('[viewFile] Opening:', filePath); // Debug log
@@ -1732,14 +1795,19 @@ async function viewFile(filePath) {
     // Markdown: Show rendered with toggle to raw
     if (isMd) {
       const rendered = renderMarkdown(data.content);
+      const editBtn = `<button class="edit-btn" onclick="toggleEditMode()" id="editBtn" style="margin-right:8px;background:var(--surface);border:1px solid var(--border);color:var(--fg);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">&#9998; Edit</button>`;
+      const saveBtn = `<button class="save-btn" onclick="saveFileEdit()" id="saveBtn" style="display:none;margin-right:8px;background:var(--accent);border:none;color:#fff;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">&#128190; Save</button>`;
+      const cancelBtn = `<button class="cancel-btn" onclick="cancelEdit()" id="cancelBtn" style="display:none;margin-right:8px;background:var(--surface);border:1px solid var(--border);color:var(--fg);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">Cancel</button>`;
+      
       viewer.innerHTML = `<div class="file-viewer-panel">
         <div class="file-viewer-header">
           <span class="title">&#128221; ${escapeHtml(filePath)}</span>
           <span class="meta">${formatSize(data.size)}</span>
-          <div class="view-toggle">
+          <div class="view-toggle" id="viewToggle">
             <button id="btnRendered" class="active" onclick="toggleMdView('rendered')">Rendered</button>
             <button id="btnRaw" onclick="toggleMdView('raw')">Raw</button>
           </div>
+          ${editBtn}${saveBtn}${cancelBtn}
           <button class="close-btn" onclick="closeFileViewer()" title="Close">&times;</button>
         </div>
         <div class="file-viewer-body" id="fileViewerBody">
@@ -1751,16 +1819,117 @@ async function viewFile(filePath) {
     }
 
     // Default: Code/text view
+    const editBtn = isEditableFile(filePath) ? 
+      `<button class="edit-btn" onclick="toggleEditMode()" id="editBtn" style="margin-right:8px;background:var(--surface);border:1px solid var(--border);color:var(--fg);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">&#9998; Edit</button>` : '';
+    const saveBtn = `<button class="save-btn" onclick="saveFileEdit()" id="saveBtn" style="display:none;margin-right:8px;background:var(--accent);border:none;color:#fff;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">&#128190; Save</button>`;
+    const cancelBtn = `<button class="cancel-btn" onclick="cancelEdit()" id="cancelBtn" style="display:none;margin-right:8px;background:var(--surface);border:1px solid var(--border);color:var(--fg);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">Cancel</button>`;
+    
     viewer.innerHTML = `<div class="file-viewer-panel">
       <div class="file-viewer-header">
         <span class="title">&#128196; ${escapeHtml(filePath)}</span>
         <span class="meta">${formatSize(data.size)}</span>
+        ${editBtn}${saveBtn}${cancelBtn}
         <button class="close-btn" onclick="closeFileViewer()" title="Close">&times;</button>
       </div>
-      <div class="file-viewer-body"><pre>${escapeHtml(data.content)}</pre></div>
+      <div class="file-viewer-body" id="fileViewerBody"><pre>${escapeHtml(data.content)}</pre></div>
     </div>`;
     viewer.style.display = 'flex';
   } catch (e) { addLog('error', 'Failed to read file: ' + e.message); }
+}
+
+function toggleEditMode() {
+  isEditing = true;
+  const body = document.getElementById('fileViewerBody');
+  const editBtn = document.getElementById('editBtn');
+  const saveBtn = document.getElementById('saveBtn');
+  const cancelBtn = document.getElementById('cancelBtn');
+  const viewToggle = document.getElementById('viewToggle');
+  
+  if (editBtn) editBtn.style.display = 'none';
+  if (saveBtn) saveBtn.style.display = 'inline-block';
+  if (cancelBtn) cancelBtn.style.display = 'inline-block';
+  if (viewToggle) viewToggle.style.display = 'none';
+  
+  body.innerHTML = `<textarea id="editTextarea" style="width:100%;height:100%;box-sizing:border-box;resize:none;border:none;font-family:'Monaco','Menlo','Consolas',monospace;font-size:13px;line-height:1.5;background:var(--surface);color:var(--fg);padding:16px;outline:none;">${escapeHtml(currentFileContent)}</textarea>`;
+  const ta = document.getElementById('editTextarea');
+  ta.focus();
+  ta.setSelectionRange(0, 0);
+}
+
+function cancelEdit() {
+  isEditing = false;
+  const body = document.getElementById('fileViewerBody');
+  const editBtn = document.getElementById('editBtn');
+  const saveBtn = document.getElementById('saveBtn');
+  const cancelBtn = document.getElementById('cancelBtn');
+  const viewToggle = document.getElementById('viewToggle');
+  const isMd = currentFilePath && ['md', 'markdown'].includes(currentFilePath.split('.').pop().toLowerCase());
+  
+  if (editBtn) editBtn.style.display = 'inline-block';
+  if (saveBtn) saveBtn.style.display = 'none';
+  if (cancelBtn) cancelBtn.style.display = 'none';
+  if (viewToggle) viewToggle.style.display = 'flex';
+  
+  if (isMd) {
+    body.innerHTML = `<div class="markdown-body">${renderMarkdown(currentFileContent)}</div>`;
+  } else {
+    body.innerHTML = `<pre>${escapeHtml(currentFileContent)}</pre>`;
+  }
+}
+
+async function saveFileEdit() {
+  const ta = document.getElementById('editTextarea');
+  if (!ta || !currentFilePath) return;
+  
+  const content = ta.value;
+  const saveBtn = document.getElementById('saveBtn');
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = 'Saving...';
+  }
+  
+  try {
+    const res = await fetch(`${API}/api/workspace/file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: currentFilePath, content })
+    });
+    
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to save');
+    }
+    
+    currentFileContent = content;
+    isEditing = false;
+    
+    const body = document.getElementById('fileViewerBody');
+    const editBtn = document.getElementById('editBtn');
+    const cancelBtn = document.getElementById('cancelBtn');
+    const viewToggle = document.getElementById('viewToggle');
+    const isMd = currentFilePath && ['md', 'markdown'].includes(currentFilePath.split('.').pop().toLowerCase());
+    
+    if (editBtn) editBtn.style.display = 'inline-block';
+    if (saveBtn) saveBtn.style.display = 'none';
+    if (cancelBtn) cancelBtn.style.display = 'none';
+    if (viewToggle) viewToggle.style.display = 'flex';
+    
+    if (isMd) {
+      body.innerHTML = `<div class="markdown-body">${renderMarkdown(content)}</div>`;
+    } else {
+      body.innerHTML = `<pre>${escapeHtml(content)}</pre>`;
+    }
+    
+    addLog('info', `Saved: ${currentFilePath}`);
+    refreshFiles();
+  } catch (e) {
+    alert('Error saving file: ' + e.message);
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = '&#128190; Save';
+    }
+  }
 }
 
 function toggleMdView(mode) {

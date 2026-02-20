@@ -299,6 +299,14 @@
   .viewer-body.code-viewer pre { margin: 0; font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
     font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
 
+  /* Editor mode */
+  .viewer-body.code-viewer.edit-mode { padding: 0; }
+  .viewer-body.code-viewer.edit-mode #editorTextarea {
+    width: 100%; height: 100%; box-sizing: border-box; resize: none; border: none;
+    font-family: 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.5;
+    background: var(--surface); color: var(--fg); padding: 16px; outline: none;
+  }
+
   /* Clickable file rows */
   .file-row { cursor: pointer; transition: background 0.15s; }
   .file-row:hover { background: rgba(88,166,255,0.08); }
@@ -588,7 +596,12 @@
     <div class="viewer-header">
       <span class="viewer-title" id="viewerTitle">File</span>
       <span class="viewer-path" id="viewerPath"></span>
-      <a id="viewerDownload" href="#" download class="btn btn-sm" style="margin-left:auto">&#128190; Download</a>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+        <button id="viewerEdit" class="btn btn-sm" onclick="toggleEditMode()" style="display:none">&#9998; Edit</button>
+        <button id="viewerSave" class="btn btn-sm btn-primary" onclick="saveFile()" style="display:none">&#128190; Save</button>
+        <button id="viewerCancel" class="btn btn-sm" onclick="cancelEdit()" style="display:none">Cancel</button>
+        <a id="viewerDownload" href="#" download class="btn btn-sm">&#128190; Download</a>
+      </div>
       <button class="viewer-close" onclick="closeViewer()">&times;</button>
     </div>
     <div class="viewer-body" id="viewerBody">
@@ -1194,14 +1207,26 @@ async function toggleProjectMcp(name) {
 // ============================================================================
 
 let currentViewerPath = null;
+let currentViewerContent = null;
+let isEditMode = false;
+const editableExts = ['js', 'ts', 'jsx', 'tsx', 'py', 'java', 'c', 'cpp', 'h', 'go', 'rs', 'rb', 'php',
+                      'swift', 'kt', 'json', 'yaml', 'yml', 'xml', 'toml', 'ini', 'html', 'css', 'scss',
+                      'less', 'txt', 'log', 'csv', 'sh', 'bash', 'sql', 'env', 'md', 'markdown', 'tex', 'bib'];
 
 function openFileViewer(filePath, fileName) {
   currentViewerPath = filePath;
+  currentViewerContent = null;
+  isEditMode = false;
   const ext = (fileName.split('.').pop() || '').toLowerCase();
   
   document.getElementById('viewerTitle').textContent = fileName;
   document.getElementById('viewerPath').textContent = filePath;
   document.getElementById('viewerDownload').href = `${API}/api/workspace/raw?path=${encodeURIComponent(filePath)}`;
+  
+  // Reset edit buttons
+  document.getElementById('viewerEdit').style.display = 'none';
+  document.getElementById('viewerSave').style.display = 'none';
+  document.getElementById('viewerCancel').style.display = 'none';
   
   const body = document.getElementById('viewerBody');
   body.className = 'viewer-body';
@@ -1232,12 +1257,16 @@ function openFileViewer(filePath, fileName) {
 }
 
 function showImageViewer(filePath) {
+  currentViewerContent = null;
+  updateEditButtons();
   const body = document.getElementById('viewerBody');
   body.className = 'viewer-body image-viewer';
   body.innerHTML = `<img src="${API}/api/workspace/raw?path=${encodeURIComponent(filePath)}" alt="Image" onerror="this.src=''; this.alt='Failed to load image'">`;
 }
 
 function showPdfViewer(filePath) {
+  currentViewerContent = null;
+  updateEditButtons();
   const body = document.getElementById('viewerBody');
   body.className = 'viewer-body pdf-viewer';
   body.innerHTML = `<iframe src="${API}/api/workspace/raw?path=${encodeURIComponent(filePath)}"></iframe>`;
@@ -1253,10 +1282,15 @@ async function showMarkdownViewer(filePath) {
     const data = await res.json();
     const content = data.content || '';
     
+    currentViewerContent = content;
+    updateEditButtons();
+    
     // Simple markdown renderer (basic support)
     const html = renderMarkdown(content);
     body.innerHTML = `<div class="md-content">${html}</div>`;
   } catch (e) {
+    currentViewerContent = null;
+    updateEditButtons();
     body.innerHTML = `<div style="padding:40px;text-align:center;color:var(--red)">Error: ${escapeHtml(e.message)}</div>`;
   }
 }
@@ -1273,6 +1307,8 @@ async function showCodeViewer(filePath, unknownType = false) {
     
     // Check if content is binary (has lots of non-printable chars)
     if (unknownType && isBinaryContent(content)) {
+      currentViewerContent = null;
+      updateEditButtons();
       body.innerHTML = `<div style="padding:40px;text-align:center;">
         <div style="font-size:48px;margin-bottom:16px">&#128196;</div>
         <div style="color:var(--muted);margin-bottom:16px">This file appears to be binary and cannot be displayed.</div>
@@ -1281,8 +1317,12 @@ async function showCodeViewer(filePath, unknownType = false) {
       return;
     }
     
+    currentViewerContent = content;
+    updateEditButtons();
     body.innerHTML = `<pre>${escapeHtml(content)}</pre>`;
   } catch (e) {
+    currentViewerContent = null;
+    updateEditButtons();
     body.innerHTML = `<div style="padding:40px;text-align:center;color:var(--red)">Error: ${escapeHtml(e.message)}</div>`;
   }
 }
@@ -1370,11 +1410,109 @@ function renderMarkdown(md) {
 function closeViewer() {
   document.getElementById('fileViewer').style.display = 'none';
   currentViewerPath = null;
+  currentViewerContent = null;
+  isEditMode = false;
+  updateEditButtons();
 }
 
 function closeViewerIfOverlay(event) {
   if (event.target.classList.contains('viewer-overlay')) {
     closeViewer();
+  }
+}
+
+// ============================================================================
+// File Editor
+// ============================================================================
+
+function isEditableFile(filePath) {
+  const ext = (filePath.split('.').pop() || '').toLowerCase();
+  return editableExts.includes(ext);
+}
+
+function updateEditButtons() {
+  const editBtn = document.getElementById('viewerEdit');
+  const saveBtn = document.getElementById('viewerSave');
+  const cancelBtn = document.getElementById('viewerCancel');
+  
+  if (isEditMode) {
+    editBtn.style.display = 'none';
+    saveBtn.style.display = 'inline-block';
+    cancelBtn.style.display = 'inline-block';
+  } else {
+    const showEdit = currentViewerPath && isEditableFile(currentViewerPath);
+    editBtn.style.display = showEdit ? 'inline-block' : 'none';
+    saveBtn.style.display = 'none';
+    cancelBtn.style.display = 'none';
+  }
+}
+
+function toggleEditMode() {
+  if (!currentViewerPath || !currentViewerContent) return;
+  isEditMode = true;
+  updateEditButtons();
+  
+  const body = document.getElementById('viewerBody');
+  body.className = 'viewer-body code-viewer edit-mode';
+  body.innerHTML = `<textarea id="editorTextarea" spellcheck="false">${escapeHtml(currentViewerContent)}</textarea>`;
+  
+  const ta = document.getElementById('editorTextarea');
+  ta.focus();
+  ta.setSelectionRange(0, 0);
+}
+
+function cancelEdit() {
+  if (!currentViewerPath) return;
+  isEditMode = false;
+  updateEditButtons();
+  
+  // Re-display the original content
+  const body = document.getElementById('viewerBody');
+  body.className = 'viewer-body code-viewer';
+  body.innerHTML = `<pre>${escapeHtml(currentViewerContent)}</pre>`;
+}
+
+async function saveFile() {
+  const ta = document.getElementById('editorTextarea');
+  if (!ta || !currentViewerPath) return;
+  
+  const content = ta.value;
+  const saveBtn = document.getElementById('viewerSave');
+  saveBtn.disabled = true;
+  saveBtn.innerHTML = 'Saving...';
+  
+  try {
+    const res = await fetch(`${API}/api/workspace/file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: currentViewerPath, content })
+    });
+    
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to save');
+    }
+    
+    currentViewerContent = content;
+    isEditMode = false;
+    updateEditButtons();
+    
+    // Show saved content in view mode
+    const body = document.getElementById('viewerBody');
+    body.className = 'viewer-body code-viewer';
+    body.innerHTML = `<pre>${escapeHtml(content)}</pre>`;
+    
+    // Brief success feedback
+    saveBtn.innerHTML = '&#10003; Saved!';
+    setTimeout(() => { saveBtn.innerHTML = '&#128190; Save'; }, 1500);
+    
+    // Refresh file list in case size changed
+    refreshFiles();
+  } catch (e) {
+    alert('Error saving file: ' + e.message);
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.innerHTML = '&#128190; Save';
   }
 }
 
