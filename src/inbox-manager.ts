@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Inbox Manager - Persistent message queue for society agents
  * 
@@ -9,8 +9,8 @@
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import { AgentMessage } from './types'
-import { MessageSecurity } from './message-security' // kilocode_change
-import { getLog } from './logger' // kilocode_change
+import { MessageSecurity } from './message-security' // Society Agent
+import { getLog } from './logger' // Society Agent
 
 export interface InboxMessage extends AgentMessage {
 	/** File path where message is stored */
@@ -23,18 +23,18 @@ export interface InboxMessage extends AgentMessage {
 
 export class InboxManager {
 	private inboxRoot: string
-	private security: MessageSecurity // kilocode_change
+	private security: MessageSecurity // Society Agent
 
 	constructor(projectRoot: string) {
 		this.inboxRoot = path.join(projectRoot, '.society-agent', 'inbox')
-		this.security = new MessageSecurity(projectRoot) // kilocode_change
+		this.security = new MessageSecurity(projectRoot) // Society Agent
 	}
 
-	// kilocode_change start
+	// Society Agent start
 	async initialize(): Promise<void> {
 		await this.security.initialize()
 	}
-	// kilocode_change end
+	// Society Agent end
 
 	/**
 	 * Queue a message for an agent (write to their inbox)
@@ -58,7 +58,7 @@ export class InboxManager {
 
 	/**
 	 * Get all pending messages for an agent (with signature verification)
-	 * kilocode_change: Added signature verification
+	 * Society Agent: Added signature verification
 	 */
 	async getPendingMessages(agentId: string): Promise<InboxMessage[]> {
 		const agentInbox = path.join(this.inboxRoot, agentId)
@@ -81,8 +81,8 @@ export class InboxManager {
 				const content = await fs.readFile(filePath, 'utf-8')
 				const message: InboxMessage = JSON.parse(content)
 				
-				// kilocode_change start - Verify message signature
-				if (message.signature) { // kilocode_change - signature is now in AgentMessage type
+				// Society Agent start - Verify message signature
+				if (message.signature) { // Society Agent - signature is now in AgentMessage type
 					const isValid = await this.security.verifyMessage(message, message.from)
 					if (!isValid) {
 						getLog().warn(`[InboxManager] INVALID SIGNATURE on message ${file} from ${message.from} - REJECTED`)
@@ -96,7 +96,7 @@ export class InboxManager {
 				} else {
 					getLog().warn(`[InboxManager] Message ${file} missing signature - accepting for backward compatibility`)
 				}
-				// kilocode_change end
+				// Society Agent end
 				
 				message.filePath = filePath
 				messages.push(message)

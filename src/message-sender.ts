@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Message Sender - Sends messages to other agents via HTTP + inbox file
  *

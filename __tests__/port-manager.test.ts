@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 import { describe, it, expect, beforeEach } from "vitest"
 import { PortManager } from "../port-manager"
 

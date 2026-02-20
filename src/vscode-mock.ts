@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Mock vscode module for standalone server mode
  * 

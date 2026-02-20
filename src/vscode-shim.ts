@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Minimal vscode module shim for standalone (non-VS Code) execution.
  *

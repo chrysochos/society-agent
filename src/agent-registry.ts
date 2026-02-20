@@ -1,11 +1,11 @@
-// kilocode_change - new file
+// Society Agent - new file
 import * as vscode from "vscode"
 import * as fs from "fs/promises"
 import * as path from "path"
 import { v4 as uuidv4 } from "uuid"
 import { AgentClient, AttachmentData } from "./agent-client"
-import { InboxManager } from "./inbox-manager" // kilocode_change
-import { MessageSecurity } from "./message-security" // kilocode_change
+import { InboxManager } from "./inbox-manager" // Society Agent
+import { MessageSecurity } from "./message-security" // Society Agent
 import { getLog } from "./logger"
 
 /**
@@ -34,7 +34,7 @@ export interface AgentRegistration {
 	capabilities: string[]
 	workspace: string
 	vsCodePid: number
-	url?: string // HTTP server URL (e.g., http://127.0.0.1:3000) - kilocode_change
+	url?: string // HTTP server URL (e.g., http://127.0.0.1:3000) - Society Agent
 	status: "online" | "offline" | "idle" | "busy"
 	lastHeartbeat: string // ISO timestamp
 	registered: string // ISO timestamp
@@ -57,33 +57,33 @@ export class AgentRegistry {
 	private capabilities: string[]
 	private sharedDir: string
 	private workspace: string
-	private serverUrl: string | undefined // kilocode_change - HTTP server URL
+	private serverUrl: string | undefined // Society Agent - HTTP server URL
 	private registryPath: string
 	private messagesPath: string
 	private heartbeatInterval: NodeJS.Timeout | undefined
 	private messageWatcher: vscode.FileSystemWatcher | undefined
 	private lastMessagePosition: number = 0
-	private inboxManager?: InboxManager // kilocode_change
-	private messageSecurity?: MessageSecurity // kilocode_change
-	// kilocode_change start - Cached agents for synchronous monitor access
+	private inboxManager?: InboxManager // Society Agent
+	private messageSecurity?: MessageSecurity // Society Agent
+	// Society Agent start - Cached agents for synchronous monitor access
 	private cachedAgents: AgentRegistration[] = []
 	private cacheRefreshInterval: NodeJS.Timeout | undefined
-	// kilocode_change end
-	// kilocode_change start - External message handler callback
+	// Society Agent end
+	// Society Agent start - External message handler callback
 	private onMessageCallback?: (message: AgentMessage) => Promise<void>
-	// kilocode_change end
+	// Society Agent end
 
 	constructor(sharedDir: string, serverUrl?: string) {
-		// kilocode_change - added serverUrl param
+		// Society Agent - added serverUrl param
 		this.sharedDir = sharedDir
-		this.serverUrl = serverUrl // kilocode_change
+		this.serverUrl = serverUrl // Society Agent
 		this.registryPath = path.join(sharedDir, "registry.jsonl")
 		this.messagesPath = path.join(sharedDir, "messages.jsonl")
 		this.workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ""
 
 		// Get or generate agent ID
-		const config = vscode.workspace.getConfiguration("kilo-code")
-		let configuredId = config.get<string>("societyAgent.agentId") || ""
+		const config = vscode.workspace.getConfiguration("society-agent")
+		let configuredId = config.get<string>("agentId") || ""
 		if (!configuredId) {
 			// Auto-generate and save
 			configuredId = this.generateAgentId()
@@ -95,11 +95,11 @@ export class AgentRegistry {
 		this.role = config.get<string>("societyAgent.role") || "custom"
 		this.capabilities = config.get<string[]>("societyAgent.capabilities") || []
 
-		// kilocode_change start - Initialize inbox and security
+		// Society Agent start - Initialize inbox and security
 		const projectRoot = path.dirname(sharedDir)
 		this.inboxManager = new InboxManager(projectRoot)
 		this.messageSecurity = new MessageSecurity(projectRoot)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
@@ -126,21 +126,21 @@ export class AgentRegistry {
 		// Watch for new messages
 		await this.startMessageWatcher()
 
-		// kilocode_change start - Initialize inbox security
+		// Society Agent start - Initialize inbox security
 		if (this.inboxManager) {
 			await this.inboxManager.initialize()
 		}
 		if (this.messageSecurity) {
 			await this.messageSecurity.initialize()
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		getLog().info(`Agent ${this.agentId} initialized`)
 	}
 
 	/**
 	 * Register agent in shared registry
-	 * kilocode_change - now uses single JSON file instead of unbounded JSONL
+	 * Society Agent - now uses single JSON file instead of unbounded JSONL
 	 */
 	private async register(): Promise<void> {
 		const registration: AgentRegistration = {
@@ -149,19 +149,19 @@ export class AgentRegistry {
 			capabilities: this.capabilities,
 			workspace: this.workspace,
 			vsCodePid: process.pid,
-			url: this.serverUrl, // kilocode_change - include HTTP server URL
+			url: this.serverUrl, // Society Agent - include HTTP server URL
 			status: "idle",
 			lastHeartbeat: new Date().toISOString(),
 			registered: new Date().toISOString(),
 		}
 
-		// kilocode_change - Write to single JSON registry (replaces unbounded JSONL)
+		// Society Agent - Write to single JSON registry (replaces unbounded JSONL)
 		await this.updateRegistryJson(registration)
 	}
 
 	/**
 	 * Update agent status with heartbeat
-	 * kilocode_change - now updates single JSON registry instead of appending JSONL
+	 * Society Agent - now updates single JSON registry instead of appending JSONL
 	 */
 	private async updateHeartbeat(status: "online" | "offline" | "idle" | "busy" = "idle"): Promise<void> {
 		const update: Partial<AgentRegistration> = {
@@ -260,23 +260,23 @@ export class AgentRegistry {
 			await this.markMessageDelivered(message.id)
 		}
 
-		// kilocode_change start - Route through external handler if registered
+		// Society Agent start - Route through external handler if registered
 		if (this.onMessageCallback) {
 			await this.onMessageCallback(message)
 		} else {
 			vscode.window.showInformationMessage(`Message from ${message.from}: ${message.type}`)
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
-	// kilocode_change start - Register an external message handler
+	// Society Agent start - Register an external message handler
 	/**
 	 * Set a callback for incoming messages (e.g. to route through UnifiedMessageHandler).
 	 */
 	setMessageHandler(handler: (message: AgentMessage) => Promise<void>): void {
 		this.onMessageCallback = handler
 	}
-	// kilocode_change end
+	// Society Agent end
 
 	/**
 	 * Mark message as delivered (for offline delivery tracking)
@@ -296,7 +296,7 @@ export class AgentRegistry {
 	/**
 	 * Send message to another agent (or broadcast)
 	 * Uses hybrid communication: always writes inbox file (reliable), also tries HTTP (fast)
-	 * kilocode_change - updated to always-inbox-first strategy
+	 * Society Agent - updated to always-inbox-first strategy
 	 */
 	async sendMessage(
 		to: string,
@@ -304,7 +304,7 @@ export class AgentRegistry {
 		content: any,
 		attachments?: AttachmentData[],
 	): Promise<void> {
-		// kilocode_change - added attachments param
+		// Society Agent - added attachments param
 		const message: AgentMessage = {
 			id: uuidv4(),
 			from: this.agentId,
@@ -315,7 +315,7 @@ export class AgentRegistry {
 			delivered: false, // Will be marked true when recipient processes it
 		}
 
-		// kilocode_change start - Always write to inbox first (guaranteed delivery)
+		// Society Agent start - Always write to inbox first (guaranteed delivery)
 		if (this.inboxManager && this.messageSecurity) {
 			try {
 				const signature = await this.messageSecurity.signMessage(message, this.agentId)
@@ -331,9 +331,9 @@ export class AgentRegistry {
 			// No inbox manager - use legacy messages.jsonl
 			await this.appendJSONL(this.messagesPath, message)
 		}
-		// kilocode_change end
+		// Society Agent end
 
-		// kilocode_change start - Also try HTTP for instant delivery (best-effort)
+		// Society Agent start - Also try HTTP for instant delivery (best-effort)
 		const agents = await this.getAgents()
 		const recipient = agents.find((a) => a.agentId === to)
 
@@ -363,12 +363,12 @@ export class AgentRegistry {
 				getLog().info(`HTTP send to ${to} failed (inbox file will be picked up):`, error)
 			}
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Get all registered agents
-	 * kilocode_change - reads from single JSON registry first, falls back to JSONL
+	 * Society Agent - reads from single JSON registry first, falls back to JSONL
 	 */
 	async getAgents(): Promise<AgentRegistration[]> {
 		// Try new single JSON registry first
@@ -512,7 +512,7 @@ export class AgentRegistry {
 		await fs.appendFile(filePath, line, "utf-8")
 	}
 
-	// kilocode_change start - Single JSON registry (replaces unbounded JSONL)
+	// Society Agent start - Single JSON registry (replaces unbounded JSONL)
 	/**
 	 * Update agent in single JSON registry file
 	 * File format: { agents: { [agentId]: AgentRegistration }, updatedAt: string }
@@ -544,7 +544,7 @@ export class AgentRegistry {
 		await fs.writeFile(tmpPath, JSON.stringify(registry, null, 2), "utf-8")
 		await fs.rename(tmpPath, jsonPath)
 	}
-	// kilocode_change end
+	// Society Agent end
 
 	// Getters
 	getAgentId(): string {
@@ -559,7 +559,7 @@ export class AgentRegistry {
 		return this.capabilities
 	}
 
-	// kilocode_change start - Synchronous accessor for monitor (uses cached data)
+	// Society Agent start - Synchronous accessor for monitor (uses cached data)
 	/**
 	 * Get registered agents synchronously from cache.
 	 * Cache is refreshed on a background interval.
@@ -597,9 +597,9 @@ export class AgentRegistry {
 				// Keep stale cache on error
 			})
 	}
-	// kilocode_change end
+	// Society Agent end
 
-	// kilocode_change start - helper methods for network communication
+	// Society Agent start - helper methods for network communication
 	/**
 	 * Check if agent is online via network
 	 */
@@ -644,5 +644,5 @@ export class AgentRegistry {
 			getLog().error("Error marking message as delivered:", error)
 		}
 	}
-	// kilocode_change end
+	// Society Agent end
 }

@@ -1,10 +1,10 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Permission system for Society Agent capability-based access control
  */
 
 import type { AgentIdentity, AgentCapability } from "./types"
-import { getLog } from "./logger" // kilocode_change
+import { getLog } from "./logger" // Society Agent
 
 /**
  * Maps tool names to required capabilities
@@ -55,7 +55,7 @@ export const defaultToolCapabilityMap: ToolCapabilityMap = {
 	ask_followup_question: [],
 	attempt_completion: [],
 	switch_mode: [],
-	new_rule: ["file-write"], // Creates .kilocode/rules files
+	new_rule: ["file-write"], // Creates .society-agent/rules files
 	report_bug: [],
 	run_slash_command: [], // Depends on command
 	generate_image: ["file-write"],
@@ -69,7 +69,7 @@ export class PermissionChecker {
 
 	constructor(customMap?: ToolCapabilityMap) {
 		// Clone to prevent mutation of the default map
-		this.capabilityMap = { ...(customMap || defaultToolCapabilityMap) } // kilocode_change
+		this.capabilityMap = { ...(customMap || defaultToolCapabilityMap) } // Society Agent
 	}
 
 	/**

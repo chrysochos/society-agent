@@ -28,7 +28,7 @@
   header .project-folder { font-size: 11px; color: var(--accent); font-family: monospace; }
   header .header-actions { display: flex; gap: 8px; }
   
-  /* kilocode_change - System pause banner */
+  /* Society Agent - System pause banner */
   .pause-banner { 
     background: rgba(210,153,34,0.15); 
     border-bottom: 1px solid var(--yellow);
@@ -323,7 +323,7 @@
     <div class="project-desc" id="projectDesc"></div>
     <div class="project-folder" id="projectFolder"></div>
   </div>
-  <!-- kilocode_change - pause button and indicator -->
+  <!-- Society Agent - pause button and indicator -->
   <button class="btn btn-sm" id="pauseBtn" onclick="toggleSystemPause()" style="margin-right:8px">🔧 Maintenance</button>
   <span class="pause-indicator" id="pauseIndicator">⏸ System Paused</span>
   <div class="header-actions">
@@ -331,7 +331,7 @@
   </div>
 </header>
 
-<!-- kilocode_change - System pause banner -->
+<!-- Society Agent - System pause banner -->
 <div class="pause-banner" id="pauseBanner">
   <span class="icon">⚠️</span>
   <span class="text"><strong>System Paused</strong> — Maintenance mode active. New requests are blocked.</span>
@@ -710,7 +710,7 @@ function renderAgents() {
 }
 
 function renderAgentNode(agent, agentMap, allAgents) {
-  // kilocode_change - Use !ephemeral instead of canSpawnWorkers
+  // Society Agent - Use !ephemeral instead of canSpawnWorkers
   const isSupervisor = !agent.ephemeral;
   const avatar = isSupervisor ? '&#128081;' : '&#129302;';
   const hb = heartbeats[agent.id];
@@ -847,7 +847,7 @@ function editAgentInProject(agentId) {
   document.getElementById('agentFormRole').value = agent.role;
   document.getElementById('agentFormCaps').value = (agent.capabilities || []).join(', ');
   document.getElementById('agentFormHome').value = agent.homeFolder || '/';
-  // kilocode_change - Use !ephemeral for supervisor checkbox
+  // Society Agent - Use !ephemeral for supervisor checkbox
   document.getElementById('agentFormSpawn').checked = !agent.ephemeral;
   document.getElementById('agentFormSubmit').textContent = 'Save';
   populateReportsToDropdown(agentId);
@@ -873,7 +873,7 @@ async function submitAgentForm() {
   const role = document.getElementById('agentFormRole').value.trim();
   const capabilities = document.getElementById('agentFormCaps').value.split(',').map(s => s.trim()).filter(Boolean);
   const homeFolder = document.getElementById('agentFormHome').value.trim() || '/';
-  // kilocode_change - Use ephemeral (inverted) instead of canSpawnWorkers
+  // Society Agent - Use ephemeral (inverted) instead of canSpawnWorkers
   const isSupervisor = document.getElementById('agentFormSpawn').checked;
   const ephemeral = !isSupervisor;
   const reportsTo = document.getElementById('agentFormReportsTo').value || undefined;
@@ -1596,7 +1596,7 @@ function showToast(msg, type = 'success') {
 // Init
 // ============================================================================
 
-// kilocode_change start - System pause state management
+// Society Agent start - System pause state management
 let isSystemPaused = false;
 
 function updatePauseUI(paused) {
@@ -1652,7 +1652,7 @@ socket.on('system-event', (data) => {
     updatePauseUI(false);
   }
 });
-// kilocode_change end
+// Society Agent end
 
 checkSystemPauseState();
 loadProject();

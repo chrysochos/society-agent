@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Tests for Society Agent Logger (OutputChannel-based logging)
  */

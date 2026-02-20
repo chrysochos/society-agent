@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Standalone Society Agent Server Launcher
  *
@@ -15,7 +15,7 @@
 // Ensure API key is loaded from known .env locations
 // ============================================================================
 // `-r dotenv/config` loads from cwd (workspace root). If key is empty there,
-// also check /workspace/src/.env (where KiloCode extension writes it).
+// also check /workspace/src/.env (where Society Agent extension writes it).
 const path = require("path")
 if (!process.env.ANTHROPIC_API_KEY) {
 	const fallbackEnv = path.join(__dirname, "../../.env") // /workspace/src/.env

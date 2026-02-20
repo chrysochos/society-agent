@@ -367,21 +367,21 @@
   <div class="status">
     <span class="dot" id="statusDot"></span>
     <span id="statusText">Connecting...</span>
-    <!-- kilocode_change - manual reconnect button -->
+    <!-- Society Agent - manual reconnect button -->
     <button id="reconnectBtn" onclick="manualReconnect()" style="margin-left:8px;background:none;border:1px solid var(--border);color:var(--muted);cursor:pointer;font-size:11px;padding:2px 8px;border-radius:4px;display:none" title="Click to reconnect">↻ Reconnect</button>
   </div>
   <div style="flex:1"></div>
-  <!-- kilocode_change - System pause/resume for external oversight -->
+  <!-- Society Agent - System pause/resume for external oversight -->
   <button class="pause-btn" id="pauseBtn" onclick="toggleSystemPause()" title="Pause system for maintenance">
     <span id="pauseBtnIcon">⏸</span>
     <span id="pauseBtnText">Maintenance</span>
   </button>
-  <!-- kilocode_change - Clear & Reset button for troubleshooting -->
+  <!-- Society Agent - Clear & Reset button for troubleshooting -->
   <button class="btn btn-secondary" onclick="clearAndReset()" style="font-size:11px;margin-right:8px;color:var(--yellow)" title="Clear all state and reload">&#9888; Reset</button>
   <button class="btn btn-secondary" onclick="showApiKeyModal()" style="font-size:12px">&#9881; Settings</button>
 </header>
 
-<!-- kilocode_change - System pause banner -->
+<!-- Society Agent - System pause banner -->
 <div class="pause-banner" id="pauseBanner">
   <span class="icon">⚠️</span>
   <span class="text"><strong>System Paused</strong> — Maintenance mode active. New requests are blocked.</span>
@@ -399,14 +399,14 @@
     <div class="stat-row"><span class="label">API Key</span><span class="value" id="apiKeyStatus">-</span></div>
     <div class="stat-row"><span class="label">Output</span><span class="value expandable" id="outputDir" title="" onclick="this.classList.toggle('expanded')">projects/</span></div>
     <div class="stat-row"><span class="label">Files</span><span class="value" id="fileCount">0</span></div>
-    <!-- kilocode_change start - usage tracking display -->
+    <!-- Society Agent start - usage tracking display -->
     <div class="stat-row" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
       <span class="label">💰 Tokens</span>
       <span class="value" id="tokenCount" title="Click to see details" style="cursor:pointer" onclick="showUsageDetails()">0</span>
     </div>
     <div class="stat-row"><span class="label">💵 Est. Cost</span><span class="value" id="costDisplay" style="color:var(--green)">$0.00</span></div>
     <div class="stat-row"><span class="label">📊 API Calls</span><span class="value" id="callCount">0</span></div>
-    <!-- kilocode_change end -->
+    <!-- Society Agent end -->
 
     <!-- File Explorer -->
     <h2 style="margin-top:12px;display:flex;align-items:center;gap:6px">
@@ -430,7 +430,7 @@
       <div style="padding:8px 16px;color:var(--muted);font-size:12px">No projects</div>
     </div>
 
-    <!-- kilocode_change start - Global Skills section -->
+    <!-- Society Agent start - Global Skills section -->
     <h2 style="margin-top:8px;display:flex;align-items:center;gap:6px">
       🎯 Global Skills
       <span style="flex:1"></span>
@@ -439,9 +439,9 @@
     <div id="skillsList" style="font-size:12px">
       <div style="padding:8px 16px;color:var(--muted)">Loading...</div>
     </div>
-    <!-- kilocode_change end -->
+    <!-- Society Agent end -->
 
-    <!-- kilocode_change start - Global MCPs section -->
+    <!-- Society Agent start - Global MCPs section -->
     <h2 style="margin-top:8px;display:flex;align-items:center;gap:6px">
       🔌 Global MCPs
       <span style="flex:1"></span>
@@ -450,7 +450,7 @@
     <div id="mcpsList" style="font-size:12px">
       <div style="padding:8px 16px;color:var(--muted)">Loading...</div>
     </div>
-    <!-- kilocode_change end -->
+    <!-- Society Agent end -->
   </div>
 
   <div class="chat-area">
@@ -555,13 +555,13 @@
   <div class="modal wide">
     <h2 id="projectModalTitle">Create Project</h2>
     <p style="font-size:12px;color:var(--muted);margin-bottom:12px" id="projectModalDesc">Create a project to organize agents around a shared folder and knowledge base.</p>
-    <!-- kilocode_change start - simplified: name becomes folder/id -->
+    <!-- Society Agent start - simplified: name becomes folder/id -->
     <div class="form-group">
       <label>Project Name (also used as folder name)</label>
       <input type="text" id="projectFormName" placeholder="my-project">
       <span style="font-size:11px;color:var(--muted)">Will create folder: <code id="projectFolderPreview">projects/</code></span>
     </div>
-    <!-- kilocode_change end -->
+    <!-- Society Agent end -->
     <div class="form-group">
       <label>Description</label>
       <input type="text" id="projectFormDesc" placeholder="What is this project about?">
@@ -575,7 +575,7 @@
 
 <script>
 const API = window.location.origin;
-// kilocode_change start - Enhanced Socket.IO with auto-reconnect and status
+// Society Agent start - Enhanced Socket.IO with auto-reconnect and status
 
 // Global error handler - prevent page from breaking
 window.onerror = function(msg, url, line, col, error) {
@@ -616,7 +616,7 @@ socket.on('connect', () => {
     addLog('info', 'Connected to Society Agent server');
     checkApiKey();
     checkServerStatus();
-    checkSystemPauseState(); // kilocode_change - check if system is paused
+    checkSystemPauseState(); // Society Agent - check if system is paused
     // Reload data after reconnect
     loadProjects();
   } catch (e) {
@@ -651,9 +651,9 @@ socket.on('reconnect_failed', () => {
   addLog('error', 'Reconnection failed - please refresh page');
   setStatus(false, 'Disconnected - refresh page');
 });
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - Usage tracking events
+// Society Agent start - Usage tracking events
 socket.on('usage', (data) => {
   // Individual usage entry - update totals
   console.log('[Usage]', data);
@@ -732,12 +732,12 @@ function showUsageDetails() {
 
 // Fetch initial usage on connect
 setTimeout(fetchUsageSummary, 1000);
-// kilocode_change end
+// Society Agent end
 
 // Streaming agent messages
 let streamDidFire = false;
 socket.on('agent-message', (data) => {
-  // kilocode_change - Filter to only show messages for selected agent
+  // Society Agent - Filter to only show messages for selected agent
   // If an agent is selected and this message is from a different agent, ignore it
   if (selectedAgentId && data.agentId && data.agentId !== selectedAgentId) {
     // Log it but don't display in chat
@@ -754,7 +754,7 @@ socket.on('agent-message', (data) => {
       streamText = '';
     }
     streamText += data.message;
-    // kilocode_change - Null check in case element was removed from DOM
+    // Society Agent - Null check in case element was removed from DOM
     const contentEl = currentStreamEl?.querySelector('.content');
     if (contentEl) {
       contentEl.textContent = streamText;
@@ -772,7 +772,7 @@ socket.on('agent-message', (data) => {
     streamText = '';
     isStreaming = false;
     document.getElementById('sendBtn').disabled = false;
-    document.getElementById('stopBtn').style.display = 'none'; // kilocode_change - hide stop
+    document.getElementById('stopBtn').style.display = 'none'; // Society Agent - hide stop
     removeTyping();
   }
 });
@@ -782,7 +782,7 @@ socket.on('purpose-started', (data) => {
   addLog('info', `Purpose started: ${data.description}`);
 });
 
-// kilocode_change start - Stop agent function
+// Society Agent start - Stop agent function
 function stopAgent() {
   if (!isStreaming) return;
   
@@ -804,9 +804,9 @@ function stopAgent() {
   removeTyping();
   addLog('info', 'Agent stopped by user');
 }
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - Show tool executions in chat so user sees what agent is doing
+// Society Agent start - Show tool executions in chat so user sees what agent is doing
 socket.on('tool-execution', (data) => {
   // Only show for selected agent (or if no agent selected, show all)
   if (selectedAgentId && data.agentId && data.agentId !== selectedAgentId) {
@@ -828,7 +828,7 @@ socket.on('tool-execution', (data) => {
     }
   }
 });
-// kilocode_change end
+// Society Agent end
 
 socket.on('team-formed', (data) => {
   addLog('info', `Team formed: ${data.teamSize} agents`);
@@ -862,7 +862,7 @@ socket.on('system-event', (data) => {
   if (data.type === 'purpose-launching') {
     addMessage('system', data.message);
   }
-  // kilocode_change - handle system pause/resume events
+  // Society Agent - handle system pause/resume events
   if (data.type === 'system-paused') {
     updatePauseUI(true, data.reason);
     addLog('warn', `System PAUSED: ${data.reason || 'Maintenance mode'}`);
@@ -873,7 +873,7 @@ socket.on('system-event', (data) => {
   }
 });
 
-// kilocode_change start - System pause/resume management
+// Society Agent start - System pause/resume management
 let isSystemPaused = false;
 
 function updatePauseUI(paused, reason = '') {
@@ -963,7 +963,7 @@ async function checkSystemPauseState() {
     console.warn('Failed to check system pause state:', e);
   }
 }
-// kilocode_change end - System pause/resume
+// Society Agent end - System pause/resume
 
 // ============================================================================
 // API Functions
@@ -1052,7 +1052,7 @@ async function sendMessage() {
   isStreaming = true;
   streamDidFire = false;
   document.getElementById('sendBtn').disabled = true;
-  document.getElementById('stopBtn').style.display = 'inline-block'; // kilocode_change - show stop
+  document.getElementById('stopBtn').style.display = 'inline-block'; // Society Agent - show stop
   showTyping();
 
   try {
@@ -1151,7 +1151,7 @@ let fileData = [];       // flat list from server
 let expandedDirs = new Set(['']);  // track open folders ('' = root always open)
 let selectedPath = null; // currently selected item
 let dragSrc = null;      // path being dragged
-let treeEventsDelegated = false; // kilocode_change - track if delegated events attached
+let treeEventsDelegated = false; // Society Agent - track if delegated events attached
 
 // Build nested tree from flat file list
 function buildTree(files) {
@@ -1254,7 +1254,7 @@ async function refreshFiles() {
   }
 }
 
-// kilocode_change start - Render tree from cached data (no API call, instant)
+// Society Agent start - Render tree from cached data (no API call, instant)
 function renderTreeFromCache() {
   const tree = document.getElementById('fileTree');
   if (!tree || fileData.length === 0) return;
@@ -1263,9 +1263,9 @@ function renderTreeFromCache() {
   tree.innerHTML = renderTree(root);
   attachTreeHandlers();
 }
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - Attach delegated event handlers (only once)
+// Society Agent start - Attach delegated event handlers (only once)
 function attachDelegatedTreeEvents() {
   if (treeEventsDelegated) return;
   treeEventsDelegated = true;
@@ -1318,7 +1318,7 @@ function attachDelegatedTreeEvents() {
     showContextMenu(e.clientX, e.clientY, row.dataset.path, row.dataset.dir === 'true');
   });
 }
-// kilocode_change end
+// Society Agent end
 
 function attachTreeHandlers() {
   const tree = document.getElementById('fileTree');
@@ -1659,7 +1659,7 @@ async function promptNewFolderInDir(dirPath) {
 // File Viewer Overlay
 // ============================================================================
 
-// kilocode_change start - Enhanced file viewer with PDF and Markdown support
+// Society Agent start - Enhanced file viewer with PDF and Markdown support
 let currentFileContent = ''; // Store for toggle between raw/rendered
 let currentFilePath = '';
 let isEditing = false;
@@ -2029,7 +2029,7 @@ function renderMarkdown(text) {
   
   return html;
 }
-// kilocode_change end
+// Society Agent end
 
 function closeFileViewer() {
   const v = document.getElementById('fileViewer');
@@ -2125,7 +2125,7 @@ function scrollToBottom() {
   m.scrollTop = m.scrollHeight;
 }
 
-// kilocode_change start - Enhanced status with reconnection message
+// Society Agent start - Enhanced status with reconnection message
 function setStatus(online, statusMsg) {
   const dot = document.getElementById('statusDot');
   const text = document.getElementById('statusText');
@@ -2147,7 +2147,7 @@ function manualReconnect() {
   setTimeout(() => socket.connect(), 500);
 }
 
-// kilocode_change - Clear all state and reload page
+// Society Agent - Clear all state and reload page
 function clearAndReset() {
   if (!confirm('This will clear all local state and reload the page. Continue?')) return;
   
@@ -2172,7 +2172,7 @@ function clearAndReset() {
   // Force hard reload bypassing cache
   window.location.reload(true);
 }
-// kilocode_change end
+// Society Agent end
 
 function addLog(level, text) {
   const el = document.createElement('div');
@@ -2306,7 +2306,7 @@ document.querySelector('.input-area').addEventListener('drop', (e) => {
   }
 });
 
-// kilocode_change start - Paste images from clipboard
+// Society Agent start - Paste images from clipboard
 document.getElementById('input').addEventListener('paste', async (e) => {
   const items = e.clipboardData?.items;
   if (!items) return;
@@ -2339,7 +2339,7 @@ document.getElementById('input').addEventListener('paste', async (e) => {
     }
   }
 });
-// kilocode_change end
+// Society Agent end
 
 // ============================================================================
 // Keyboard
@@ -2498,7 +2498,7 @@ function onAgentChange() {
   selectedAgentId = sel.value;
   const info = document.getElementById('agentSelectInfo');
   
-  // kilocode_change start - Clear chat when switching agents
+  // Society Agent start - Clear chat when switching agents
   // Reset streaming state
   currentStreamEl = null;
   streamText = '';
@@ -2517,7 +2517,7 @@ function onAgentChange() {
   } else {
     addMessage('system', 'Select an agent from the dropdown above to start chatting');
   }
-  // kilocode_change end
+  // Society Agent end
   
   if (!selectedAgentId) {
     info.innerHTML = '';
@@ -2536,7 +2536,7 @@ function renderProjectsGrid() {
 
   let html = projects.map(p => {
     const agentChips = (p.agents || []).map(a => {
-      const dotCls = !a.ephemeral ? 'supervisor' : 'worker'; // kilocode_change - Use !ephemeral
+      const dotCls = !a.ephemeral ? 'supervisor' : 'worker'; // Society Agent - Use !ephemeral
       return `<span class="project-agent-chip"><span class="chip-dot ${dotCls}"></span>${escapeHtml(a.name)}</span>`;
     }).join('');
 
@@ -2577,7 +2577,7 @@ function renderSidebarProjects() {
     list.innerHTML = '<div style="padding:8px 16px;color:var(--muted);font-size:12px">No projects — go to Projects tab</div>';
     return;
   }
-  // kilocode_change start - show folder as main identifier (matches disk folder name)
+  // Society Agent start - show folder as main identifier (matches disk folder name)
   list.innerHTML = projects.map(p => {
     const agentCount = (p.agents || []).length;
     const folderName = p.folder || p.id; // Folder name = directory on disk
@@ -2587,12 +2587,12 @@ function renderSidebarProjects() {
       <span class="status-badge ${p.status === 'active' ? 'working' : 'idle'}">${p.status || 'active'}</span>
     </div>`;
   }).join('');
-  // kilocode_change end
+  // Society Agent end
 }
 
 // Project CRUD
 
-// kilocode_change start - simplified project creation
+// Society Agent start - simplified project creation
 function slugify(text) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 50);
 }
@@ -2614,9 +2614,9 @@ function showCreateProjectModal() {
     document.getElementById('projectFolderPreview').textContent = slug ? 'projects/' + slug + '/' : 'projects/';
   };
 }
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - simplified edit modal
+// Society Agent start - simplified edit modal
 function editProject(id) {
   const project = projects.find(p => p.id === id);
   if (!project) return;
@@ -2630,14 +2630,14 @@ function editProject(id) {
   document.getElementById('projectFolderPreview').textContent = 'projects/' + (project.folder || project.id) + '/';
   document.getElementById('projectModal').style.display = 'flex';
 }
-// kilocode_change end
+// Society Agent end
 
 function hideProjectModal() {
   document.getElementById('projectModal').style.display = 'none';
   editingProjectId = null;
 }
 
-// kilocode_change start - simplified: name is the id/folder
+// Society Agent start - simplified: name is the id/folder
 async function submitProjectForm() {
   const name = document.getElementById('projectFormName').value.trim();
   const id = slugify(name); // Auto-generate ID from name
@@ -2648,7 +2648,7 @@ async function submitProjectForm() {
     alert('Please enter a project name');
     return;
   }
-// kilocode_change end
+// Society Agent end
 
   try {
     let res;

@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Society Agent Framework
  *
@@ -10,7 +10,7 @@ export * from "./types"
 export * from "./config"
 export * from "./logger"
 
-// kilocode_change start - Export key public APIs
+// Society Agent start - Export key public APIs
 export { AgentIdentityManager, type SignedMessage, type AttachmentRef } from "./agent-identity"
 export { UnifiedMessageHandler, type MessageHandlerOptions } from "./message-handler"
 export { AgentRegistry, type AgentMessage } from "./agent-registry"
@@ -25,4 +25,4 @@ export { commandExecutor } from "./command-executor"
 export { AgentDirectory, type AgentDirectoryConfig } from "./agent-directory"
 export { KnowledgeManager, type ConversationEntry } from "./knowledge-manager"
 export { PermissionChecker, getPermissionChecker } from "./permissions"
-// kilocode_change end
+// Society Agent end

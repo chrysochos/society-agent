@@ -1,6 +1,6 @@
 /**
  * Minimal API stream types for Society Agent standalone
- * Simplified from KiloCode's api/transform/stream.ts
+ * Simplified from Society Agent's api/transform/stream.ts
  */
 
 export type ApiStream = AsyncGenerator<ApiStreamChunk>

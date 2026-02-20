@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Society Agent Persistent Storage
  *
@@ -8,7 +8,7 @@
 
 import * as fs from "fs/promises"
 import * as path from "path"
-import { getLog } from "./logger" // kilocode_change
+import { getLog } from "./logger" // Society Agent
 
 /**
  * Storage paths for Society Agent data

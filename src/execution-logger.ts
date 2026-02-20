@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * ExecutionLogger - Structured logging for purpose executions
  *
@@ -10,7 +10,7 @@ import * as fs from "fs"
 import * as path from "path"
 import { getLog } from "./logger"
 
-// kilocode_change start
+// Society Agent start
 export interface LogEntry {
 	timestamp: number
 	purposeId: string
@@ -24,76 +24,76 @@ export interface ExecutionLoggerConfig {
 	workspaceRoot: string
 	enableConsole?: boolean
 }
-// kilocode_change end
+// Society Agent end
 
 /**
  * Logs execution events to structured JSONL files
  */
 export class ExecutionLogger {
-	// kilocode_change start
+	// Society Agent start
 	private logDir: string
 	private enableConsole: boolean
 	private logStream?: fs.WriteStream
-	// kilocode_change end
+	// Society Agent end
 
 	constructor(config: ExecutionLoggerConfig) {
-		// kilocode_change start
+		// Society Agent start
 		this.logDir = path.join(config.workspaceRoot, ".society-agent", "logs")
 		this.enableConsole = config.enableConsole !== false
 
 		// Ensure log directory exists
 		this.ensureLogDirectory()
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Ensure log directory exists
 	 */
 	private ensureLogDirectory(): void {
-		// kilocode_change start
+		// Society Agent start
 		if (!fs.existsSync(this.logDir)) {
 			fs.mkdirSync(this.logDir, { recursive: true })
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Log info event
 	 */
 	info(purposeId: string, event: string, data?: Record<string, unknown>, agentId?: string): void {
-		// kilocode_change start
+		// Society Agent start
 		this.log("info", purposeId, event, data, agentId)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Log warning event
 	 */
 	warn(purposeId: string, event: string, data?: Record<string, unknown>, agentId?: string): void {
-		// kilocode_change start
+		// Society Agent start
 		this.log("warn", purposeId, event, data, agentId)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Log error event
 	 */
 	error(purposeId: string, event: string, data?: Record<string, unknown>, agentId?: string): void {
-		// kilocode_change start
+		// Society Agent start
 		this.log("error", purposeId, event, data, agentId)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Log debug event
 	 */
 	debug(purposeId: string, event: string, data?: Record<string, unknown>, agentId?: string): void {
-		// kilocode_change start
+		// Society Agent start
 		this.log("debug", purposeId, event, data, agentId)
-		// kilocode_change end
+		// Society Agent end
 	}
 
-	// kilocode_change start - Agent message logging
+	// Society Agent start - Agent message logging
 	/**
 	 * Log agent-to-agent message
 	 */
@@ -126,7 +126,7 @@ export class ExecutionLogger {
 			success,
 		})
 	}
-	// kilocode_change end
+	// Society Agent end
 
 	/**
 	 * Write log entry
@@ -138,7 +138,7 @@ export class ExecutionLogger {
 		data?: Record<string, unknown>,
 		agentId?: string,
 	): void {
-		// kilocode_change start
+		// Society Agent start
 		const entry: LogEntry = {
 			timestamp: Date.now(),
 			purposeId,
@@ -155,14 +155,14 @@ export class ExecutionLogger {
 		if (this.enableConsole) {
 			this.logToConsole(entry)
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Write log entry to JSONL file
 	 */
 	private writeToFile(entry: LogEntry): void {
-		// kilocode_change start
+		// Society Agent start
 		try {
 			// Create per-purpose log file
 			const logFile = path.join(this.logDir, `${entry.purposeId}.jsonl`)
@@ -173,14 +173,14 @@ export class ExecutionLogger {
 		} catch (error) {
 			getLog().error("Failed to write log:", error)
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Log to console
 	 */
 	private logToConsole(entry: LogEntry): void {
-		// kilocode_change start
+		// Society Agent start
 		const timestamp = new Date(entry.timestamp).toISOString()
 		const agentPrefix = entry.agentId ? `[${entry.agentId}]` : ""
 		const message = `[${timestamp}] ${agentPrefix} ${entry.event}`
@@ -198,14 +198,14 @@ export class ExecutionLogger {
 			default:
 				getLog().info(message, entry.data || "")
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Read logs for a purpose
 	 */
 	readLogs(purposeId: string): LogEntry[] {
-		// kilocode_change start
+		// Society Agent start
 		const logFile = path.join(this.logDir, `${purposeId}.jsonl`)
 
 		if (!fs.existsSync(logFile)) {
@@ -220,7 +220,7 @@ export class ExecutionLogger {
 			getLog().error("Failed to read logs:", error)
 			return []
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
@@ -235,7 +235,7 @@ export class ExecutionLogger {
 			since?: number
 		},
 	): LogEntry[] {
-		// kilocode_change start
+		// Society Agent start
 		let logs = this.readLogs(purposeId)
 
 		if (filters) {
@@ -254,55 +254,55 @@ export class ExecutionLogger {
 		}
 
 		return logs
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Get all log files
 	 */
 	listLogFiles(): string[] {
-		// kilocode_change start
+		// Society Agent start
 		try {
 			return fs.readdirSync(this.logDir).filter((file) => file.endsWith(".jsonl"))
 		} catch (error) {
 			return []
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Delete logs for a purpose
 	 */
 	deleteLogs(purposeId: string): void {
-		// kilocode_change start
+		// Society Agent start
 		const logFile = path.join(this.logDir, `${purposeId}.jsonl`)
 		if (fs.existsSync(logFile)) {
 			fs.unlinkSync(logFile)
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Clear all logs
 	 */
 	clearAllLogs(): void {
-		// kilocode_change start
+		// Society Agent start
 		const files = this.listLogFiles()
 		for (const file of files) {
 			fs.unlinkSync(path.join(this.logDir, file))
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Dispose resources
 	 */
 	dispose(): void {
-		// kilocode_change start
+		// Society Agent start
 		if (this.logStream) {
 			this.logStream.end()
 			this.logStream = undefined
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 }

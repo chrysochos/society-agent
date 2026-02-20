@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * KnowledgeManager - Maintains persistent Markdown-based knowledge for agents
  *

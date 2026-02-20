@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Project Store
  *
@@ -36,25 +36,25 @@ export interface ProjectAgentConfig {
 	model?: string
 	/** When last active */
 	lastActiveAt?: string
-	// kilocode_change start - port configuration
+	// Society Agent start - port configuration
 	/** Port this agent's server should use (if applicable) */
 	port?: number
 	/** Type of server this agent runs (frontend, backend, api, etc) */
 	serverType?: "frontend" | "backend" | "api" | "database" | "none"
-	// kilocode_change end
-	// kilocode_change start - ephemeral agents
+	// Society Agent end
+	// Society Agent start - ephemeral agents
 	/** If true, agent is temporary and will be deleted after completing its task */
 	ephemeral?: boolean
 	/** ID of the agent that created this ephemeral agent */
 	createdBy?: string
-	// kilocode_change end
-	// kilocode_change start - hierarchy
+	// Society Agent end
+	// Society Agent start - hierarchy
 	/** Boss's agent ID (null/undefined = top-level, no boss) */
 	reportsTo?: string
 	/** Domain/scope this agent owns (e.g. "backend", "frontend/components") */
 	scope?: string
-	// kilocode_change end
-	// kilocode_change start - inherited folders from retired agents
+	// Society Agent end
+	// Society Agent start - inherited folders from retired agents
 	/** Additional folders this agent has access to (inherited from retired agents) */
 	inheritedFolders?: Array<{
 		path: string
@@ -63,18 +63,18 @@ export interface ProjectAgentConfig {
 		inheritedAt: string
 		reason: string
 	}>
-	// kilocode_change end
-	// kilocode_change start - scheduled tasks
+	// Society Agent end
+	// Society Agent start - scheduled tasks
 	/** Scheduled tasks for this agent (autonomous periodic work) */
 	scheduledTasks?: ScheduledTask[]
-	// kilocode_change end
-	// kilocode_change start - agent memory
+	// Society Agent end
+	// Society Agent start - agent memory
 	/** Agent's memory summary from past conversations */
 	memorySummary?: string
-	// kilocode_change end
+	// Society Agent end
 }
 
-// kilocode_change start - Task pool system
+// Society Agent start - Task pool system
 /**
  * Task context - provides full information for the worker to execute the task
  */
@@ -109,14 +109,14 @@ export interface Task {
 	status: "available" | "claimed" | "in-progress" | "completed" | "failed"
 	/** ID of agent that created/delegated this task */
 	createdBy: string
-	// kilocode_change start - hierarchy
+	// Society Agent start - hierarchy
 	/** Specific agent this task is assigned to (null = open pool) */
 	assignedTo?: string
 	/** Parent task ID (for task breakdown/decomposition) */
 	parentTaskId?: string
 	/** Urgency level for escalation rules */
 	urgency?: "normal" | "urgent" | "critical"
-	// kilocode_change end
+	// Society Agent end
 	/** ID of worker that claimed this task */
 	claimedBy?: string
 	/** When claimed */
@@ -169,7 +169,7 @@ export interface ScheduledTask {
 	/** When created */
 	createdAt: string
 }
-// kilocode_change end
+// Society Agent end
 
 /**
  * A project — the primary organizing unit.
@@ -187,12 +187,12 @@ export interface Project {
 	knowledge: string
 	/** Agents assigned to this project */
 	agents: ProjectAgentConfig[]
-	// kilocode_change start - Task pool
+	// Society Agent start - Task pool
 	/** Task pool for this project */
 	tasks: Task[]
 	/** Maximum concurrent ephemeral workers (default: 3) */
 	maxConcurrentWorkers: number
-	// kilocode_change end
+	// Society Agent end
 	/** Project status */
 	status: "active" | "archived" | "paused"
 	/** Timestamps */
@@ -218,10 +218,10 @@ function createDefaultProjects(): Project[] {
 			description: "A general-purpose workspace with an Architect (supervisor) and a Coder (worker).",
 			folder: "default",
 			knowledge: "",
-			// kilocode_change start - Task pool
+			// Society Agent start - Task pool
 			tasks: [],
 			maxConcurrentWorkers: 3,
-			// kilocode_change end
+			// Society Agent end
 			status: "active",
 			createdAt: now,
 			updatedAt: now,
@@ -231,7 +231,7 @@ function createDefaultProjects(): Project[] {
 					name: "Architect",
 					role: "Lead Architect",
 					capabilities: ["planning", "code-analysis", "architecture", "task-delegation"],
-					// kilocode_change start - Updated system prompt to use AGENTS.md
+					// Society Agent start - Updated system prompt to use AGENTS.md
 					systemPrompt: `You are Architect, a senior software architect and team supervisor.
 
 ## CRITICAL: READ YOUR AGENTS.md FIRST
@@ -259,8 +259,8 @@ ALWAYS include in task instructions:
 - Any context the worker needs
 
 Use markdown formatting. Be decisive and action-oriented.`,
-					// kilocode_change end
-					ephemeral: false, // kilocode_change - Supervisor is persistent
+					// Society Agent end
+					ephemeral: false, // Society Agent - Supervisor is persistent
 					homeFolder: "/",
 					lastActiveAt: now,
 				},
@@ -285,7 +285,7 @@ When given a coding task:
 
 You write code directly — no need to ask for permission. Create files when needed.
 Be concise in explanations, let the code speak.`,
-					ephemeral: false, // kilocode_change - Persistent worker agent
+					ephemeral: false, // Society Agent - Persistent worker agent
 					homeFolder: "/",
 					lastActiveAt: now,
 				},
@@ -297,7 +297,7 @@ Be concise in explanations, let the code speak.`,
 export class ProjectStore {
 	private storePath: string
 	private state: ProjectStoreState
-	public projectsBaseDir: string // kilocode_change - made public for file path calculations
+	public projectsBaseDir: string // Society Agent - made public for file path calculations
 
 	constructor(workspacePath: string) {
 		this.projectsBaseDir = path.join(workspacePath, "projects")
@@ -341,9 +341,9 @@ export class ProjectStore {
 					log.info(`Created project folder: ${dir}`)
 				}
 			}
-			// kilocode_change start - Initialize AGENTS.md for existing agents
+			// Society Agent start - Initialize AGENTS.md for existing agents
 			this.initializeAgentKnowledgeFiles()
-			// kilocode_change end
+			// Society Agent end
 		} catch (error) {
 			log.error("Error loading project store:", error)
 			this.state.projects = createDefaultProjects()
@@ -351,7 +351,7 @@ export class ProjectStore {
 		}
 	}
 
-	// kilocode_change start - Initialize AGENTS.md for all existing agents
+	// Society Agent start - Initialize AGENTS.md for all existing agents
 	private initializeAgentKnowledgeFiles(): void {
 		for (const project of this.state.projects) {
 			for (const agent of project.agents) {
@@ -359,7 +359,7 @@ export class ProjectStore {
 			}
 		}
 	}
-	// kilocode_change end
+	// Society Agent end
 
 	/**
 	 * Migrate from the old PersistentAgentStore format.
@@ -398,7 +398,7 @@ export class ProjectStore {
 						name: a.name,
 						role: a.role,
 						systemPrompt: a.systemPrompt || "",
-						// kilocode_change - Use ephemeral as primary flag
+						// Society Agent - Use ephemeral as primary flag
 						ephemeral: a.ephemeral ?? true,
 						homeFolder: "/",
 						model: a.model,
@@ -470,10 +470,10 @@ export class ProjectStore {
 			status: "active",
 			createdAt: now,
 			updatedAt: now,
-			// kilocode_change start - Task pool
+			// Society Agent start - Task pool
 			tasks: [],
 			maxConcurrentWorkers: 3,
-			// kilocode_change end
+			// Society Agent end
 			agents: (input.agents || []).map((a) => ({
 				...a,
 				lastActiveAt: now,
@@ -556,15 +556,15 @@ export class ProjectStore {
 		project.updatedAt = new Date().toISOString()
 		this.save()
 		
-		// kilocode_change start - Create AGENTS.md file for new agent
+		// Society Agent start - Create AGENTS.md file for new agent
 		this.createAgentKnowledgeFile(projectId, agent)
-		// kilocode_change end
+		// Society Agent end
 		
 		log.info(`Added agent ${agent.name} to project ${project.name}`)
 		return agent
 	}
 
-	// kilocode_change start - Create initial AGENTS.md knowledge file for an agent
+	// Society Agent start - Create initial AGENTS.md knowledge file for an agent
 	private createAgentKnowledgeFile(projectId: string, agent: ProjectAgentConfig): void {
 		const agentDir = this.agentHomeDir(projectId, agent.id)
 		const agentsFilePath = path.join(agentDir, "AGENTS.md")
@@ -698,13 +698,13 @@ When learning organically → add to KNOWLEDGE.md as playbook
 			log.warn(`Failed to create AGENTS.md for ${agent.name}: ${err}`)
 		}
 	}
-	// kilocode_change end
+	// Society Agent end
 
 	/** Update an agent within a project */
 	updateAgent(
 		projectId: string,
 		agentId: string,
-		// kilocode_change - added port, serverType, reportsTo, scope, scheduledTasks, ephemeral, inheritedFolders; removed canSpawnWorkers, capabilities, knowledgeSummary
+		// Society Agent - added port, serverType, reportsTo, scope, scheduledTasks, ephemeral, inheritedFolders; removed canSpawnWorkers, capabilities, knowledgeSummary
 		updates: Partial<Pick<ProjectAgentConfig, "name" | "role" | "systemPrompt" | "ephemeral" | "homeFolder" | "model" | "port" | "serverType" | "reportsTo" | "scope" | "scheduledTasks" | "inheritedFolders">>,
 	): ProjectAgentConfig | undefined {
 		const project = this.get(projectId)
@@ -783,7 +783,7 @@ When learning organically → add to KNOWLEDGE.md as playbook
 		return path.join(this.projectsBaseDir, projectFolder, home)
 	}
 
-	// kilocode_change start - Task pool methods
+	// Society Agent start - Task pool methods
 	// ========================================================================
 	// Task Pool Management
 	// ========================================================================
@@ -947,9 +947,9 @@ When learning organically → add to KNOWLEDGE.md as playbook
 		if (!project?.tasks) return 0
 		return project.tasks.filter((t) => t.status === "available").length
 	}
-	// kilocode_change end
+	// Society Agent end
 
-	// kilocode_change start - hierarchy methods
+	// Society Agent start - hierarchy methods
 	/** Get an agent's boss */
 	getBoss(projectId: string, agentId: string): ProjectAgentConfig | undefined {
 		const agent = this.getAgent(projectId, agentId)
@@ -1110,9 +1110,9 @@ When learning organically → add to KNOWLEDGE.md as playbook
 			.map((a) => buildTree(a.id))
 			.filter((t) => t !== null) as { agent: ProjectAgentConfig; reports: any[] }[]
 	}
-	// kilocode_change end
+	// Society Agent end
 
-	// kilocode_change start - agent memory methods
+	// Society Agent start - agent memory methods
 	/** Update an agent's memory summary */
 	updateAgentMemory(projectId: string, agentId: string, memorySummary: string): void {
 		const project = this.get(projectId)
@@ -1134,5 +1134,5 @@ When learning organically → add to KNOWLEDGE.md as playbook
 			this.save()
 		}
 	}
-	// kilocode_change end
+	// Society Agent end
 }

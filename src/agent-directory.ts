@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * AgentDirectory - Agent discovery and supervision chain resolution
  *

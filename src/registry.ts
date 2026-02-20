@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Agent Registry
  *
@@ -8,7 +8,7 @@
 
 import { AgentIdentity, AgentRole, AgentCapability } from "./types"
 import { SocietyAgentStorage } from "./storage"
-import { getLog } from "./logger" // kilocode_change
+import { getLog } from "./logger" // Society Agent
 
 /**
  * Agent status in the registry

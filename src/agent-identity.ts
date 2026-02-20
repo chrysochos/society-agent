@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Agent Identity System - Ed25519 asymmetric key identity for society agents
  *
@@ -493,7 +493,7 @@ export class AgentIdentityManager {
 		return this.identity
 	}
 
-	// kilocode_change start - Public key fingerprint for monitor display
+	// Society Agent start - Public key fingerprint for monitor display
 	/**
 	 * Get a short hex fingerprint of this agent's public key.
 	 * Returns first 16 hex chars of the SHA-256 hash of the public key DER encoding.
@@ -512,7 +512,7 @@ export class AgentIdentityManager {
 			return undefined
 		}
 	}
-	// kilocode_change end
+	// Society Agent end
 
 	/**
 	 * Check if a given agent ID is authorized

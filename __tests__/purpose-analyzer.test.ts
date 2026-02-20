@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 import { describe, it, expect } from "vitest"
 import { PurposeAnalyzer, type PurposeContext } from "../purpose-analyzer"
 

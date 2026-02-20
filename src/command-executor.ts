@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * CommandExecutor - Execute shell commands with output streaming
  *

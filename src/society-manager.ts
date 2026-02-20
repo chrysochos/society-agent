@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * SocietyManager - Main orchestrator for Society Agent system
  *
@@ -13,7 +13,7 @@ import { ApiHandler } from "./api"
 import { ExecutionLogger } from "./execution-logger"
 import { getLog } from "./logger"
 
-// kilocode_change start
+// Society Agent start
 export interface ActivePurpose {
 	purpose: Purpose
 	team: AgentTeam
@@ -26,9 +26,9 @@ export interface SocietyManagerConfig {
 	apiHandler: ApiHandler
 	workspacePath?: string
 	/** Shared directory for .society-agent/ (identity, inbox, keys) */
-	sharedDir?: string // kilocode_change
+	sharedDir?: string // Society Agent
 	/** Enable multi-window mode: launch real VS Code windows for workers */
-	multiWindow?: boolean // kilocode_change
+	multiWindow?: boolean // Society Agent
 	onPurposeStarted?: (purpose: Purpose) => void
 	onPurposeCompleted?: (purpose: Purpose, summary: string) => void
 	onTeamFormed?: (purposeId: string, teamSize: number) => void
@@ -42,20 +42,20 @@ export interface SocietyState {
 	completedPurposes: Purpose[]
 	totalAgentsCreated: number
 }
-// kilocode_change end
+// Society Agent end
 
 /**
  * Main orchestrator for the Society Agent system
  */
 export class SocietyManager {
-	// kilocode_change start
+	// Society Agent start
 	private state: SocietyState
 	private config: SocietyManagerConfig
 	private logger: ExecutionLogger
-	// kilocode_change end
+	// Society Agent end
 
 	constructor(config: SocietyManagerConfig) {
-		// kilocode_change start
+		// Society Agent start
 		this.state = {
 			activePurposes: new Map(),
 			completedPurposes: [],
@@ -66,27 +66,27 @@ export class SocietyManager {
 			workspaceRoot: config.workspacePath || process.cwd(),
 			enableConsole: true,
 		})
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Get current system state
 	 */
 	getState(): SocietyState {
-		// kilocode_change start
+		// Society Agent start
 		return {
 			...this.state,
 			activePurposes: new Map(this.state.activePurposes),
 			completedPurposes: [...this.state.completedPurposes],
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Start a new purpose
 	 */
 	async startPurpose(purposeContext: PurposeContext): Promise<string> {
-		// kilocode_change start
+		// Society Agent start
 		// Create purpose object
 		const purpose: Purpose = {
 			id: `purpose-${Date.now()}`,
@@ -98,7 +98,7 @@ export class SocietyManager {
 			createdAt: Date.now(),
 		}
 
-		// kilocode_change - AI decides if task is simple enough for direct execution
+		// Society Agent - AI decides if task is simple enough for direct execution
 		const complexityCheck = await this.checkComplexity(purpose)
 
 		if (complexityCheck.isSimple) {
@@ -140,22 +140,22 @@ export class SocietyManager {
 		activePurpose.status = "executing"
 
 		return purpose.id
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Create agent team for purpose
 	 */
 	private async createTeam(purpose: Purpose): Promise<AgentTeam> {
-		// kilocode_change start
+		// Society Agent start
 		const teamConfig: AgentTeamConfig = {
 			purpose,
 			apiHandler: this.config.apiHandler,
 			workspacePath: this.config.workspacePath,
-			// kilocode_change start - Supervisor → Launcher bridge
+			// Society Agent start - Supervisor → Launcher bridge
 			sharedDir: this.config.sharedDir,
 			multiWindow: this.config.multiWindow,
-			// kilocode_change end
+			// Society Agent end
 			onMessage: (agentId, content) => {
 				this.config.onMessage?.(purpose.id, agentId, content)
 			},
@@ -183,74 +183,74 @@ export class SocietyManager {
 		}
 
 		return new AgentTeam(teamConfig)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Get active purpose by ID
 	 */
 	getActivePurpose(purposeId: string): ActivePurpose | undefined {
-		// kilocode_change start
+		// Society Agent start
 		return this.state.activePurposes.get(purposeId)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * List all active purposes
 	 */
 	listActivePurposes(): ActivePurpose[] {
-		// kilocode_change start
+		// Society Agent start
 		return Array.from(this.state.activePurposes.values())
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Send message to specific agent in a purpose
 	 */
 	async sendMessageToAgent(purposeId: string, agentId: string, message: string): Promise<string> {
-		// kilocode_change start
+		// Society Agent start
 		const activePurpose = this.state.activePurposes.get(purposeId)
 		if (!activePurpose) {
 			throw new Error(`Purpose ${purposeId} not found`)
 		}
 
 		return await activePurpose.team.sendMessageToAgent(agentId, message)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Pause purpose execution
 	 */
 	pausePurpose(purposeId: string): void {
-		// kilocode_change start
+		// Society Agent start
 		const activePurpose = this.state.activePurposes.get(purposeId)
 		if (!activePurpose) {
 			throw new Error(`Purpose ${purposeId} not found`)
 		}
 
 		activePurpose.team.pauseAll()
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Resume purpose execution
 	 */
 	resumePurpose(purposeId: string): void {
-		// kilocode_change start
+		// Society Agent start
 		const activePurpose = this.state.activePurposes.get(purposeId)
 		if (!activePurpose) {
 			throw new Error(`Purpose ${purposeId} not found`)
 		}
 
 		activePurpose.team.resumeAll()
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Complete purpose and dispose team
 	 */
 	async completePurpose(purposeId: string): Promise<string> {
-		// kilocode_change start
+		// Society Agent start
 		const activePurpose = this.state.activePurposes.get(purposeId)
 		if (!activePurpose) {
 			throw new Error(`Purpose ${purposeId} not found`)
@@ -272,14 +272,14 @@ export class SocietyManager {
 		this.config.onPurposeCompleted?.(activePurpose.purpose, summary)
 
 		return summary
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Stop purpose execution (error/abort)
 	 */
 	stopPurpose(purposeId: string, reason: string): void {
-		// kilocode_change start
+		// Society Agent start
 		const activePurpose = this.state.activePurposes.get(purposeId)
 		if (!activePurpose) {
 			throw new Error(`Purpose ${purposeId} not found`)
@@ -288,12 +288,12 @@ export class SocietyManager {
 		activePurpose.status = "failed"
 		activePurpose.team.dispose()
 		this.state.activePurposes.delete(purposeId)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Check if task is simple enough for direct execution
-	 * kilocode_change - AI decides complexity
+	 * Society Agent - AI decides complexity
 	 */
 	private async checkComplexity(purpose: Purpose): Promise<{ isSimple: boolean; workerType: string }> {
 		const { buildApiHandler } = require("../../api")
@@ -330,7 +330,7 @@ Respond with JSON:
 Respond with ONLY the JSON:`
 
 		try {
-			const stream = apiHandler.createMessage("Analyze task complexity", [{ role: "user", content: prompt }]) // kilocode_change
+			const stream = apiHandler.createMessage("Analyze task complexity", [{ role: "user", content: prompt }]) // Society Agent
 
 			let jsonText = ""
 			for await (const chunk of stream) {
@@ -356,7 +356,7 @@ Respond with ONLY the JSON:`
 
 	/**
 	 * Execute simple task with single agent (no multi-agent overhead)
-	 * kilocode_change - Direct execution path
+	 * Society Agent - Direct execution path
 	 */
 	private async executeSimpleTask(purpose: Purpose, workerType: string): Promise<string> {
 		const { ConversationAgent } = require("./conversation-agent")
@@ -385,7 +385,7 @@ Respond with ONLY the JSON:`
 		await agent.assignTask(purpose.description)
 
 		// Wait for completion (poll status)
-		await new Promise<void>((resolve) => { // kilocode_change - typed Promise
+		await new Promise<void>((resolve) => { // Society Agent - typed Promise
 			const checkInterval = setInterval(() => {
 				if (agent.getState().status === "completed") {
 					clearInterval(checkInterval)
@@ -395,7 +395,7 @@ Respond with ONLY the JSON:`
 		})
 
 		this.config.onProgressUpdate?.(purpose.id, 100)
-		this.config.onPurposeCompleted?.(purpose, "Task completed successfully") // kilocode_change
+		this.config.onPurposeCompleted?.(purpose, "Task completed successfully") // Society Agent
 
 		return purpose.id
 	}
@@ -408,24 +408,24 @@ Respond with ONLY the JSON:`
 		completedPurposes: number
 		totalAgentsCreated: number
 	} {
-		// kilocode_change start
+		// Society Agent start
 		return {
 			activePurposes: this.state.activePurposes.size,
 			completedPurposes: this.state.completedPurposes.length,
 			totalAgentsCreated: this.state.totalAgentsCreated,
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Dispose all resources
 	 */
 	dispose(): void {
-		// kilocode_change start
+		// Society Agent start
 		for (const activePurpose of this.state.activePurposes.values()) {
 			activePurpose.team.dispose()
 		}
 		this.state.activePurposes.clear()
-		// kilocode_change end
+		// Society Agent end
 	}
 }

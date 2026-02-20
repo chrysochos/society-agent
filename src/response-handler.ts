@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Response Handler - Captures agent responses and routes them
  *
@@ -8,8 +8,8 @@
 
 import * as vscode from "vscode"
 import { AgentRegistry } from "./agent-registry"
-import { AgentMessage } from "./types" // kilocode_change
-import { getLog } from "./logger" // kilocode_change
+import { AgentMessage } from "./types" // Society Agent
+import { getLog } from "./logger" // Society Agent
 
 export interface ResponseContext {
 	lastSender: string // Who sent the last message to this agent
@@ -94,7 +94,7 @@ export class ResponseHandler {
 	 */
 	private async sendTo(to: string, content: string, type: string): Promise<void> {
 		try {
-			await this.registry.sendMessage(to, type as AgentMessage["type"], content) // kilocode_change - positional args
+			await this.registry.sendMessage(to, type as AgentMessage["type"], content) // Society Agent - positional args
 			getLog().info(`[ResponseHandler] Sent response to ${to}`)
 		} catch (error) {
 			getLog().error(`[ResponseHandler] Failed to send to ${to}:`, error)

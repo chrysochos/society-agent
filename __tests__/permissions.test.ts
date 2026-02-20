@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { PermissionChecker, defaultToolCapabilityMap, getPermissionChecker, resetPermissionChecker } from "../permissions"
 import type { AgentIdentity, AgentCapability } from "../types"

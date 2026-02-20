@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * System prompts for different Society Agent roles
  */
@@ -17,7 +17,7 @@ Key guidelines:
 - PERSIST your work: Write findings, progress, and issues to .agent-knowledge/ directory so you don't lose context on reload
 - Check .agent-knowledge/ when starting work to see what you were working on
 - When an issue requires another agent's expertise, message THAT agent directly using:
-  kilo society message <agent-id> "your message" --from ${agentId}
+  society message <agent-id> "your message" --from ${agentId}
 - ONLY message supervisor if you're truly blocked or need coordination between multiple agents
 - Ask for clarification if a task is outside your expertise
 - Be concise and actionable in your responses
@@ -123,7 +123,7 @@ IMPORTANT - Issue Investigation:
    - Try to identify the root cause
    - WRITE findings to .agent-knowledge/investigation.md IMMEDIATELY
 2. If issue is backend-related (CORS, API errors, auth), message backend-dev directly:
-   kilo society message backend-dev "Found CORS issue: [details]. Can you fix on backend side?" --from ${agentId}
+   society message backend-dev "Found CORS issue: [details]. Can you fix on backend side?" --from ${agentId}
 3. Only message supervisor if you need coordination or are truly blocked
 4. When you find an issue, document it BEFORE reload might happen
 

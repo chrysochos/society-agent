@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Society Agent Logger
  *
@@ -32,7 +32,7 @@ export class SocietyAgentLogger {
 		approvedBy?: string,
 	): Promise<void> {
 		const entry: AgentAction = {
-			timestamp: new Date().toISOString(), // kilocode_change - ISO string
+			timestamp: new Date().toISOString(), // Society Agent - ISO string
 			agentId: this.agentMetadata.identity.id,
 			action,
 			...(params !== undefined && { params }),
@@ -140,14 +140,14 @@ export function createAgentLogger(metadata: AgentMetadata): SocietyAgentLogger {
  * Format agent action for display
  */
 export function formatAgentAction(action: AgentAction): string {
-	const timestamp = action.timestamp // kilocode_change - already ISO string
+	const timestamp = action.timestamp // Society Agent - already ISO string
 	const status = action.result?.success ? "✓" : "✗"
 	const approval = action.requiredApproval ? ` [Approved by: ${action.approvedBy}]` : ""
 
 	return `[${timestamp}] ${status} ${action.agentId}: ${action.action}${approval}`
 }
 
-// kilocode_change start - OutputChannel-based logging for replacing console.log
+// Society Agent start - OutputChannel-based logging for replacing console.log
 /**
  * Simple log interface for society-agent services.
  * Replaces direct console.log/warn/error calls.
@@ -207,4 +207,4 @@ export function createChannelLog(
 		debug(message, ...args) { channel.appendLine(fmt("DEBUG", message, args)) },
 	}
 }
-// kilocode_change end
+// Society Agent end

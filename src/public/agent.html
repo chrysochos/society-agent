@@ -137,11 +137,11 @@
   .btn-send { padding: 10px 20px; background: var(--accent); color: #fff; border: none;
     border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; }
   .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
-  /* kilocode_change start - Stop button */
+  /* Society Agent start - Stop button */
   .btn-stop { display: none; padding: 10px 20px; background: var(--red); color: #fff; border: none;
     border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; }
   .btn-stop:hover { filter: brightness(1.1); }
-  /* kilocode_change end */
+  /* Society Agent end */
 
   /* Attachments */
   .attach-btn { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 6px;
@@ -231,7 +231,7 @@
   @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(10px); }
     to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 
-  /* kilocode_change start - Pause banner and indicator */
+  /* Society Agent start - Pause banner and indicator */
   .pause-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
     background: linear-gradient(90deg, rgba(210,153,34,0.2), rgba(210,153,34,0.1));
     border-bottom: 2px solid #d29922; padding: 10px 20px; text-align: center;
@@ -243,7 +243,7 @@
     margin-right: 12px; }
   .pause-indicator.visible { display: inline-flex; align-items: center; gap: 6px; }
   .pause-indicator::before { content: '⏸'; }
-  /* kilocode_change end */
+  /* Society Agent end */
 </style>
 </head>
 <body>
@@ -257,7 +257,7 @@
   </div>
   <div class="agent-caps" id="agentCaps"></div>
   <div style="flex:1"></div>
-  <!-- kilocode_change start - working/done indicator (PROMINENT) -->
+  <!-- Society Agent start - working/done indicator (PROMINENT) -->
   <div id="workingIndicator" style="display:none;padding:6px 16px;border-radius:16px;font-size:14px;font-weight:600;margin-right:12px;animation:pulse 1.5s infinite">
     <span id="workingText">⏳ Working...</span>
   </div>
@@ -269,24 +269,24 @@
     #statusBanner.summarizing { background: rgba(210,153,34,0.15); border-color: #d29922; }
     #statusBanner .status-icon { font-size: 18px; margin-right: 8px; }
   </style>
-  <!-- kilocode_change end -->
+  <!-- Society Agent end -->
   <div class="agent-stats" id="agentStats"></div>
-  <!-- kilocode_change start - Pause button and indicator -->
+  <!-- Society Agent start - Pause button and indicator -->
   <button class="btn btn-sm" id="pauseBtn" onclick="toggleSystemPause()" style="margin-right:8px;padding:4px 10px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer">🔧 Maintenance</button>
   <span class="pause-indicator" id="pauseIndicator">System Paused</span>
-  <!-- kilocode_change end -->
+  <!-- Society Agent end -->
   <div class="status">
     <span class="dot" id="statusDot"></span>
     <span id="statusText">Connecting...</span>
   </div>
 </header>
 
-<!-- kilocode_change start - Pause banner -->
+<!-- Society Agent start - Pause banner -->
 <div class="pause-banner" id="pauseBanner">
   ⏸️ <strong>System Paused</strong> - All agent activity is suspended.
   <a href="/">Go to Dashboard to Resume</a>
 </div>
-<!-- kilocode_change end -->
+<!-- Society Agent end -->
 
 <div class="main">
   <!-- Sidebar: agent's file explorer -->
@@ -306,14 +306,14 @@
     <div class="stat-row"><span class="label">Folder</span><span id="folderName">-</span></div>
     <div class="stat-row"><span class="label">Files</span><span id="fileCount">0</span></div>
     <div class="stat-row"><span class="label">🔀 Git</span><span id="gitStatus" style="cursor:pointer" onclick="refreshGitStatus()" title="Click to refresh">-</span></div>
-    <!-- kilocode_change start - usage tracking for this agent -->
+    <!-- Society Agent start - usage tracking for this agent -->
     <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
       <div class="stat-row"><span class="label">💰 Tokens</span><span id="agentTokens" style="cursor:pointer" onclick="showUsageDetails()" title="Click for details">0</span></div>
       <div class="stat-row"><span class="label">💵 Cost</span><span id="agentCost" style="color:var(--green)">$0.00</span></div>
       <div class="stat-row"><span class="label">📊 Calls</span><span id="agentCalls">0</span></div>
     </div>
-    <!-- kilocode_change end -->
-    <!-- kilocode_change start - context window stats -->
+    <!-- Society Agent end -->
+    <!-- Society Agent start - context window stats -->
     <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
       <div class="stat-row"><span class="label">📐 Context</span><span id="contextPercent" style="cursor:pointer" onclick="refreshContextStats()" title="Click to refresh">0%</span></div>
       <div class="stat-row"><span class="label">📝 Messages</span><span id="contextMessages">0</span></div>
@@ -327,7 +327,7 @@
       <button onclick="showHistoryBackups()" style="width:100%;margin-top:6px;padding:4px 8px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer" title="View conversation backups from before each summarization">📜 View History Backups</button>
       <button onclick="openSummaryExaminer()" style="width:100%;margin-top:4px;padding:4px 8px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer" title="Ask questions about the summary to verify quality">🔍 Examine Summary</button>
     </div>
-    <!-- kilocode_change end -->
+    <!-- Society Agent end -->
     <div id="fileTree" class="file-tree">
       <div style="padding:16px;color:var(--muted);font-size:12px">No files yet</div>
     </div>
@@ -344,7 +344,7 @@
 
     <!-- Chat pane -->
     <div class="tab-content active" id="paneChat">
-      <!-- kilocode_change start - expandable summary banner -->
+      <!-- Society Agent start - expandable summary banner -->
       <div id="summaryBanner" style="display:none;padding:8px 20px;background:rgba(210,153,34,0.08);border-bottom:1px solid #d29922;font-size:12px;color:var(--muted)">
         <div style="display:flex;align-items:center;gap:8px">
           <strong style="color:#d29922">📝 Context Summarized</strong>
@@ -356,7 +356,7 @@
           <span id="summaryText"></span>
         </div>
       </div>
-      <!-- kilocode_change end -->
+      <!-- Society Agent end -->
       <div class="messages" id="messages">
         <div class="welcome" id="welcome">
           <h2 id="welcomeTitle">Agent</h2>
@@ -364,12 +364,12 @@
         </div>
       </div>
       <div class="input-area">
-        <!-- kilocode_change start - prominent status banner -->
+        <!-- Society Agent start - prominent status banner -->
         <div id="statusBanner" style="display:none;padding:10px 16px;margin-bottom:10px;border-radius:8px;border:2px solid var(--border);font-size:14px;font-weight:600;text-align:center">
           <span class="status-icon" id="statusIcon">⏳</span>
           <span id="statusText2">Working...</span>
         </div>
-        <!-- kilocode_change end -->
+        <!-- Society Agent end -->
         <div id="attachChips" class="attach-chips" style="display:none"></div>
         <div class="input-row">
           <button class="attach-btn" onclick="document.getElementById('chatFileInput').click()" title="Attach files">&#128206;</button>
@@ -377,9 +377,9 @@
             accept="image/*,.txt,.md,.json,.js,.ts,.py,.html,.css,.csv,.xml,.yaml,.yml,.log,.sh,.sql">
           <textarea id="input" placeholder="Type a message..." rows="1" autofocus></textarea>
           <button class="btn-send" id="sendBtn" onclick="sendMessage()">Send</button>
-          <!-- kilocode_change start - Stop button -->
+          <!-- Society Agent start - Stop button -->
           <button class="btn-stop" id="stopBtn" onclick="stopAgent()">Stop</button>
-          <!-- kilocode_change end -->
+          <!-- Society Agent end -->
         </div>
       </div>
       <div class="log-panel" id="logPanel"></div>
@@ -467,7 +467,7 @@ async function loadAgent() {
     }
     document.title = `${agentProfile.name}${agentProfile.projectName ? ' — ' + agentProfile.projectName : ''} — Society Agent`;
 
-    // Header - kilocode_change: add null checks
+    // Header - Society Agent: add null checks
     const avatar = document.getElementById('agentAvatar');
     const title = document.getElementById('agentTitle');
     const role = document.getElementById('agentRole');
@@ -478,7 +478,7 @@ async function loadAgent() {
     const folderName = document.getElementById('folderName');
     const termCwd = document.getElementById('termCwd');
 
-    if (avatar) avatar.innerHTML = !agentProfile.ephemeral ? '&#128081;' : '&#129302;'; // kilocode_change - Use !ephemeral
+    if (avatar) avatar.innerHTML = !agentProfile.ephemeral ? '&#128081;' : '&#129302;'; // Society Agent - Use !ephemeral
     if (title) title.textContent = agentProfile.name;
     if (role) role.textContent = agentProfile.role;
     if (caps) caps.innerHTML = (agentProfile.capabilities || []).map(c =>
@@ -514,13 +514,13 @@ socket.on('connect', () => {
   addLog('info', 'Connected');
   loadAgent();
   loadChatHistory();
-  refreshContextStats(); // kilocode_change - load context stats on connect
-  loadBackupsSetting(); // kilocode_change - load backup toggle state
+  refreshContextStats(); // Society Agent - load context stats on connect
+  loadBackupsSetting(); // Society Agent - load backup toggle state
 });
 
 socket.on('disconnect', () => { setStatus(false); addLog('warn', 'Disconnected'); });
 
-// kilocode_change start - listen for agent reset (from project page or other tabs)
+// Society Agent start - listen for agent reset (from project page or other tabs)
 socket.on('agent-reset', (data) => {
   if (data.agentId === AGENT_ID) {
     addLog('info', 'Agent memory was cleared');
@@ -530,7 +530,7 @@ socket.on('agent-reset', (data) => {
     messageCount = 0;
   }
 });
-// kilocode_change end
+// Society Agent end
 
 let streamDidFire = false;
 socket.on('agent-message', (data) => {
@@ -539,7 +539,7 @@ socket.on('agent-message', (data) => {
 
   if (data.isStreaming) {
     streamDidFire = true;
-    // kilocode_change - Show working indicator
+    // Society Agent - Show working indicator
     showWorkingIndicator(true);
     if (!currentStreamEl) {
       removeTyping();
@@ -557,21 +557,21 @@ socket.on('agent-message', (data) => {
     streamText = '';
     isStreaming = false;
     document.getElementById('sendBtn').disabled = false;
-    document.getElementById('stopBtn').style.display = 'none'; // kilocode_change - hide stop button
+    document.getElementById('stopBtn').style.display = 'none'; // Society Agent - hide stop button
     removeTyping();
-    // kilocode_change - Show done indicator and update usage
+    // Society Agent - Show done indicator and update usage
     showWorkingIndicator(false, true);
     fetchAgentUsage();
-    refreshContextStats(); // kilocode_change - update context stats
+    refreshContextStats(); // Society Agent - update context stats
     
-    // kilocode_change start - Add clear completion divider in chat
+    // Society Agent start - Add clear completion divider in chat
     const divider = document.createElement('div');
     divider.className = 'completion-divider';
     divider.innerHTML = '<span>✅ Task completed</span>';
     divider.style.cssText = 'text-align:center;margin:16px 0;color:var(--green);font-size:12px;opacity:0.8;border-top:1px dashed var(--border);padding-top:12px;';
     document.getElementById('chatMessages').appendChild(divider);
     scrollToBottom();
-    // kilocode_change end
+    // Society Agent end
   }
 });
 
@@ -583,7 +583,7 @@ socket.on('file-created', (data) => {
   }
 });
 
-// kilocode_change start - Show tool executions in chat so user sees what agent is doing
+// Society Agent start - Show tool executions in chat so user sees what agent is doing
 socket.on('tool-execution', (data) => {
   // Only show for THIS agent
   if (data.agentId !== AGENT_ID) {
@@ -605,21 +605,21 @@ socket.on('tool-execution', (data) => {
     }
   }
 });
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - system-event for filesCreated from chat
+// Society Agent start - system-event for filesCreated from chat
 socket.on('system-event', (data) => {
   if (data.type === 'files-created' && data.agentId === AGENT_ID) {
     addMessage('system', `&#128230; ${data.message}`);
     refreshFiles();
   }
 });
-// kilocode_change end
+// Society Agent end
 
 socket.on('file-deleted', () => refreshFiles());
 socket.on('file-moved', () => refreshFiles());
 
-// kilocode_change start - summarization indicator
+// Society Agent start - summarization indicator
 let lastSummarizationData = null;
 
 socket.on('summarization-start', (data) => {
@@ -678,7 +678,7 @@ function toggleSummaryDetails() {
   }
 }
 
-// kilocode_change start - context stats and history backups
+// Society Agent start - context stats and history backups
 function refreshContextStats() {
   fetch(`/api/agent/${AGENT_ID}/context-stats`)
     .then(r => r.json())
@@ -711,7 +711,7 @@ function updateContextStats(data) {
   if (barEl) barEl.style.width = `${Math.min(100, data.contextPercent)}%`;
 }
 
-// kilocode_change start - backup toggle functions
+// Society Agent start - backup toggle functions
 function loadBackupsSetting() {
   fetch(`/api/agent/${AGENT_ID}/backups-enabled`)
     .then(r => r.json())
@@ -746,7 +746,7 @@ function toggleBackups(enabled) {
       if (checkbox) checkbox.checked = !enabled;
     });
 }
-// kilocode_change end
+// Society Agent end
 
 function showHistoryBackups() {
   fetch(`/api/agent/${AGENT_ID}/history-backups`)
@@ -799,7 +799,7 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// kilocode_change start - Summary Examiner
+// Society Agent start - Summary Examiner
 function openSummaryExaminer() {
   // First check examination context
   fetch(`/api/agent/${AGENT_ID}/examination-context`)
@@ -1019,13 +1019,13 @@ async function askQuestion() {
     explainEl.textContent = 'Error: ' + e.message;
   }
 }
-// kilocode_change end
+// Society Agent end
 
 // Refresh context stats periodically and after messages
 setInterval(refreshContextStats, 30000);
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - usage tracking for this agent
+// Society Agent start - usage tracking for this agent
 socket.on('usage', (data) => {
   if (data.agentId === AGENT_ID) {
     fetchAgentUsage();
@@ -1095,9 +1095,9 @@ function showUsageDetails() {
   }).catch(e => alert('Failed to load usage: ' + e.message));
 }
 
-// kilocode_change start - working/done indicator (PROMINENT)
+// Society Agent start - working/done indicator (PROMINENT)
 let doneTimeout = null;
-let isSummarizing = false; // kilocode_change - track summarization state
+let isSummarizing = false; // Society Agent - track summarization state
 
 function showSummarizingIndicator(active, messageCount = 0, tokenCount = 0) {
   isSummarizing = active;
@@ -1195,17 +1195,17 @@ function showWorkingIndicator(working, done = false) {
     if (banner) banner.style.display = 'none';
   }
 }
-// kilocode_change end
+// Society Agent end
 
 // Fetch usage on page load
 setTimeout(fetchAgentUsage, 500);
-// kilocode_change end
+// Society Agent end
 
 // ============================================================================
 // Chat
 // ============================================================================
 
-// kilocode_change start - load history on page open
+// Society Agent start - load history on page open
 async function loadChatHistory() {
   try {
     const res = await fetch(`${API}/api/agent/${AGENT_ID}/history`);
@@ -1258,17 +1258,17 @@ async function clearChat() {
     addLog('error', `Clear failed: ${e.message}`);
   }
 }
-// kilocode_change end
+// Society Agent end
 
 async function sendMessage() {
   const input = document.getElementById('input');
   const text = input.value.trim();
   if ((!text && chatAttachments.length === 0) || isStreaming) return;
 
-  // kilocode_change start - Reset stream state for new message (fixes continue after network error)
+  // Society Agent start - Reset stream state for new message (fixes continue after network error)
   currentStreamEl = null;
   streamText = '';
-  // kilocode_change end
+  // Society Agent end
 
   const welcome = document.getElementById('welcome');
   if (welcome) welcome.style.display = 'none';
@@ -1304,9 +1304,9 @@ async function sendMessage() {
   isStreaming = true;
   streamDidFire = false;
   document.getElementById('sendBtn').disabled = true;
-  document.getElementById('stopBtn').style.display = 'inline-block'; // kilocode_change - show stop button
+  document.getElementById('stopBtn').style.display = 'inline-block'; // Society Agent - show stop button
   showTyping();
-  showWorkingIndicator(true); // kilocode_change - show working indicator
+  showWorkingIndicator(true); // Society Agent - show working indicator
 
   try {
     const res = await fetch(`${API}/api/agent/${AGENT_ID}/chat`, {
@@ -1324,8 +1324,8 @@ async function sendMessage() {
       addMessage('system', `Error: ${data.error || 'Unknown error'}`);
       isStreaming = false;
       document.getElementById('sendBtn').disabled = false;
-      document.getElementById('stopBtn').style.display = 'none'; // kilocode_change - hide stop button
-      showWorkingIndicator(false); // kilocode_change - hide on error
+      document.getElementById('stopBtn').style.display = 'none'; // Society Agent - hide stop button
+      showWorkingIndicator(false); // Society Agent - hide on error
       return;
     }
 
@@ -1335,22 +1335,22 @@ async function sendMessage() {
       el.querySelector('.content').innerHTML = formatMarkdown(data.response);
       isStreaming = false;
       document.getElementById('sendBtn').disabled = false;
-      document.getElementById('stopBtn').style.display = 'none'; // kilocode_change - hide stop button
-      showWorkingIndicator(false, true); // kilocode_change - show done
-      fetchAgentUsage(); // kilocode_change - update usage
+      document.getElementById('stopBtn').style.display = 'none'; // Society Agent - hide stop button
+      showWorkingIndicator(false, true); // Society Agent - show done
+      fetchAgentUsage(); // Society Agent - update usage
     }
 
     messageCount++;
     addLog('info', `Response (history: ${data.historyLength} messages)`);
 
-    // kilocode_change start - show filesCreated notification in chat
+    // Society Agent start - show filesCreated notification in chat
     if (data.filesCreated && data.filesCreated > 0) {
       addMessage('system', `&#128230; Created ${data.filesCreated} file(s) in project folder`);
       refreshFiles();
     }
-    // kilocode_change end
+    // Society Agent end
 
-    // kilocode_change start - show delegation results
+    // Society Agent start - show delegation results
     if (data.delegations && data.delegations.length > 0) {
       const delegationInfo = data.delegations.map(d =>
         `&#9889; <strong>${d.agentName}</strong>: ${d.filesCreated} file(s) created (${Math.round(d.responseLength / 1000)}k chars)`
@@ -1359,7 +1359,7 @@ async function sendMessage() {
       el.querySelector('.content').innerHTML = `&#128101; <strong>Delegation complete</strong> (${data.delegations.length} agent(s)):<br>${delegationInfo}`;
       refreshFiles();
     }
-    // kilocode_change end
+    // Society Agent end
 
     // Refresh agent stats
     loadAgent();
@@ -1367,17 +1367,17 @@ async function sendMessage() {
     removeTyping();
     addMessage('system', `Network error: ${e.message}`);
     isStreaming = false;
-    // kilocode_change start - Reset stream state on error so next message starts fresh
+    // Society Agent start - Reset stream state on error so next message starts fresh
     currentStreamEl = null;
     streamText = '';
-    // kilocode_change end
+    // Society Agent end
     document.getElementById('sendBtn').disabled = false;
-    document.getElementById('stopBtn').style.display = 'none'; // kilocode_change - hide stop button
-    showWorkingIndicator(false); // kilocode_change - hide on error
+    document.getElementById('stopBtn').style.display = 'none'; // Society Agent - hide stop button
+    showWorkingIndicator(false); // Society Agent - hide on error
   }
 }
 
-// kilocode_change start - Stop agent function
+// Society Agent start - Stop agent function
 function stopAgent() {
   if (!isStreaming) return;
   
@@ -1409,7 +1409,7 @@ socket.on('agent-stopped', (data) => {
     showWorkingIndicator(false);
   }
 });
-// kilocode_change end
+// Society Agent end
 
 // ============================================================================
 // Agent-scoped file operations
@@ -1417,7 +1417,7 @@ socket.on('agent-stopped', (data) => {
 let fileData = [];
 let expandedDirs = new Set(['']);
 let selectedPath = null;
-let treeEventsDelegated = false; // kilocode_change - track if delegated events attached
+let treeEventsDelegated = false; // Society Agent - track if delegated events attached
 
 function agentFileApi(endpoint, opts) {
   // All file operations scoped to /api/agent/:id/workspace/...
@@ -1443,7 +1443,7 @@ async function refreshFiles() {
   }
 }
 
-// kilocode_change start - Git status display
+// Society Agent start - Git status display
 async function refreshGitStatus() {
   const el = document.getElementById('gitStatus');
   if (!el) return;
@@ -1473,9 +1473,9 @@ async function refreshGitStatus() {
     el.style.color = 'var(--muted)';
   }
 }
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - Render tree from cached data (no API call, instant)
+// Society Agent start - Render tree from cached data (no API call, instant)
 function renderTreeFromCache() {
   const tree = document.getElementById('fileTree');
   if (!tree || fileData.length === 0) return;
@@ -1484,9 +1484,9 @@ function renderTreeFromCache() {
   tree.innerHTML = renderTree(root);
   attachTreeHandlers();
 }
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - Attach delegated event handlers (only once)
+// Society Agent start - Attach delegated event handlers (only once)
 function attachDelegatedTreeEvents() {
   if (treeEventsDelegated) return;
   treeEventsDelegated = true;
@@ -1526,7 +1526,7 @@ function attachDelegatedTreeEvents() {
     showContextMenu(e.clientX, e.clientY, row.dataset.path, row.dataset.dir === 'true');
   });
 }
-// kilocode_change end
+// Society Agent end
 
 function buildTree(files) {
   const root = { children: {}, path: '', isDir: true };
@@ -1626,7 +1626,7 @@ function attachTreeHandlers() {
   });
 }
 
-// kilocode_change start - Enhanced file viewer with PDF and Markdown support
+// Society Agent start - Enhanced file viewer with PDF and Markdown support
 let currentFileContent = '';
 let currentFilePath = '';
 
@@ -1866,7 +1866,7 @@ function renderMarkdown(text) {
   html = html.replace(/<p>(<hr>)/g, '$1').replace(/(<hr>)<\/p>/g, '$1');
   return html;
 }
-// kilocode_change end
+// Society Agent end
 
 function closeFileViewer() { const v = document.getElementById('fileViewer'); if (v) v.style.display = 'none'; }
 
@@ -1890,7 +1890,7 @@ async function deleteFile(filePath, isDir) {
     const data = await res.json();
     if (data.success) { 
       addLog('info', `Deleted: ${filePath}`); 
-      selectedPath = ''; // kilocode_change - clear selected path after delete
+      selectedPath = ''; // Society Agent - clear selected path after delete
       refreshFiles(); 
     }
     else addLog('error', data.error);
@@ -1993,7 +1993,7 @@ function copyToClipboard(text) {
   });
 }
 
-// kilocode_change start - fix context menu issues after delete
+// Society Agent start - fix context menu issues after delete
 let ctxMenuDocListener = null;
 
 function showContextMenu(x, y, filePath, isDir) {
@@ -2049,7 +2049,7 @@ function hideContextMenu() {
     ctxMenuDocListener = null;
   }
 }
-// kilocode_change end
+// Society Agent end
 
 // Upload area drag-drop
 const uploadArea = document.getElementById('uploadArea');
@@ -2117,7 +2117,7 @@ document.querySelector('.input-area').addEventListener('drop', e => {
   if (e.dataTransfer.files.length) handleChatAttach({ target: { files: e.dataTransfer.files, value: '' } });
 });
 
-// kilocode_change start - Paste images from clipboard
+// Society Agent start - Paste images from clipboard
 document.getElementById('input').addEventListener('paste', async (e) => {
   const items = e.clipboardData?.items;
   if (!items) return;
@@ -2150,7 +2150,7 @@ document.getElementById('input').addEventListener('paste', async (e) => {
     }
   }
 });
-// kilocode_change end
+// Society Agent end
 
 // ============================================================================
 // Tabs
@@ -2197,7 +2197,7 @@ function initTerminal() {
 
 function connectTerminal() {
   const shell = document.getElementById('termShell').value;
-  // kilocode_change - pass projectId so server can resolve correct home directory
+  // Society Agent - pass projectId so server can resolve correct home directory
   socket.emit('terminal-start', { shell, cols: term?.cols || 80, rows: term?.rows || 24, agentId: AGENT_ID, projectId: PROJECT_ID });
   if (term) { term.clear(); term.writeln('\x1b[33mConnecting terminal for ' + (agentProfile?.name || AGENT_ID) + '...\x1b[0m'); }
 }
@@ -2283,7 +2283,7 @@ document.getElementById('input').addEventListener('input', function() {
   try { const s = localStorage.getItem('agent-sidebar-width'); if (s) sidebar.style.width = s; } catch {}
 })();
 
-// kilocode_change start - System pause state management
+// Society Agent start - System pause state management
 let isSystemPaused = false;
 
 function updatePauseUI(paused) {
@@ -2337,7 +2337,7 @@ socket.on('system-event', (data) => {
 });
 
 checkSystemPauseState();
-// kilocode_change end
+// Society Agent end
 </script>
 </body>
 </html>

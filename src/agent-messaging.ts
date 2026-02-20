@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Agent-to-Agent Messaging System
  *
@@ -8,7 +8,7 @@
 
 import { AgentIdentity } from "./types"
 import { SocietyAgentStorage } from "./storage"
-import { getLog } from "./logger" // kilocode_change
+import { getLog } from "./logger" // Society Agent
 
 /**
  * Generate a unique message ID

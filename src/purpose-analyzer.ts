@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * PurposeAnalyzer - Analyzes purpose text and suggests team composition
  *
@@ -6,7 +6,7 @@
  * the purpose description, context, and constraints.
  */
 
-// kilocode_change start
+// Society Agent start
 export interface PurposeAnalysis {
 	purposeType: "development" | "debugging" | "refactoring" | "testing" | "deployment" | "mixed"
 	complexity: "simple" | "moderate" | "complex"
@@ -28,7 +28,7 @@ export interface PurposeContext {
 	constraints?: string[]
 	successCriteria?: string[]
 }
-// kilocode_change end
+// Society Agent end
 
 /**
  * Analyzes purpose and provides team recommendations
@@ -38,7 +38,7 @@ export class PurposeAnalyzer {
 	 * Analyze purpose and suggest team composition
 	 */
 	static analyze(purpose: PurposeContext): PurposeAnalysis {
-		// kilocode_change start
+		// Society Agent start
 		const text = `${purpose.description} ${purpose.context || ""}`.toLowerCase()
 
 		// Detect purpose type
@@ -67,14 +67,14 @@ export class PurposeAnalyzer {
 			risks,
 			dependencies,
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Detect purpose type from description
 	 */
 	private static detectPurposeType(text: string): PurposeAnalysis["purposeType"] {
-		// kilocode_change start
+		// Society Agent start
 		const patterns = {
 			development: /\b(build|create|add|implement|develop|feature)\b/,
 			debugging: /\b(fix|debug|resolve|error|bug|issue)\b/,
@@ -93,14 +93,14 @@ export class PurposeAnalyzer {
 		if (matches.length === 0) return "mixed"
 		if (matches.length > 2) return "mixed"
 		return matches[0] as PurposeAnalysis["purposeType"]
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Assess complexity based on various factors
 	 */
 	private static assessComplexity(text: string, purpose: PurposeContext): PurposeAnalysis["complexity"] {
-		// kilocode_change start
+		// Society Agent start
 		let complexityScore = 0
 
 		// Check for complexity indicators
@@ -125,7 +125,7 @@ export class PurposeAnalyzer {
 		if (complexityScore <= 1) return "simple"
 		if (complexityScore <= 3) return "moderate"
 		return "complex"
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
@@ -135,7 +135,7 @@ export class PurposeAnalyzer {
 		complexity: PurposeAnalysis["complexity"],
 		purpose: PurposeContext,
 	): PurposeAnalysis["estimatedDuration"] {
-		// kilocode_change start
+		// Society Agent start
 		// Check for explicit time constraints
 		const timeConstraint = purpose.constraints?.find((c) => /\b(minute|hour|quick|fast)\b/i.test(c))
 
@@ -147,7 +147,7 @@ export class PurposeAnalyzer {
 		if (complexity === "simple") return "short"
 		if (complexity === "moderate") return "medium"
 		return "long"
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
@@ -158,7 +158,7 @@ export class PurposeAnalyzer {
 		complexity: PurposeAnalysis["complexity"],
 		text: string,
 	): PurposeAnalysis["suggestedWorkers"] {
-		// kilocode_change start
+		// Society Agent start
 		const workers: PurposeAnalysis["suggestedWorkers"] = []
 
 		// Analyze what domains are mentioned
@@ -231,14 +231,14 @@ export class PurposeAnalyzer {
 		}
 
 		return workers
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Identify potential risks
 	 */
 	private static identifyRisks(text: string, purpose: PurposeContext): string[] {
-		// kilocode_change start
+		// Society Agent start
 		const risks: string[] = []
 
 		if (/\b(database|migration|schema)\b/.test(text)) {
@@ -258,14 +258,14 @@ export class PurposeAnalyzer {
 		}
 
 		return risks
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Identify dependencies or prerequisites
 	 */
 	private static identifyDependencies(text: string, purpose: PurposeContext): string[] {
-		// kilocode_change start
+		// Society Agent start
 		const dependencies: string[] = []
 
 		if (/\b(api|integration|external)\b/.test(text)) {
@@ -281,6 +281,6 @@ export class PurposeAnalyzer {
 		}
 
 		return dependencies
-		// kilocode_change end
+		// Society Agent end
 	}
 }

@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 import * as child_process from "child_process"
 import * as path from "path"
 import * as fs from "fs/promises"
@@ -182,7 +182,7 @@ export class AgentLauncher {
 				getLog().warn(`No identity file for ${agent.agentId} — launching without identity`)
 			}
 
-			// kilocode_change start - Launch with extension dev mode if in development
+			// Society Agent start - Launch with extension dev mode if in development
 			const isDevelopment = process.env.VSCODE_DEBUG_MODE === "true" || process.env.NODE_ENV === "development"
 			let command: string
 
@@ -194,7 +194,7 @@ export class AgentLauncher {
 				// Production mode - use regular code command
 				command = `code --new-window "${workspacePath}"`
 			}
-			// kilocode_change end
+			// Society Agent end
 
 			await exec(command, {
 				cwd: projectRoot,
@@ -333,7 +333,7 @@ export class AgentLauncher {
 
 		if (exists) return // Don't overwrite existing README
 
-		const capabilities = (agent as any).capabilities || [] // kilocode_change
+		const capabilities = (agent as any).capabilities || [] // Society Agent
 	const content = `# ${agent.agentId} Workspace
 
 **Role**: ${agent.role}  
@@ -349,7 +349,7 @@ ${this.getRoleDescription(agent.role)}
 
 ### Workflow
 
-1. Wait for task messages (they appear in KiloCode chat)
+1. Wait for task messages (they appear in Society Agent chat)
 2. Work on the task using your capabilities
 3. Respond with results when complete
 4. Messages go back to the sender automatically
@@ -472,10 +472,10 @@ This workspace starts empty. You'll create files and folders as needed based on 
 		// Phase 2: Launch VS Code windows
 		for (let i = 0; i < agentsToLaunch.length; i++) {
 			const agent = agentsToLaunch[i]
-		if (!agent) continue // kilocode_change - type safety
+		if (!agent) continue // Society Agent - type safety
 
 		onProgress({
-				type: "progress", // kilocode_change - ProgressUpdate requires type field
+				type: "progress", // Society Agent - ProgressUpdate requires type field
 				total: agentsToLaunch.length,
 				agentId: agent.agentId,
 				message: `Launching ${agent.agentId}...`,

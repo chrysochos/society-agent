@@ -1,6 +1,6 @@
 /**
  * Simplified conversation condensation for Society Agent standalone
- * Based on KiloCode's core/condense/index.ts but minimal implementation
+ * Based on Society Agent's core/condense/index.ts but minimal implementation
  */
 
 import Anthropic from "@anthropic-ai/sdk"

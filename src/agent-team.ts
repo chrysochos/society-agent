@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * AgentTeam - Manages lifecycle of agent teams for a purpose
  *
@@ -15,7 +15,7 @@ import { AgentIdentityManager } from "./agent-identity"
 import { AgentLauncher, LaunchConfig } from "./agent-launcher"
 import { getLog } from "./logger"
 
-// kilocode_change start
+// Society Agent start
 export interface TeamMember {
 	agent: ConversationAgent
 	identity: AgentIdentity
@@ -42,13 +42,13 @@ export interface TeamState {
 	createdAt: number
 	status: "forming" | "executing" | "completed" | "failed"
 }
-// kilocode_change end
+// Society Agent end
 
 /**
  * Manages a team of agents working on a purpose
  */
 export class AgentTeam {
-	// kilocode_change start
+	// Society Agent start
 	private state: TeamState
 	private config: AgentTeamConfig
 	private apiHandler: ApiHandler
@@ -58,10 +58,10 @@ export class AgentTeam {
 	private onMessage?: (agentId: string, content: string) => void
 	private onStatusChange?: (agentId: string, status: string) => void
 	private onProgressUpdate?: (progress: number) => void
-	// kilocode_change end
+	// Society Agent end
 
 	constructor(config: AgentTeamConfig) {
-		// kilocode_change start
+		// Society Agent start
 		this.config = config
 		this.teamId = `team-${Date.now()}`
 
@@ -104,26 +104,26 @@ export class AgentTeam {
 		this.onMessage = config.onMessage
 		this.onStatusChange = config.onStatusChange
 		this.onProgressUpdate = config.onProgressUpdate
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Get team state
 	 */
 	getState(): TeamState {
-		// kilocode_change start
+		// Society Agent start
 		return {
 			...this.state,
 			workers: new Map(this.state.workers),
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Get all team members (supervisor + workers)
 	 */
 	getAllMembers(): TeamMember[] {
-		// kilocode_change start
+		// Society Agent start
 		const members: TeamMember[] = [
 			{
 				agent: this.state.supervisor,
@@ -141,14 +141,14 @@ export class AgentTeam {
 		}
 
 		return members
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Initialize team - analyze purpose and create workers
 	 */
 	async initialize(): Promise<void> {
-		// kilocode_change start
+		// Society Agent start
 		this.state.status = "forming"
 
 		// Generate Ed25519 identity for supervisor if identity manager available
@@ -181,14 +181,14 @@ export class AgentTeam {
 
 		// Start the actual work!
 		await this.state.supervisor.startExecution()
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Launch worker agents as separate VS Code windows (multi-window mode)
 	 */
 	private async launchWorkerWindows(): Promise<void> {
-		// kilocode_change start
+		// Society Agent start
 		if (!this.launcher || !this.config.workspacePath) return
 
 		const projectRoot = this.config.workspacePath
@@ -215,7 +215,7 @@ export class AgentTeam {
 			// Delay between launches
 			await new Promise((resolve) => setTimeout(resolve, 2000))
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
@@ -224,7 +224,7 @@ export class AgentTeam {
 	 * In in-process mode: creates ConversationAgent objects in same process.
 	 */
 	private createWorkers(teamSpec: WorkerSpec[]): void {
-		// kilocode_change start
+		// Society Agent start
 		for (const spec of teamSpec) {
 			for (let i = 0; i < spec.count; i++) {
 				const workerId = `${spec.workerType}-${Date.now()}-${i}`
@@ -267,14 +267,14 @@ export class AgentTeam {
 				this.state.supervisor.registerWorker(workerId)
 			}
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Get capabilities for worker type
 	 */
 	private getWorkerCapabilities(workerType: WorkerSpec["workerType"]): string[] {
-		// kilocode_change start
+		// Society Agent start
 		const capabilityMap: Record<string, string[]> = {
 			backend: ["code", "api", "database", "test", "debug"],
 			frontend: ["code", "ui", "style", "state", "test"],
@@ -285,7 +285,7 @@ export class AgentTeam {
 		}
 
 		return capabilityMap[workerType] || capabilityMap.custom
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
@@ -297,7 +297,7 @@ export class AgentTeam {
 		context: string
 		outputDir?: string
 	}): Promise<void> {
-		// kilocode_change start
+		// Society Agent start
 		const worker = this.state.workers.get(assignment.workerId)
 		if (!worker) {
 			throw new Error(`Worker ${assignment.workerId} not found`)
@@ -305,36 +305,36 @@ export class AgentTeam {
 
 		await worker.assignTask(`${assignment.task}\n\nContext: ${assignment.context}`, assignment.outputDir)
 		this.state.supervisor.updateTaskStatus(assignment.workerId, "in-progress")
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Handle escalation from supervisor
 	 */
 	private handleEscalation(escalation: { id: string; priority: string; question: string; context: string }): void {
-		// kilocode_change start
+		// Society Agent start
 		// In real implementation, this would show in web dashboard
 		// For now, log to console
 		getLog().info(`ESCALATION [${escalation.priority}]:`, escalation.question)
 		getLog().info(`Context: ${escalation.context}`)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Update overall progress
 	 */
 	private updateProgress(progress: number): void {
-		// kilocode_change start
+		// Society Agent start
 		getLog().info(`Progress update: ${progress}%`)
 		this.onProgressUpdate?.(progress)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Send message to specific agent
 	 */
 	async sendMessageToAgent(agentId: string, message: string): Promise<string> {
-		// kilocode_change start
+		// Society Agent start
 		if (agentId === this.state.supervisor.getIdentity().id) {
 			return await this.state.supervisor.sendMessage(message)
 		}
@@ -345,14 +345,14 @@ export class AgentTeam {
 		}
 
 		return await worker.sendMessage(message)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Broadcast message to all workers
 	 */
 	async broadcastToWorkers(message: string): Promise<void> {
-		// kilocode_change start
+		// Society Agent start
 		const promises: Promise<string>[] = []
 
 		for (const [id, worker] of this.state.workers) {
@@ -360,38 +360,38 @@ export class AgentTeam {
 		}
 
 		await Promise.all(promises)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Pause all agents
 	 */
 	pauseAll(): void {
-		// kilocode_change start
+		// Society Agent start
 		this.state.supervisor.pause()
 		for (const worker of this.state.workers.values()) {
 			worker.pause()
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Resume all agents
 	 */
 	resumeAll(): void {
-		// kilocode_change start
+		// Society Agent start
 		this.state.supervisor.resume()
 		for (const worker of this.state.workers.values()) {
 			worker.resume()
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Complete team execution
 	 */
 	async complete(): Promise<string> {
-		// kilocode_change start
+		// Society Agent start
 		const summary = await this.state.supervisor.completePurpose()
 		this.state.status = "completed"
 
@@ -401,16 +401,16 @@ export class AgentTeam {
 		}
 
 		return summary
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Dispose team and cleanup
 	 */
 	dispose(): void {
-		// kilocode_change start
+		// Society Agent start
 		this.state.workers.clear()
 		// In real implementation, cleanup resources, close connections, etc.
-		// kilocode_change end
+		// Society Agent end
 	}
 }

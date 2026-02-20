@@ -1,11 +1,11 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * ConversationAgent - Base agent implementation as LLM conversation thread
  *
  * Each agent maintains its own conversation history with the LLM, enabling
  * autonomous decision-making and task execution while preserving context.
  *
- * Inherits Kilo's built-in conversation summarization for automatic memory management.
+ * Inherits Society Agent's built-in conversation summarization for automatic memory management.
  */
 
 import Anthropic from "@anthropic-ai/sdk"
@@ -13,9 +13,9 @@ import { ApiHandler, ApiStream } from "./api"
 import { ApiMessage, summarizeConversation } from "./api/condense"
 import * as fs from "fs/promises"
 import * as path from "path"
-import { getLog } from "./logger" // kilocode_change
+import { getLog } from "./logger" // Society Agent
 
-// kilocode_change start
+// Society Agent start
 export interface AgentIdentity {
 	id: string
 	createdAt: number
@@ -33,7 +33,7 @@ export interface AgentState {
 	currentTask?: string
 	status: "idle" | "working" | "waiting" | "paused" | "error" | "completed"
 	metadata: Record<string, unknown>
-	systemPrompt?: string // kilocode_change - used by callLLM methods
+	systemPrompt?: string // Society Agent - used by callLLM methods
 }
 
 export interface ConversationAgentConfig {
@@ -43,58 +43,58 @@ export interface ConversationAgentConfig {
 	workspacePath?: string
 	onMessage?: (message: AgentMessage) => void
 	onStatusChange?: (status: AgentState["status"]) => void
-	onFileCreated?: (relativePath: string, fullPath: string, size: number) => void // kilocode_change - file tracking
+	onFileCreated?: (relativePath: string, fullPath: string, size: number) => void // Society Agent - file tracking
 	maxMessages?: number // Max messages before summarization (default: 50) - LEGACY
 	summaryThreshold?: number // When to trigger summary (default: 40) - LEGACY
-	// kilocode_change start - token-based summarization
+	// Society Agent start - token-based summarization
 	contextWindowSize?: number // Total context window size in tokens (default: 200000 for Claude)
 	contextThresholdPercent?: number // Percentage of context window to trigger summarization (default: 70)
-	// kilocode_change end
-	// kilocode_change start - backup and persistence settings
+	// Society Agent end
+	// Society Agent start - backup and persistence settings
 	backupsEnabled?: boolean // Enable/disable pre-summarization backups (default: true)
 	persistHistory?: boolean // Persist history to disk (default: false)
 	historyDir?: string // Directory for persisted history files
 	maxHistoryMB?: number // Max disk space for history in MB (default: 50)
-	// kilocode_change end
-	preserveFirstMessage?: boolean // Keep first message after summarization (default: true) - set false to drop it and save tokens (especially images) // kilocode_change
-	onSummarizationStart?: (metadata: { messageCount: number; tokenCount: number; contextPercent: number }) => void // kilocode_change - summarization event
-	onSummarizationEnd?: (metadata: { summary: string; messageCountBefore: number; messageCountAfter: number; tokensBefore: number; tokensAfter: number; cost: number; error?: string }) => void // kilocode_change - summarization event
+	// Society Agent end
+	preserveFirstMessage?: boolean // Keep first message after summarization (default: true) - set false to drop it and save tokens (especially images) // Society Agent
+	onSummarizationStart?: (metadata: { messageCount: number; tokenCount: number; contextPercent: number }) => void // Society Agent - summarization event
+	onSummarizationEnd?: (metadata: { summary: string; messageCountBefore: number; messageCountAfter: number; tokensBefore: number; tokensAfter: number; cost: number; error?: string }) => void // Society Agent - summarization event
 }
-// kilocode_change end
+// Society Agent end
 
 /**
  * Base agent that uses LLM conversation thread for autonomous operation
  */
 export class ConversationAgent {
-	// kilocode_change start
+	// Society Agent start
 	private state: AgentState
 	private apiHandler: ApiHandler
 	private systemPrompt: string
 	private workspacePath: string
 	private onMessage?: (message: AgentMessage) => void
 	private onStatusChange?: (status: AgentState["status"]) => void
-	private onFileCreated?: (relativePath: string, fullPath: string, size: number) => void // kilocode_change
-	private _pendingContent?: any[] // kilocode_change - structured content blocks for images - file tracking
-	private maxMessages: number // Kilocode: Max messages before summarization
-	private summaryThreshold: number // Kilocode: When to trigger summary
-	private conversationSummary: string = "" // Kilocode: Summarized older context
-	private onSummarizationStart?: (metadata: { messageCount: number; tokenCount: number; contextPercent: number }) => void // kilocode_change
-	private onSummarizationEnd?: (metadata: { summary: string; messageCountBefore: number; messageCountAfter: number; tokensBefore: number; tokensAfter: number; cost: number; error?: string }) => void // kilocode_change
-	// kilocode_change start - token-based summarization
+	private onFileCreated?: (relativePath: string, fullPath: string, size: number) => void // Society Agent
+	private _pendingContent?: any[] // Society Agent - structured content blocks for images - file tracking
+	private maxMessages: number // Society Agent: Max messages before summarization
+	private summaryThreshold: number // Society Agent: When to trigger summary
+	private conversationSummary: string = "" // Society Agent: Summarized older context
+	private onSummarizationStart?: (metadata: { messageCount: number; tokenCount: number; contextPercent: number }) => void // Society Agent
+	private onSummarizationEnd?: (metadata: { summary: string; messageCountBefore: number; messageCountAfter: number; tokensBefore: number; tokensAfter: number; cost: number; error?: string }) => void // Society Agent
+	// Society Agent start - token-based summarization
 	private contextWindowSize: number
 	private contextThresholdPercent: number
 	private historyBackups: Array<{ timestamp: number; messages: AgentMessage[]; tokenCount: number; reason: string }> = []
-	// kilocode_change end
-	// kilocode_change start - backup and persistence settings
+	// Society Agent end
+	// Society Agent start - backup and persistence settings
 	private backupsEnabled: boolean
 	private persistHistory: boolean
 	private historyDir: string
 	private maxHistoryMB: number
-	private preserveFirstMessage: boolean // kilocode_change - option to drop first message after summarization
-	// kilocode_change end
+	private preserveFirstMessage: boolean // Society Agent - option to drop first message after summarization
+	// Society Agent end
 
 	constructor(config: ConversationAgentConfig) {
-		// kilocode_change start
+		// Society Agent start
 		this.workspacePath = config.workspacePath || process.cwd()
 		this.state = {
 			identity: config.identity,
@@ -106,19 +106,19 @@ export class ConversationAgent {
 		this.systemPrompt = config.systemPrompt || this.getDefaultSystemPrompt()
 		this.onMessage = config.onMessage
 		this.onStatusChange = config.onStatusChange
-		this.onFileCreated = config.onFileCreated // kilocode_change - file tracking
-		// Kilocode: Memory management configuration
+		this.onFileCreated = config.onFileCreated // Society Agent - file tracking
+		// Society Agent: Memory management configuration
 		this.maxMessages = config.maxMessages || 50
 		this.summaryThreshold = config.summaryThreshold || 40
 		this.conversationSummary = ""
-		this.onSummarizationStart = config.onSummarizationStart // kilocode_change
-		this.onSummarizationEnd = config.onSummarizationEnd // kilocode_change
-		// kilocode_change start - token-based summarization
+		this.onSummarizationStart = config.onSummarizationStart // Society Agent
+		this.onSummarizationEnd = config.onSummarizationEnd // Society Agent
+		// Society Agent start - token-based summarization
 		this.contextWindowSize = config.contextWindowSize || 200000 // Claude 3.5 Sonnet context window
 		this.contextThresholdPercent = config.contextThresholdPercent || 70 // Summarize at 70% capacity
 		this.historyBackups = []
-		// kilocode_change end
-		// kilocode_change start - backup and persistence settings
+		// Society Agent end
+		// Society Agent start - backup and persistence settings
 		this.backupsEnabled = config.backupsEnabled !== false // default: true
 		this.persistHistory = config.persistHistory || false
 		this.historyDir = config.historyDir || path.join(this.workspacePath, ".society-agent", "history")
@@ -130,46 +130,46 @@ export class ConversationAgent {
 				getLog().warn(`${this.state.identity.id}: Failed to load persisted history: ${err}`)
 			})
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Get agent identity
 	 */
 	getIdentity(): AgentIdentity {
-		// kilocode_change start
+		// Society Agent start
 		return this.state.identity
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Get current agent state
 	 */
 	getState(): AgentState {
-		// kilocode_change start
+		// Society Agent start
 		return { ...this.state }
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Get conversation history
 	 */
 	getHistory(): AgentMessage[] {
-		// kilocode_change start
+		// Society Agent start
 		return [...this.state.conversationHistory]
-		// kilocode_change end
+		// Society Agent end
 	}
 
-	// kilocode_change start - expose system prompt
+	// Society Agent start - expose system prompt
 	/**
 	 * Get the system prompt for this agent
 	 */
 	getSystemPrompt(): string {
 		return this.systemPrompt
 	}
-	// kilocode_change end
+	// Society Agent end
 
-	// kilocode_change start - expose conversation summary and clear history
+	// Society Agent start - expose conversation summary and clear history
 	/**
 	 * Get the auto-summarized conversation context (if any)
 	 */
@@ -185,20 +185,20 @@ export class ConversationAgent {
 	clearHistory(): void {
 		this.state.conversationHistory = []
 		this.conversationSummary = ""
-		this.historyBackups = [] // kilocode_change - also clear backups
+		this.historyBackups = [] // Society Agent - also clear backups
 		this.state.currentTask = undefined
 		this.setStatus("idle")
-		// kilocode_change start - delete persisted files
+		// Society Agent start - delete persisted files
 		if (this.persistHistory) {
 			this.deletePersistedHistory().catch(err => {
 				getLog().warn(`${this.state.identity.id}: Failed to delete persisted history: ${err}`)
 			})
 		}
-		// kilocode_change end
+		// Society Agent end
 		getLog().info(`${this.state.identity.id}: History and backups cleared`)
 	}
 
-	// kilocode_change start - Token estimation and backup access
+	// Society Agent start - Token estimation and backup access
 	/**
 	 * Get all history backups (full conversation before each summarization)
 	 */
@@ -434,7 +434,7 @@ Respond with ONLY the JSON object.`
 		return result.trim()
 	}
 
-	// kilocode_change start - History persistence methods
+	// Society Agent start - History persistence methods
 	/**
 	 * Get the history file path for this agent
 	 */
@@ -580,23 +580,23 @@ Respond with ONLY the JSON object.`
 		}
 		getLog().info(`${this.state.identity.id}: Backups ${enabled ? "enabled" : "disabled"}`)
 	}
-	// kilocode_change end
+	// Society Agent end
 
 	/**
 	 * Update agent status
 	 */
 	private setStatus(status: AgentState["status"]): void {
-		// kilocode_change start
+		// Society Agent start
 		this.state.status = status
 		this.onStatusChange?.(status)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Add message to conversation history
 	 */
 	private async addMessage(role: "user" | "assistant", content: string): Promise<AgentMessage> {
-		// kilocode_change start
+		// Society Agent start
 		const message: AgentMessage = {
 			role,
 			content,
@@ -605,7 +605,7 @@ Respond with ONLY the JSON object.`
 		this.state.conversationHistory.push(message)
 		this.onMessage?.(message)
 
-		// kilocode_change start - Token-based summarization threshold
+		// Society Agent start - Token-based summarization threshold
 		const tokenCount = this.estimateTokenCount()
 		const contextPercent = (tokenCount / this.contextWindowSize) * 100
 		
@@ -617,17 +617,17 @@ Respond with ONLY the JSON object.`
 			getLog().info(`${this.state.identity.id}: Triggering summarization (${tokenCount} tokens, ${contextPercent.toFixed(1)}% of context, ${this.state.conversationHistory.length} messages)`)
 			await this.summarizeOldMessages()
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		return message
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Send message to agent (from human or supervisor)
 	 */
 	async sendMessage(content: string): Promise<string> {
-		// kilocode_change start
+		// Society Agent start
 		await this.addMessage("user", content)
 		this.setStatus("working")
 
@@ -640,7 +640,7 @@ Respond with ONLY the JSON object.`
 			this.setStatus("error")
 			throw error
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
@@ -648,7 +648,7 @@ Respond with ONLY the JSON object.`
 	 * @param content - string or array of content blocks (text, image)
 	 */
 	async *sendMessageStream(content: string | any[]): AsyncGenerator<string, void, unknown> {
-		// kilocode_change start
+		// Society Agent start
 		const displayText = typeof content === "string" ? content : content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n") || "[attachments]"
 		await this.addMessage("user", displayText)
 
@@ -675,14 +675,14 @@ Respond with ONLY the JSON object.`
 			this.setStatus("error")
 			throw error
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Assign task to agent
 	 */
 	async assignTask(task: string, outputDir?: string): Promise<void> {
-		// kilocode_change start
+		// Society Agent start
 		this.state.currentTask = task
 		this.state.status = "working"
 
@@ -696,14 +696,14 @@ Respond with ONLY the JSON object.`
 			getLog().error(`${this.state.identity.id} task execution failed:`, error)
 			this.state.status = "error"
 		})
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Execute the assigned task
 	 */
 	private async executeTask(task: string, supervisorOutputDir?: string): Promise<void> {
-		// kilocode_change start - LLM-driven intent and folder decisions
+		// Society Agent start - LLM-driven intent and folder decisions
 		getLog().info(`${this.state.identity.id} starting work on task...`)
 
 		// Step 1: Ask LLM to classify the task intent
@@ -726,13 +726,13 @@ Respond with ONLY the letter (A, B, or C):`
 			)
 
 			// Step 2: For file creation, ask AI where to put files
-			// kilocode_change - Use dedicated projects/ directory to separate from extension code
+			// Society Agent - Use dedicated projects/ directory to separate from extension code
 			const BASE_OUTPUT_DIR = "projects"
 			let outputDir = supervisorOutputDir || `${BASE_OUTPUT_DIR}/temp`
 
 			// Only run folder decision if supervisor didn't already decide
 			if (!supervisorOutputDir && (intent === "B" || intent === "C")) {
-				// kilocode_change - Check if user explicitly specified a folder in the task
+				// Society Agent - Check if user explicitly specified a folder in the task
 				const explicitPathMatch = task.match(
 					/(?:in|to|at|into|under)\s+(?:folder\s+)?["`']?([a-zA-Z0-9_\-\/]+)["`']?/i,
 				)
@@ -884,7 +884,7 @@ Respond with JSON now:`
 					} catch (error) {
 						getLog().warn(`Could not update session context:`, error)
 					}
-				} // kilocode_change - Close else block for AI folder decision
+				} // Society Agent - Close else block for AI folder decision
 			}
 
 			// Handle based on intent
@@ -993,10 +993,10 @@ Respond with the complete JSON now:`
 			await this.createFile(`${errorDir}/status.txt`, `Task: ${task}\nStatus: Error\nError: ${error}`)
 			this.setStatus("completed")
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
-	// kilocode_change start - Extract files from a chat response and create them
+	// Society Agent start - Extract files from a chat response and create them
 	/**
 	 * After a chat response, scan for file blocks and create them in the workspace.
 	 * Detects:
@@ -1046,7 +1046,7 @@ Respond with the complete JSON now:`
 			}
 		}
 
-		// kilocode_change start - Strategy 3: Code blocks preceded by filename mentions
+		// Society Agent start - Strategy 3: Code blocks preceded by filename mentions
 		// Matches patterns like "**`hello.html`**:\n```html" or "File: hello.html\n```" or "### `hello.html`\n```"
 		if (filesCreated === 0) {
 			const flexibleRegex = /(?:\*{0,2}`?([a-zA-Z0-9_/.-]+\.[a-zA-Z]{1,10})`?\*{0,2}[:\s]*)\n```[\w]*\n([\s\S]*?)```/g
@@ -1056,7 +1056,7 @@ Respond with the complete JSON now:`
 				const content = flexMatch[2].trim()
 				// Filter out false positives — filename must look like a path
 				if (filename && content && /\.(html|css|js|ts|py|json|md|tsx|jsx|svg|xml|yaml|yml|sh|sql|txt|cfg|ini|toml|rs|go|java|c|cpp|h|rb|php)$/i.test(filename)) {
-					// kilocode_change - Extra safety: skip if content looks like agent's conversational text
+					// Society Agent - Extra safety: skip if content looks like agent's conversational text
 					const looksLikeConversation = /^(I'll|I will|Let me|Now let|Here's|This is|The |You |If you|First|Next|To |Great|Perfect|Done|Now |Okay|I can|I need|I should|Looking|Checking|Running|Starting|Stopping|Created|Updated|Deleted|Error|Warning|Note:)/i.test(content)
 					const tooShort = content.length < 10
 					const noCodeChars = !/[{}\[\];=<>()"]|function|const|let|var|import|export|class|def |return|if |for |while /i.test(content)
@@ -1071,22 +1071,22 @@ Respond with the complete JSON now:`
 				}
 			}
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		return filesCreated
 	}
-	// kilocode_change end
+	// Society Agent end
 
 	/**
 	 * Get the workspace path for this agent
 	 */
-	getWorkspacePath(): string { return this.workspacePath } // kilocode_change
+	getWorkspacePath(): string { return this.workspacePath } // Society Agent
 
 	/**
 	 * Create a file in the workspace
 	 */
 	private async createFile(relativePath: string, content: string): Promise<void> {
-		// kilocode_change start
+		// Society Agent start
 		const fullPath = path.join(this.workspacePath, relativePath)
 		const dir = path.dirname(fullPath)
 
@@ -1102,17 +1102,17 @@ Respond with the complete JSON now:`
 		getLog().info(`${this.state.identity.id} created file: ${relativePath}`)
 		this.addMessage("assistant", `Created file: ${relativePath}`)
 
-		// kilocode_change start - notify about file creation
+		// Society Agent start - notify about file creation
 		this.onFileCreated?.(relativePath, fullPath, Buffer.byteLength(content, "utf-8"))
-		// kilocode_change end
-		// kilocode_change end
+		// Society Agent end
+		// Society Agent end
 	}
 
 	/**
 	 * Get default system prompt for agent
 	 */
 	private getDefaultSystemPrompt(): string {
-		// kilocode_change start - all agents are the same, unified prompt
+		// Society Agent start - all agents are the same, unified prompt
 		return `You are an AI Agent in a collaborative multi-agent system.
 
 Your capabilities:
@@ -1130,14 +1130,14 @@ Guidelines:
 Response format:
 - Always end your response with a SHORT SUMMARY (1-3 sentences) of what you did or decided
 - The summary helps others quickly understand without reading everything`
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Call LLM with current conversation context
 	 */
 	private async callLLM(): Promise<string> {
-		// kilocode_change start
+		// Society Agent start
 		getLog().info(`Calling LLM for ${this.state.identity.id}...`)
 
 		// Convert conversation history to Anthropic format
@@ -1166,14 +1166,14 @@ Response format:
 			getLog().error(`LLM call failed for ${this.state.identity.id}:`, error)
 			throw error
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Call LLM with streaming (yields chunks as they arrive)
 	 */
 	private async *callLLMStream(): AsyncGenerator<string, void, unknown> {
-		// kilocode_change start
+		// Society Agent start
 		getLog().info(`Streaming LLM call for ${this.state.identity.id}...`)
 
 		// Convert conversation history to Anthropic format
@@ -1195,7 +1195,7 @@ Response format:
 		})
 
 		try {
-			// Kilocode: Prepend summary as system context if exists
+			// Society Agent: Prepend summary as system context if exists
 			let systemPrompt = this.state.systemPrompt || this.getDefaultSystemPrompt()
 			if (this.conversationSummary) {
 				systemPrompt += `\n\n## Previous Conversation Summary\n${this.conversationSummary}\n\nThe messages below are the recent conversation. Use the summary for older context.`
@@ -1215,14 +1215,14 @@ Response format:
 			getLog().error(`LLM streaming failed for ${this.state.identity.id}:`, error)
 			throw error
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
-	 * Kilocode: Summarize old messages using Kilo's built-in summarization
+	 * Society Agent: Summarize old messages using Society Agent's built-in summarization
 	 */
 	private async summarizeOldMessages(): Promise<void> {
-		// kilocode_change start
+		// Society Agent start
 		const tokenCountBefore = this.estimateTokenCount()
 		const contextPercent = (tokenCountBefore / this.contextWindowSize) * 100
 		const messageCountBefore = this.state.conversationHistory.length
@@ -1236,10 +1236,10 @@ Response format:
 		}
 
 		getLog().info(
-			`${this.state.identity.id}: Using Kilo's summarization (${messageCountBefore} messages, ~${tokenCountBefore} tokens, ${contextPercent.toFixed(1)}% context)...`,
+			`${this.state.identity.id}: Using Society Agent's summarization (${messageCountBefore} messages, ~${tokenCountBefore} tokens, ${contextPercent.toFixed(1)}% context)...`,
 		)
 
-		// kilocode_change start - BACKUP full history before summarizing (if enabled)
+		// Society Agent start - BACKUP full history before summarizing (if enabled)
 		if (this.backupsEnabled) {
 			const backup = {
 				timestamp: Date.now(),
@@ -1254,19 +1254,19 @@ Response format:
 			}
 			getLog().info(`${this.state.identity.id}: Saved backup #${this.historyBackups.length} before summarization`)
 		}
-		// kilocode_change end
+		// Society Agent end
 
-		// kilocode_change - notify UI with metadata
+		// Society Agent - notify UI with metadata
 		this.onSummarizationStart?.({ messageCount: messageCountBefore, tokenCount: tokenCountBefore, contextPercent })
 
 		try {
-			// Convert to ApiMessage format (Kilo's format)
+			// Convert to ApiMessage format (Society Agent's format)
 			const apiMessages: ApiMessage[] = this.state.conversationHistory.map((msg) => ({
 				role: msg.role,
 				content: msg.content,
 			}))
 
-			// Use Kilo's built-in summarization
+			// Use Society Agent's built-in summarization
 			const result = await summarizeConversation(
 				apiMessages,
 				this.apiHandler,
@@ -1276,7 +1276,7 @@ Response format:
 				true, // isAutomaticTrigger
 				undefined, // customCondensingPrompt
 				undefined, // condensingApiHandler
-				this.preserveFirstMessage, // kilocode_change - option to drop first message
+				this.preserveFirstMessage, // Society Agent - option to drop first message
 			)
 
 			if (result.error) {
@@ -1306,18 +1306,18 @@ Response format:
 
 			const tokenCountAfter = this.estimateTokenCount()
 			getLog().info(
-				`${this.state.identity.id}: Kilo summarized conversation (${messageCountBefore} → ${result.messages.length} messages, ~${tokenCountBefore} → ~${tokenCountAfter} tokens, $${result.cost.toFixed(4)})`,
+				`${this.state.identity.id}: Summarized conversation (${messageCountBefore} → ${result.messages.length} messages, ~${tokenCountBefore} → ~${tokenCountAfter} tokens, $${result.cost.toFixed(4)})`,
 			)
 
-			// kilocode_change start - persist to disk after summarization
+			// Society Agent start - persist to disk after summarization
 			if (this.persistHistory) {
 				this.saveHistoryToDisk().catch(err => {
 					getLog().warn(`${this.state.identity.id}: Failed to persist after summarization: ${err}`)
 				})
 			}
-			// kilocode_change end
+			// Society Agent end
 
-			// kilocode_change - notify UI with full metadata including token stats
+			// Society Agent - notify UI with full metadata including token stats
 			this.onSummarizationEnd?.({
 				summary: result.summary,
 				messageCountBefore,
@@ -1327,7 +1327,7 @@ Response format:
 				cost: result.cost,
 			})
 		} catch (error) {
-			getLog().error(`${this.state.identity.id}: Kilo summarization failed:`, error)
+			getLog().error(`${this.state.identity.id}: Summarization failed:`, error)
 			this.onSummarizationEnd?.({
 				summary: "",
 				messageCountBefore,
@@ -1338,54 +1338,54 @@ Response format:
 				error: String(error),
 			})
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Pause agent execution
 	 */
 	pause(): void {
-		// kilocode_change start
+		// Society Agent start
 		this.setStatus("paused")
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Resume agent execution
 	 */
 	resume(): void {
-		// kilocode_change start
+		// Society Agent start
 		if (this.state.status === "paused") {
 			this.setStatus("idle")
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Mark task as completed
 	 */
 	complete(): void {
-		// kilocode_change start
+		// Society Agent start
 		this.state.currentTask = undefined
 		this.setStatus("completed")
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Set metadata
 	 */
 	setMetadata(key: string, value: unknown): void {
-		// kilocode_change start
+		// Society Agent start
 		this.state.metadata[key] = value
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Get metadata
 	 */
 	getMetadata(key: string): unknown {
-		// kilocode_change start
+		// Society Agent start
 		return this.state.metadata[key]
-		// kilocode_change end
+		// Society Agent end
 	}
 }

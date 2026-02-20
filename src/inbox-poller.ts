@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Inbox Poller - Polls inbox directory for new messages and feeds them
  * to the UnifiedMessageHandler

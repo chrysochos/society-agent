@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * SupervisorAgent - Autonomous supervisor that coordinates worker agents
  *
@@ -10,7 +10,7 @@ import { ConversationAgent, AgentIdentity } from "./conversation-agent"
 import { ApiHandler } from "./api"
 import { getLog } from "./logger"
 
-// kilocode_change start
+// Society Agent start
 export interface Purpose {
 	id: string
 	description: string
@@ -31,7 +31,7 @@ export interface TaskAssignment {
 	workerId: string
 	task: string
 	context: string
-	outputDir?: string // kilocode_change - Supervisor coordinates folder across workers
+	outputDir?: string // Society Agent - Supervisor coordinates folder across workers
 	assignedAt: number
 	status: "pending" | "in-progress" | "completed" | "failed"
 }
@@ -66,23 +66,23 @@ export interface SupervisorAgentConfig {
 	onEscalation?: (escalation: EscalationRequest) => void
 	onProgressUpdate?: (progress: number) => void
 }
-// kilocode_change end
+// Society Agent end
 
 /**
  * Supervisor agent that autonomously manages a team of workers
  */
 export class SupervisorAgent extends ConversationAgent {
-	// kilocode_change start
+	// Society Agent start
 	private supervisorState: SupervisorState
 	private onTeamCreated?: (teamSpec: WorkerSpec[]) => void
 	private onTaskAssigned?: (assignment: TaskAssignment) => void
 	private onEscalation?: (escalation: EscalationRequest) => void
 	private onProgressUpdate?: (progress: number) => void
-	private escalationResolvers: Map<string, (response: string) => void> = new Map() // kilocode_change
-	// kilocode_change end
+	private escalationResolvers: Map<string, (response: string) => void> = new Map() // Society Agent
+	// Society Agent end
 
 	constructor(config: SupervisorAgentConfig) {
-		// kilocode_change start
+		// Society Agent start
 		super({
 			identity: { ...config.identity, role: "supervisor" },
 			apiHandler: config.apiHandler,
@@ -103,23 +103,23 @@ export class SupervisorAgent extends ConversationAgent {
 		this.onTaskAssigned = config.onTaskAssigned
 		this.onEscalation = config.onEscalation
 		this.onProgressUpdate = config.onProgressUpdate
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Get supervisor-specific state
 	 */
 	getSupervisorState(): SupervisorState {
-		// kilocode_change start
+		// Society Agent start
 		return { ...this.supervisorState }
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Analyze purpose and create team specification
 	 */
 	async analyzePurpose(): Promise<WorkerSpec[]> {
-		// kilocode_change start
+		// Society Agent start
 		this.supervisorState.currentPhase = "analyzing"
 
 		const analysisPrompt = `You are a supervisor agent creating a team. Analyze this purpose and determine what worker agents are needed.
@@ -199,28 +199,28 @@ Respond with the JSON now:`
 			this.onTeamCreated?.(defaultTeam)
 			return defaultTeam
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Register worker agent with supervisor
 	 */
 	registerWorker(workerId: string): void {
-		// kilocode_change start
+		// Society Agent start
 		this.supervisorState.workerIds.push(workerId)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Delegate task to specific worker
 	 */
 	async delegateTask(workerId: string, task: string, context: string, outputDir?: string): Promise<TaskAssignment> {
-		// kilocode_change start
+		// Society Agent start
 		const assignment: TaskAssignment = {
 			workerId,
 			task,
 			context,
-			outputDir, // kilocode_change - Pass folder decision to worker
+			outputDir, // Society Agent - Pass folder decision to worker
 			assignedAt: Date.now(),
 			status: "in-progress",
 		}
@@ -236,27 +236,27 @@ Respond with the JSON now:`
 		this.onTaskAssigned?.(assignment)
 
 		return assignment
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Update task status
 	 */
 	updateTaskStatus(workerId: string, status: TaskAssignment["status"]): void {
-		// kilocode_change start
+		// Society Agent start
 		const assignment = this.supervisorState.taskAssignments.find((a) => a.workerId === workerId)
 		if (assignment) {
 			assignment.status = status
 			this.updateProgress()
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Calculate and update overall progress
 	 */
 	private updateProgress(): void {
-		// kilocode_change start
+		// Society Agent start
 		const totalTasks = this.supervisorState.taskAssignments.length
 		if (totalTasks === 0) {
 			// Don't send 0% update - it would override the startup progress
@@ -273,14 +273,14 @@ Respond with the JSON now:`
 
 		this.supervisorState.progressPercentage = progressPercentage
 		this.onProgressUpdate?.(progressPercentage)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Handle worker question/issue
 	 */
 	async handleWorkerQuestion(workerId: string, question: string): Promise<string> {
-		// kilocode_change start
+		// Society Agent start
 		const questionPrompt = `Worker ${workerId} has a question:
 
 ${question}
@@ -300,7 +300,7 @@ Otherwise, provide direct guidance to the worker.`
 		}
 
 		return response
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
@@ -312,7 +312,7 @@ Otherwise, provide direct guidance to the worker.`
 		context: string,
 		options?: string[],
 	): Promise<string> {
-		// kilocode_change start
+		// Society Agent start
 		const escalation: EscalationRequest = {
 			id: `escalation-${Date.now()}`,
 			priority,
@@ -325,7 +325,7 @@ Otherwise, provide direct guidance to the worker.`
 		this.supervisorState.escalations.push(escalation)
 		this.onEscalation?.(escalation)
 
-		// kilocode_change start - Wait for human response via respondToEscalation()
+		// Society Agent start - Wait for human response via respondToEscalation()
 		return new Promise<string>((resolve) => {
 			this.escalationResolvers.set(escalation.id, resolve)
 			// Auto-timeout after 5 minutes with a default response
@@ -336,14 +336,14 @@ Otherwise, provide direct guidance to the worker.`
 				}
 			}, 5 * 60 * 1000)
 		})
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Respond to escalation (called when human makes decision)
 	 */
 	respondToEscalation(escalationId: string, response: string): void {
-		// kilocode_change start
+		// Society Agent start
 		const escalation = this.supervisorState.escalations.find((e) => e.id === escalationId)
 		if (escalation) {
 			escalation.response = response
@@ -355,14 +355,14 @@ Otherwise, provide direct guidance to the worker.`
 			this.escalationResolvers.delete(escalationId)
 			resolver(response)
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Start executing the purpose - create work plan and delegate tasks
 	 */
 	async startExecution(): Promise<void> {
-		// kilocode_change start
+		// Society Agent start
 		this.supervisorState.currentPhase = "planning"
 
 		getLog().info("Supervisor creating work plan...")
@@ -418,7 +418,7 @@ Respond with the JSON now:`
 			getLog().info("Parsed tasks:", JSON.stringify(tasks, null, 2))
 
 			// Validate: ensure all workers have tasks
-			const assignedWorkers = new Set(tasks.map((t: any) => t.workerId)) // kilocode_change - explicit type
+			const assignedWorkers = new Set(tasks.map((t: any) => t.workerId)) // Society Agent - explicit type
 			const missingWorkers = this.supervisorState.workerIds.filter((id) => !assignedWorkers.has(id))
 			if (missingWorkers.length > 0) {
 				getLog().warn(`Warning: ${missingWorkers.length} workers not assigned tasks:`, missingWorkers)
@@ -427,7 +427,7 @@ Respond with the JSON now:`
 			// Delegate tasks to workers
 			this.onProgressUpdate?.(35) // Work plan created
 
-			// kilocode_change start - AI decides folder structure based on task parallelism
+			// Society Agent start - AI decides folder structure based on task parallelism
 			const folderPrompt = `Purpose: ${this.supervisorState.purpose.description}
 
 Tasks assigned:
@@ -477,7 +477,7 @@ Respond with JSON now:`
 				task.outputDir = subfolder ? `${baseFolder}/${subfolder}` : baseFolder
 				getLog().info(`  -> ${task.workerId}: ${task.outputDir}`)
 			})
-			// kilocode_change end
+			// Society Agent end
 
 			// Execute tasks with dependency management
 			await this.executeTasksWithDependencies(tasks)
@@ -498,7 +498,7 @@ Respond with JSON now:`
 			}))
 			await this.executeTasksWithDependencies(fallbackTasks)
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
@@ -507,7 +507,7 @@ Respond with JSON now:`
 	private async executeTasksWithDependencies(
 		tasks: Array<{ workerId: string; task: string; context: string; dependencies?: string[]; outputDir?: string }>,
 	): Promise<void> {
-		// kilocode_change start
+		// Society Agent start
 		const completed = new Set<string>()
 		const inProgress = new Map<string, Promise<void>>()
 
@@ -562,14 +562,14 @@ Respond with JSON now:`
 		}
 
 		getLog().info(`All ${tasks.length} tasks delegated (${completed.size} completed)`)
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Monitor worker progress
 	 */
 	async monitorWorkers(): Promise<void> {
-		// kilocode_change start
+		// Society Agent start
 		this.supervisorState.currentPhase = "monitoring"
 
 		// Check for stuck workers (tasks pending > 5 minutes)
@@ -584,14 +584,14 @@ Respond with JSON now:`
 				)
 			}
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Complete purpose execution
 	 */
 	async completePurpose(): Promise<string> {
-		// kilocode_change start
+		// Society Agent start
 		this.supervisorState.currentPhase = "completed"
 		this.supervisorState.progressPercentage = 100
 
@@ -606,14 +606,14 @@ Provide a brief summary of what was accomplished and any important notes.`
 
 		const summary = await this.sendMessage(summaryPrompt)
 		return summary
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
 	 * Get supervisor system prompt
 	 */
 	private static getSupervisorPrompt(): string {
-		// kilocode_change start
+		// Society Agent start
 		return `You are a Supervisor Agent in a multi-agent system.
 
 Your responsibilities:
@@ -641,6 +641,6 @@ Communication:
 - Offer specific guidance when issues arise
 
 Always respond in JSON format when asked to analyze purposes or make structured decisions.`
-		// kilocode_change end
+		// Society Agent end
 	}
 }

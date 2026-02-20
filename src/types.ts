@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Society Agent Type Definitions
  * 
@@ -77,7 +77,7 @@ export interface AgentMetadata {
 	historyPath: string
 }
 
-// kilocode_change start - Hierarchy, discovery, and lifecycle types
+// Society Agent start - Hierarchy, discovery, and lifecycle types
 
 /**
  * Each VS Code instance is a **node** — operated by a human AND acting as an agent.
@@ -172,14 +172,14 @@ export interface AgentKnowledgeFiles {
 	decisions: string       // decisions.md
 }
 
-// kilocode_change end
+// Society Agent end
 
 /**
  * Agent action log entry
  */
 export interface AgentAction {
 	/** Timestamp of action (ISO 8601 string) */
-	timestamp: string // kilocode_change - standardize to ISO string for JSON round-trip
+	timestamp: string // Society Agent - standardize to ISO string for JSON round-trip
 	
 	/** Agent ID that performed the action */
 	agentId: string
@@ -218,25 +218,25 @@ export interface AgentMessage {
 	to: string
 	
 	/** Message type */
-	type: 'message' | 'question' | 'task_assign' | 'task_complete' | 'status_update' | 'shutdown' // kilocode_change - match actual usage
+	type: 'message' | 'question' | 'task_assign' | 'task_complete' | 'status_update' | 'shutdown' // Society Agent - match actual usage
 	
 	/** Message content */
-	content: any // kilocode_change - match actual usage
+	content: any // Society Agent - match actual usage
 	
 	/** Timestamp (ISO string) */
-	timestamp: string // kilocode_change - match actual usage
+	timestamp: string // Society Agent - match actual usage
 	
 	/** Delivery status */
-	delivered: boolean // kilocode_change - match actual usage
+	delivered: boolean // Society Agent - match actual usage
 	
 	/** Delivery timestamp */
-	deliveredAt?: string // kilocode_change
+	deliveredAt?: string // Society Agent
 	
 	/** Reply-to message ID (for threading) */
 	replyTo?: string
 	
 	/** Message signature for verification */
-	signature?: string // kilocode_change
+	signature?: string // Society Agent
 }
 
 /**

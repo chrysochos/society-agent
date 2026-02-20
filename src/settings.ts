@@ -1,9 +1,9 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Society Agent Server - Standalone Settings System
  *
  * This is a self-contained settings system for the Society Agent Server.
- * It does NOT depend on KiloCode's settings - it's a separate product.
+ * It does NOT depend on Society Agent's settings - it's a separate product.
  *
  * Settings are stored in: .society-agent/settings.json
  */

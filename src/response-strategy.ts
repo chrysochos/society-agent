@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * ResponseStrategy - Determines whether to respond via chat or create files
  *

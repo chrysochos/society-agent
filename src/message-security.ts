@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Message Security - Cryptographic signing and verification for agent messages
  *
@@ -10,7 +10,7 @@
 import * as crypto from "crypto"
 import * as fs from "fs/promises"
 import * as path from "path"
-import { getLog } from "./logger" // kilocode_change
+import { getLog } from "./logger" // Society Agent
 
 export class MessageSecurity {
 	private keysDir: string

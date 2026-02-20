@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Attachment Manager - Store, reference, and verify file attachments
  *
@@ -18,7 +18,7 @@ import * as crypto from "crypto"
 import * as fs from "fs/promises"
 import * as path from "path"
 import { AttachmentRef } from "./agent-identity"
-import { getLog } from "./logger" // kilocode_change
+import { getLog } from "./logger" // Society Agent
 
 export interface AttachmentInput {
 	/** Original filename */

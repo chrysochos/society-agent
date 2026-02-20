@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Society Agent Configuration
  *
@@ -6,7 +6,7 @@
  */
 
 import type { SocietyAgentConfig, AgentRole, AgentCapability } from "./types"
-import { getLog } from "./logger" // kilocode_change
+import { getLog } from "./logger" // Society Agent
 
 /**
  * Default Society Agent configuration

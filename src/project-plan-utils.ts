@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 import * as fs from "fs/promises"
 import * as path from "path"
 
@@ -172,10 +172,10 @@ async function createWorkspaceSettings(
 	const settingsPath = path.join(settingsDir, "settings.json")
 
 	const settings = {
-		"kilo-code.societyAgent.agentId": agent.agentId,
-		"kilo-code.societyAgent.role": agent.role,
-		"kilo-code.societyAgent.sharedDir": sharedDir,
-		"kilo-code.societyAgent.capabilities": agent.capabilities,
+		"society-agent.agentId": agent.agentId,
+		"society-agent.role": agent.role,
+		"society-agent.sharedDir": sharedDir,
+		"society-agent.capabilities": agent.capabilities,
 	}
 
 	await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8")

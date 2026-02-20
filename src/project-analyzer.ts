@@ -1,7 +1,7 @@
-// kilocode_change - new file
+// Society Agent - new file
 import * as fs from "fs/promises"
 import * as path from "path"
-import { getLog } from "./logger" // kilocode_change
+import { getLog } from "./logger" // Society Agent
 
 /**
  * Project Analyzer - Analyze existing projects and suggest agent structure
@@ -87,12 +87,12 @@ export class ProjectAnalyzer {
 
 		// Backend detection
 		if (await this.hasBackend(projectRoot, packageJson)) {
-			const backendFiles = await this.findBackendFiles(projectRoot) // kilocode_change
+			const backendFiles = await this.findBackendFiles(projectRoot) // Society Agent
 			components.push({
 				type: "backend",
 				location: this.findBackendLocation(entries),
 				files: backendFiles,
-				lineCount: await this.countLines(backendFiles), // kilocode_change
+				lineCount: await this.countLines(backendFiles), // Society Agent
 				technologies: this.detectBackendTech(packageJson),
 				confidence: 0.9,
 			})
@@ -100,12 +100,12 @@ export class ProjectAnalyzer {
 
 		// Frontend detection
 		if (await this.hasFrontend(projectRoot, packageJson)) {
-			const frontendFiles = await this.findFrontendFiles(projectRoot) // kilocode_change
+			const frontendFiles = await this.findFrontendFiles(projectRoot) // Society Agent
 			components.push({
 				type: "frontend",
 				location: this.findFrontendLocation(entries),
 				files: frontendFiles,
-				lineCount: await this.countLines(frontendFiles), // kilocode_change
+				lineCount: await this.countLines(frontendFiles), // Society Agent
 				technologies: this.detectFrontendTech(packageJson),
 				confidence: 0.9,
 			})
@@ -113,12 +113,12 @@ export class ProjectAnalyzer {
 
 		// Tests detection
 		if (await this.hasTests(projectRoot, entries)) {
-			const testFiles = await this.findTestFiles(projectRoot) // kilocode_change
+			const testFiles = await this.findTestFiles(projectRoot) // Society Agent
 			components.push({
 				type: "tests",
 				location: "tests/",
 				files: testFiles,
-				lineCount: await this.countLines(testFiles), // kilocode_change
+				lineCount: await this.countLines(testFiles), // Society Agent
 				technologies: this.detectTestTech(packageJson),
 				confidence: 0.95,
 			})
@@ -357,7 +357,7 @@ export class ProjectAnalyzer {
 		return []
 	}
 
-	// kilocode_change start - Calculate total line count for a list of files
+	// Society Agent start - Calculate total line count for a list of files
 	private async countLines(files: string[]): Promise<number> {
 		let total = 0
 		for (const file of files) {
@@ -370,7 +370,7 @@ export class ProjectAnalyzer {
 		}
 		return total
 	}
-	// kilocode_change end
+	// Society Agent end
 
 	private detectBackendTech(packageJson: any): string[] {
 		const techs: string[] = []

@@ -1,11 +1,11 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Approval system for Society Agent high-risk operation workflows
  */
 
 import type { AgentIdentity, AgentCapability } from "./types"
 import { requiresApproval } from "./config"
-import type { SupervisorChannel } from "./supervisor-channel" // kilocode_change
+import type { SupervisorChannel } from "./supervisor-channel" // Society Agent
 import { SocietyAgentStorage } from "./storage"
 
 /**
@@ -80,7 +80,7 @@ export class ApprovalManager {
 	private pendingRequests = new Map<string, ApprovalRequest>()
 	private approvalHistory: ApprovalResult[] = []
 	private approvalUICallback?: ApprovalUICallback
-	private supervisorChannel?: SupervisorChannel // kilocode_change - typed properly for Phase 4
+	private supervisorChannel?: SupervisorChannel // Society Agent - typed properly for Phase 4
 	private storage: SocietyAgentStorage | null = null
 	private initialized = false
 
@@ -127,7 +127,7 @@ export class ApprovalManager {
 	 * Set the supervisor communication channel
 	 */
 	setSupervisorChannel(channel: SupervisorChannel): void {
-		// kilocode_change - typed properly
+		// Society Agent - typed properly
 		this.supervisorChannel = channel
 	}
 
@@ -195,7 +195,7 @@ export class ApprovalManager {
 	 * Request approval from supervisor agent
 	 */
 	private async requestSupervisorApproval(request: ApprovalRequest): Promise<ApprovalResponse> {
-		// kilocode_change start - Phase 4 implementation
+		// Society Agent start - Phase 4 implementation
 		if (!this.supervisorChannel) {
 			throw new Error("Supervisor channel not configured")
 		}
@@ -218,7 +218,7 @@ export class ApprovalManager {
 				timestamp: Date.now(),
 			}
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
@@ -259,7 +259,7 @@ export class ApprovalManager {
 	 */
 	requiresApproval(capability: AgentCapability): boolean {
 		// Use the config function with default config
-		return requiresApproval(capability) // kilocode_change - use default config
+		return requiresApproval(capability) // Society Agent - use default config
 	}
 
 	/**

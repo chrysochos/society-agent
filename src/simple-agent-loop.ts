@@ -1,6 +1,6 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
- * SimpleAgentLoop - Basic autonomous agent behavior integrated with KiloCode chat
+ * SimpleAgentLoop - Basic autonomous agent behavior integrated with Society Agent chat
  *
  * Polls inbox for messages from other agents and delivers them based on current agent state.
  * Uses persistent queue to guarantee message delivery.
@@ -23,17 +23,17 @@ export class SimpleAgentLoop {
 	private responseHandler: ResponseHandler
 	private agentId: string
 	private knowledgeManager: KnowledgeManager | undefined
-	private inboxManager: InboxManager | undefined // kilocode_change
-	private sharedDir: string | undefined // kilocode_change - Shared directory for inbox
+	private inboxManager: InboxManager | undefined // Society Agent
+	private sharedDir: string | undefined // Society Agent - Shared directory for inbox
 
 	constructor(registry: AgentRegistry, agentId: string, role: string, capabilities: string[], sharedDir?: string) {
-		// kilocode_change
+		// Society Agent
 		this.registry = registry
 		this.agentId = agentId
 		this.role = role
 		this.capabilities = capabilities
 		this.responseHandler = new ResponseHandler(registry, agentId)
-		this.sharedDir = sharedDir // kilocode_change
+		this.sharedDir = sharedDir // Society Agent
 	}
 
 	/**
@@ -53,7 +53,7 @@ export class SimpleAgentLoop {
 			getLog().info(`Knowledge base initialized at ${workspaceRoot}/.agent-knowledge/`)
 		}
 
-		// kilocode_change start - Initialize inbox manager with shared directory and security
+		// Society Agent start - Initialize inbox manager with shared directory and security
 		const inboxRoot = this.sharedDir || workspaceRoot
 		if (inboxRoot) {
 			this.inboxManager = new InboxManager(inboxRoot)
@@ -63,7 +63,7 @@ export class SimpleAgentLoop {
 		} else {
 			getLog().warn(`No shared directory or workspace root - inbox disabled`)
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		// Poll for messages every 3 seconds
 		this.pollInterval = setInterval(async () => {
@@ -88,7 +88,7 @@ export class SimpleAgentLoop {
 	}
 
 	/**
-	 * Process pending messages from inbox (kilocode_change - now uses InboxManager)
+	 * Process pending messages from inbox (Society Agent - now uses InboxManager)
 	 */
 	private async processMessages(): Promise<void> {
 		if (!this.inboxManager) {
@@ -107,7 +107,7 @@ export class SimpleAgentLoop {
 			return
 		}
 
-		// kilocode_change start - Use inbox for guaranteed delivery
+		// Society Agent start - Use inbox for guaranteed delivery
 		const pendingMessages = await this.inboxManager.getPendingMessages(this.agentId)
 
 		if (pendingMessages.length === 0) return
@@ -129,18 +129,18 @@ export class SimpleAgentLoop {
 				)
 			}
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	/**
-	 * Attempt to deliver a message based on current agent state (kilocode_change)
+	 * Attempt to deliver a message based on current agent state (Society Agent)
 	 * Returns true if delivered successfully, false if should retry later
 	 */
 	private async attemptDelivery(message: InboxMessage): Promise<boolean> {
 		const { ClineProvider } = await import("../../core/webview/ClineProvider")
 		const provider = ClineProvider.getVisibleInstance()
-		const currentTask = provider?.getCurrentTask() // kilocode_change
-		const taskAny = currentTask as any // kilocode_change - Task class has no public state property
+		const currentTask = provider?.getCurrentTask() // Society Agent
+		const taskAny = currentTask as any // Society Agent - Task class has no public state property
 
 		// Determine agent state
 		const isIdle = !currentTask || taskAny?.state === "completed" || taskAny?.state === "error"
@@ -232,11 +232,11 @@ export class SimpleAgentLoop {
 
 		const content = typeof message.content === "string" ? message.content : ""
 
-		// kilocode_change start - Smart message routing
+		// Society Agent start - Smart message routing
 		const { ClineProvider } = await import("../../core/webview/ClineProvider")
 		const provider = ClineProvider.getVisibleInstance()
-		const currentTask = provider?.getCurrentTask() // kilocode_change
-		const taskAny2 = currentTask as any // kilocode_change - Task class has no public state property
+		const currentTask = provider?.getCurrentTask() // Society Agent
+		const taskAny2 = currentTask as any // Society Agent - Task class has no public state property
 		const hasActiveTask = currentTask && taskAny2?.state !== "completed" && taskAny2?.state !== "error"
 
 		// If agent has active task and receives a "message" type, inject AND add to history
@@ -279,7 +279,7 @@ export class SimpleAgentLoop {
 			)
 			return
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		// Additional check: Is content too simple to be a real task?
 		const isSimpleMessage = this.isSimpleMessage(content)
@@ -297,8 +297,8 @@ export class SimpleAgentLoop {
 			const provider = ClineProvider.getVisibleInstance()
 
 			if (provider) {
-				const currentTask = provider.getCurrentTask() // kilocode_change
-				const taskState = currentTask as any // kilocode_change - Task class has no public state property
+				const currentTask = provider.getCurrentTask() // Society Agent
+				const taskState = currentTask as any // Society Agent - Task class has no public state property
 				const isContinuation = currentTask && taskState?.state !== "completed" && taskState?.state !== "error"
 
 				// Format message for chat (with continuation hint if applicable)
@@ -311,7 +311,7 @@ export class SimpleAgentLoop {
 				} else {
 					// Create new task (first message or previous task finished)
 					// Enable auto-approvals for autonomous agent work
-					// kilocode_change - CreateTaskOptions only supports enableDiff, enableCheckpoints, etc.
+					// Society Agent - CreateTaskOptions only supports enableDiff, enableCheckpoints, etc.
 					await provider.createTask(formattedMessage)
 					getLog().info(
 						`Created new task with message from ${sender} (auto-approvals enabled)`,

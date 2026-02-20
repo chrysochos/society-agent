@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Unified Message Handler - Single entry point for all message processing
  *
@@ -62,7 +62,7 @@ export class UnifiedMessageHandler {
 	// Max processed IDs to track (prevent memory leak)
 	private static readonly MAX_PROCESSED_IDS = 10_000
 
-	// kilocode_change start - Recent message tracking for monitor
+	// Society Agent start - Recent message tracking for monitor
 	private static readonly MAX_RECENT_MESSAGES = 50
 	private recentMessages: Array<{
 		id: string
@@ -72,25 +72,25 @@ export class UnifiedMessageHandler {
 		content: string
 		timestamp: number
 	}> = []
-	// kilocode_change end
+	// Society Agent end
 
-	// kilocode_change start - Shutdown callback
+	// Society Agent start - Shutdown callback
 	private onShutdownCallback?: () => void
-	// kilocode_change end
+	// Society Agent end
 
-	// kilocode_change start - Message listener for real-time push
+	// Society Agent start - Message listener for real-time push
 	private messageListeners: Array<(msg: SignedMessage) => void> = []
-	// kilocode_change end
+	// Society Agent end
 
 	constructor(options: MessageHandlerOptions) {
 		this.options = options
 	}
 
-	// kilocode_change start - Register a listener for accepted messages
+	// Society Agent start - Register a listener for accepted messages
 	onMessage(listener: (msg: SignedMessage) => void): void {
 		this.messageListeners.push(listener)
 	}
-	// kilocode_change end
+	// Society Agent end
 
 	/**
 	 * Set the message sender for auto-routing responses.
@@ -140,7 +140,7 @@ export class UnifiedMessageHandler {
 		this.processedIds.add(message.id)
 		this.cleanupProcessedIds()
 
-		// kilocode_change start - Track recent messages for monitor
+		// Society Agent start - Track recent messages for monitor
 		this.recentMessages.push({
 			id: message.id,
 			from: message.from,
@@ -152,7 +152,7 @@ export class UnifiedMessageHandler {
 		if (this.recentMessages.length > UnifiedMessageHandler.MAX_RECENT_MESSAGES) {
 			this.recentMessages = this.recentMessages.slice(-UnifiedMessageHandler.MAX_RECENT_MESSAGES)
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		// 5. Route by priority
 		const priority = getMessagePriority(message.type)
@@ -173,7 +173,7 @@ export class UnifiedMessageHandler {
 		// 6. Write delivery confirmation
 		await this.confirmDelivery(message)
 
-		// kilocode_change start - Notify listeners (real-time push to monitor)
+		// Society Agent start - Notify listeners (real-time push to monitor)
 		for (const listener of this.messageListeners) {
 			try {
 				listener(message)
@@ -181,7 +181,7 @@ export class UnifiedMessageHandler {
 				// don't let listener errors break message flow
 			}
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		return { accepted: true }
 	}
@@ -196,11 +196,11 @@ export class UnifiedMessageHandler {
 		if (message.type === "shutdown") {
 			getLog().info(`Shutdown requested by ${message.from}`)
 			vscode.window.showWarningMessage(`🛑 Shutdown requested by ${message.from}: ${message.content}`)
-			// kilocode_change start - graceful shutdown sequence
+			// Society Agent start - graceful shutdown sequence
 			this.taskQueue.length = 0
 			this.currentTask = null
 			this.onShutdownCallback?.()
-			// kilocode_change end
+			// Society Agent end
 			return
 		}
 
@@ -537,7 +537,7 @@ export class UnifiedMessageHandler {
 		}
 	}
 
-	// kilocode_change start - Monitor data accessors
+	// Society Agent start - Monitor data accessors
 
 	/**
 	 * Get the number of queued tasks waiting to be processed
@@ -560,12 +560,12 @@ export class UnifiedMessageHandler {
 		return [...this.recentMessages]
 	}
 
-	// kilocode_change start - Shutdown registration
+	// Society Agent start - Shutdown registration
 	/**
 	 * Register a callback that fires when a shutdown message arrives.
 	 */
 	onShutdown(callback: () => void): void {
 		this.onShutdownCallback = callback
 	}
-	// kilocode_change end
+	// Society Agent end
 }

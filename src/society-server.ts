@@ -1,4 +1,4 @@
-// kilocode_change - new file
+// Society Agent - new file
 /**
  * Society Agent Web Server
  *
@@ -9,7 +9,7 @@
 // Load environment variables first
 import "dotenv/config"
 
-// kilocode_change - Mock vscode module for standalone server mode (must be first!)
+// Society Agent - Mock vscode module for standalone server mode (must be first!)
 import "./vscode-mock"
 
 import express from "express"
@@ -22,11 +22,11 @@ import { PurposeContext } from "./purpose-analyzer"
 import { ResponseStrategy } from "./response-strategy"
 import { ConversationAgent } from "./conversation-agent"
 import { Anthropic } from "@anthropic-ai/sdk"
-import OpenAI from "openai" // kilocode_change - OpenRouter support
+import OpenAI from "openai" // Society Agent - OpenRouter support
 import { ApiHandler, buildApiHandler } from "./api"
 import { commandExecutor } from "./command-executor"
 import { getLog } from "./logger"
-// kilocode_change start - dynamic provider configuration
+// Society Agent start - dynamic provider configuration
 import {
 	// Legacy functions (for backward compatibility)
 	loadProviderConfig,
@@ -45,38 +45,38 @@ import {
 	isValidProvider,
 	ProviderSettings,
 } from "./provider-config"
-// kilocode_change end
-// kilocode_change start - persistent agents
+// Society Agent end
+// Society Agent start - persistent agents
 import { PersistentAgentStore } from "./persistent-agent-store"
-// kilocode_change end
-// kilocode_change start - project system
+// Society Agent end
+// Society Agent start - project system
 import { ProjectStore, ProjectAgentConfig, Project, Task, TaskContext } from "./project-store"
-// kilocode_change end
-// kilocode_change start - terminal support
+// Society Agent end
+// Society Agent start - terminal support
 import * as pty from "node-pty"
-// kilocode_change end
-// kilocode_change start - standalone settings system
+// Society Agent end
+// Society Agent start - standalone settings system
 import { settings as standaloneSettings, initializeSettings, getSettingsSummary, PROVIDER_BASE_URLS } from "./settings"
-// kilocode_change end
-// kilocode_change start - MCP server integration
+// Society Agent end
+// Society Agent start - MCP server integration
 import { initMcpManager, getMcpManager } from "./mcp-client"
-// kilocode_change end
+// Society Agent end
 
 const app = express()
 const server = http.createServer(app)
 const io = new SocketIOServer(server, {
 	cors: { origin: "*" },
-	// kilocode_change start - Increase timeouts for long-running operations
+	// Society Agent start - Increase timeouts for long-running operations
 	pingTimeout: 300000,     // 5 minutes
 	pingInterval: 30000,     // 30 seconds
-	// kilocode_change end
+	// Society Agent end
 })
 
 const PORT = process.env.PORT || 4000
 const NODE_ENV = process.env.NODE_ENV || "development"
 const log = getLog()
 
-// kilocode_change start - centralized workspace path with stable default
+// Society Agent start - centralized workspace path with stable default
 function getWorkspacePath(): string {
 	return process.env.WORKSPACE_PATH || "/workspace"
 }
@@ -84,19 +84,19 @@ function getWorkspacePath(): string {
 function getOutputDir(): string {
 	return path.join(getWorkspacePath(), "projects")
 }
-// kilocode_change end
+// Society Agent end
 
 // Middleware
-app.use(express.json({ limit: "50mb" })) // kilocode_change - support file uploads
-app.use(express.static(path.join(__dirname, "public")))  // kilocode_change - serve standalone frontend
+app.use(express.json({ limit: "50mb" })) // Society Agent - support file uploads
+app.use(express.static(path.join(__dirname, "public")))  // Society Agent - serve standalone frontend
 
 // Global state
 let societyManager: SocietyManager | null = null
 const connectedClients = new Set<string>()
 let userAgent: ConversationAgent | null = null // Single agent for user conversations
-const stoppedAgents = new Set<string>() // kilocode_change - track agents that should stop
+const stoppedAgents = new Set<string>() // Society Agent - track agents that should stop
 
-// kilocode_change start - system pause/resume for external oversight
+// Society Agent start - system pause/resume for external oversight
 let systemPaused = false
 const PAUSED_STATE_FILE = path.join(getWorkspacePath(), ".system-paused-state.json")
 
@@ -154,17 +154,17 @@ function clearPausedState(): void {
 		log.warn("Failed to clear paused state:", e)
 	}
 }
-// kilocode_change end - system pause/resume
+// Society Agent end - system pause/resume
 
-// kilocode_change start - persistent agent system
+// Society Agent start - persistent agent system
 const agentStore = new PersistentAgentStore(getWorkspacePath())
 const activeAgents = new Map<string, ConversationAgent>() // agentId → live ConversationAgent
-// kilocode_change end
-// kilocode_change start - project system
+// Society Agent end
+// Society Agent start - project system
 const projectStore = new ProjectStore(getWorkspacePath())
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - activity logging for visibility
+// Society Agent start - activity logging for visibility
 interface ActivityEntry {
 	id: string
 	timestamp: number
@@ -213,9 +213,9 @@ class ActivityLogger {
 }
 
 const activityLogger = new ActivityLogger()
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - token usage tracking
+// Society Agent start - token usage tracking
 interface UsageEntry {
 	id: string
 	timestamp: number
@@ -229,7 +229,7 @@ interface UsageEntry {
 	costUsd: number // estimated cost
 }
 
-// kilocode_change start - Safe JSON parse for tool arguments (models sometimes return malformed JSON)
+// Society Agent start - Safe JSON parse for tool arguments (models sometimes return malformed JSON)
 function safeParseToolArgs(jsonStr: string | undefined): Record<string, any> {
 	if (!jsonStr) return {}
 	try {
@@ -248,7 +248,7 @@ function safeParseToolArgs(jsonStr: string | undefined): Record<string, any> {
 		return { _parseError: e.message, _rawArgs: jsonStr }
 	}
 }
-// kilocode_change end
+// Society Agent end
 
 interface UsageSummary {
 	totalInputTokens: number
@@ -261,7 +261,7 @@ interface UsageSummary {
 }
 
 // Pricing per 1M tokens (as of 2026)
-// kilocode_change - Added OpenRouter model pricing
+// Society Agent - Added OpenRouter model pricing
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
 	// Claude models (Anthropic direct)
 	"claude-sonnet-4-20250514": { input: 3, output: 15 },
@@ -290,7 +290,7 @@ const MODEL_PRICING: Record<string, { input: number; output: number }> = {
 	"default": { input: 1, output: 3 },
 }
 
-// kilocode_change - Helper to find pricing with model name variations
+// Society Agent - Helper to find pricing with model name variations
 function getModelPricing(model: string): { input: number; output: number } {
 	// Try exact match first
 	if (MODEL_PRICING[model]) return MODEL_PRICING[model]
@@ -394,9 +394,9 @@ class UsageTracker {
 }
 
 const usageTracker = new UsageTracker()
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - Agent inbox system for async messaging
+// Society Agent start - Agent inbox system for async messaging
 interface InboxMessage {
 	id: string
 	from: { id: string; name: string }
@@ -448,9 +448,9 @@ function getInboxUnreadCount(projectId: string, agentId: string): number {
 	const messages = agentInboxes.get(key) || []
 	return messages.filter(m => !m.read).length
 }
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - track current provider config
+// Society Agent start - track current provider config
 let currentProviderConfig: ProviderConfig | null = null
 let currentProviderSettings: ProviderSettings | null = null
 
@@ -462,7 +462,7 @@ let currentProviderSettings: ProviderSettings | null = null
 function getApiHandlerFromConfig(): ApiHandler {
 	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 
-	// kilocode_change start - Check standalone settings first (supports OpenRouter)
+	// Society Agent start - Check standalone settings first (supports OpenRouter)
 	if (standaloneSettings.isInitialized() && standaloneSettings.hasApiKey()) {
 		const providerConfig = standaloneSettings.getProvider()
 		// For non-Anthropic providers, return a dummy handler (actual API calls are handled in chat functions)
@@ -481,7 +481,7 @@ function getApiHandlerFromConfig(): ApiHandler {
 			model: providerConfig.model,
 		})
 	}
-	// kilocode_change end
+	// Society Agent end
 
 	// Try to use the new full ProviderSettings first
 	if (!currentProviderSettings) {
@@ -507,7 +507,7 @@ function getApiHandlerFromConfig(): ApiHandler {
 
 	return createApiHandler(currentProviderConfig) as ApiHandler
 }
-// kilocode_change end
+// Society Agent end
 
 /**
  * Initialize Society Manager with callbacks
@@ -520,7 +520,7 @@ async function initializeSocietyManager(apiKey?: string) {
 
 		const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 
-		// kilocode_change start - use full provider configuration
+		// Society Agent start - use full provider configuration
 		// Try new ProviderSettings first, fall back to legacy config
 		let apiHandler: ApiHandler
 
@@ -556,7 +556,7 @@ async function initializeSocietyManager(apiKey?: string) {
 			log.info(`Using provider: ${providerConfig.provider}, model: ${providerConfig.model} (legacy config)`)
 			apiHandler = createApiHandler(providerConfig) as ApiHandler
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		societyManager = new SocietyManager({
 			apiHandler,
@@ -616,7 +616,7 @@ function getTeamAgents(purposeId: string) {
 
 	if (!purpose) return []
 
-	const purposeAny = purpose as any // kilocode_change - access team/identity properties
+	const purposeAny = purpose as any // Society Agent - access team/identity properties
 	if (!purposeAny.team) return []
 
 	return purposeAny.team.getAllMembers().map((member: any) => ({
@@ -638,7 +638,7 @@ function getTeamAgents(purposeId: string) {
  */
 app.get("/api/status", (req, res) => {
 	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
-	// kilocode_change start - use standalone settings for provider info
+	// Society Agent start - use standalone settings for provider info
 	const providerConfig = standaloneSettings.isInitialized() ? standaloneSettings.getProvider() : null
 	res.json({
 		status: "ok",
@@ -653,12 +653,12 @@ app.get("/api/status", (req, res) => {
 		workspacePath,
 		outputDir: path.join(workspacePath, "projects"),
 		timestamp: new Date().toISOString(),
-		systemPaused, // kilocode_change - include pause status
+		systemPaused, // Society Agent - include pause status
 	})
-	// kilocode_change end
+	// Society Agent end
 })
 
-// kilocode_change start - System pause/resume API for external oversight
+// Society Agent start - System pause/resume API for external oversight
 /**
  * POST /api/system/pause - Pause the system for maintenance
  * External agents (like GitHub Copilot) use this before making code changes.
@@ -944,9 +944,9 @@ app.post("/api/project/:projectId/mcps/:name/toggle", (req, res): void => {
 		res.status(500).json({ error: err.message })
 	}
 })
-// kilocode_change end - System pause/resume API
+// Society Agent end - System pause/resume API
 
-// kilocode_change start - activity log API
+// Society Agent start - activity log API
 /**
  * GET /api/activities - Get all recent activities
  */
@@ -970,9 +970,9 @@ app.get("/api/agent/:agentId/activities", (req, res) => {
 	const limit = parseInt(req.query.limit as string) || 50
 	res.json(activityLogger.getByAgent(req.params.agentId, limit))
 })
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - usage/cost tracking API
+// Society Agent start - usage/cost tracking API
 /**
  * GET /api/usage - Get usage summary
  */
@@ -995,9 +995,9 @@ app.delete("/api/usage", (req, res) => {
 	usageTracker.clear()
 	res.json({ success: true, message: "Usage data cleared" })
 })
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - workspace directory browser for project.html
+// Society Agent start - workspace directory browser for project.html
 /**
  * GET /api/workspace - List contents of a specific directory path
  * Used by project.html to browse project folders
@@ -1051,9 +1051,9 @@ app.get("/api/workspace", async (req, res): Promise<void> => {
 		res.status(500).json({ error: String(error) })
 	}
 })
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - workspace file browser
+// Society Agent start - workspace file browser
 /**
  * GET /api/workspace/files - List files in the projects output directory
  */
@@ -1064,7 +1064,7 @@ app.get("/api/workspace/files", async (req, res): Promise<void> => {
 
 		const files: { path: string; fullPath: string; size: number; modified: string; isDir: boolean }[] = []
 
-		// kilocode_change - Skip heavy directories that slow down file listing
+		// Society Agent - Skip heavy directories that slow down file listing
 		const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".next", ".cache", "coverage", "__pycache__", ".git"])
 
 		async function walkDir(dir: string, prefix: string = "") {
@@ -1072,7 +1072,7 @@ app.get("/api/workspace/files", async (req, res): Promise<void> => {
 				const entries = await fs.promises.readdir(dir, { withFileTypes: true })
 				for (const entry of entries) {
 					if (entry.name.startsWith(".")) continue
-					if (SKIP_DIRS.has(entry.name)) continue // kilocode_change - skip heavy dirs
+					if (SKIP_DIRS.has(entry.name)) continue // Society Agent - skip heavy dirs
 					const fullPath = path.join(dir, entry.name)
 					const relPath = prefix ? `${prefix}/${entry.name}` : entry.name
 					if (entry.isDirectory()) {
@@ -1202,7 +1202,7 @@ app.post("/api/workspace/file", async (req, res): Promise<void> => {
 	}
 })
 
-// kilocode_change start - Raw file serving for viewers (images, PDFs, etc.)
+// Society Agent start - Raw file serving for viewers (images, PDFs, etc.)
 /**
  * GET /api/workspace/raw - Serve a raw file for viewing (images, PDFs, etc.)
  * Query: ?path=relative/path/file.ext
@@ -1309,7 +1309,7 @@ app.get("/api/workspace/raw", async (req, res): Promise<void> => {
 		}
 	}
 })
-// kilocode_change end
+// Society Agent end
 
 /**
  * DELETE /api/workspace/file - Delete a file or empty directory
@@ -1441,7 +1441,7 @@ app.post("/api/workspace/move", async (req, res): Promise<void> => {
 		res.status(500).json({ error: String(error) })
 	}
 })
-// kilocode_change end
+// Society Agent end
 
 /**
  * POST /api/config/api-key - Save API key to .env file
@@ -1463,7 +1463,7 @@ app.post("/api/config/api-key", async (req, res): Promise<void> => {
 
 		// Save to workspace root .env (where dotenv auto-loads from)
 		const envPath = path.resolve(process.cwd(), ".env")
-		// Also save to src/.env as fallback (where KiloCode reads it)
+		// Also save to src/.env as fallback (where Society Agent reads it)
 		const srcEnvPath = path.join(__dirname, "../../.env")
 		let envContent = ""
 
@@ -1482,7 +1482,7 @@ app.post("/api/config/api-key", async (req, res): Promise<void> => {
 		// Write updated .env file to workspace root
 		fs.writeFileSync(envPath, envContent, "utf-8")
 
-		// Also update src/.env if it exists (keeps KiloCode in sync)
+		// Also update src/.env if it exists (keeps Society Agent in sync)
 		if (fs.existsSync(srcEnvPath) && srcEnvPath !== envPath) {
 			let srcContent = fs.readFileSync(srcEnvPath, "utf-8")
 			if (srcContent.includes("ANTHROPIC_API_KEY=")) {
@@ -1521,7 +1521,7 @@ app.get("/api/config/api-key", (req, res) => {
 	})
 })
 
-// kilocode_change start - change workspace path from browser
+// Society Agent start - change workspace path from browser
 /**
  * POST /api/config/workspace-path - Update WORKSPACE_PATH
  * Body: { path: string }
@@ -1571,9 +1571,9 @@ app.post("/api/config/workspace-path", async (req, res): Promise<void> => {
 		res.status(500).json({ error: String(error) })
 	}
 })
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - provider configuration endpoints
+// Society Agent start - provider configuration endpoints
 /**
  * GET /api/config/provider - Get current provider configuration
  * Returns both legacy and full provider settings
@@ -1732,9 +1732,9 @@ app.get("/api/config/providers", (req, res) => {
 		current: currentProviderSettings?.apiProvider || currentProviderConfig?.provider || null,
 	})
 })
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - standalone settings API
+// Society Agent start - standalone settings API
 /**
  * GET /api/settings - Get standalone server settings
  * Returns the unified settings from .society-agent/settings.json
@@ -1852,7 +1852,7 @@ app.post("/api/settings/provider", async (req, res): Promise<void> => {
 		res.status(500).json({ error: String(error) })
 	}
 })
-// kilocode_change end
+// Society Agent end
 
 /**
  * POST /api/purpose/start - Start a new purpose (Agent-driven with memory)
@@ -1869,14 +1869,14 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 			return
 		}
 
-		const { description, attachments, agentId } = req.body // kilocode_change - added agentId
+		const { description, attachments, agentId } = req.body // Society Agent - added agentId
 
 		if (!description && (!attachments || attachments.length === 0)) {
 			res.status(400).json({ error: "Purpose description or attachments required" })
 			return
 		}
 
-		// kilocode_change start - route to persistent/project agent if agentId specified
+		// Society Agent start - route to persistent/project agent if agentId specified
 		if (agentId) {
 			// Try project store first, then legacy store
 			const found = projectStore.findAgentProject(agentId)
@@ -1927,7 +1927,7 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 				isDone: true,
 			})
 
-			// kilocode_change start - Auto-extract and create files from project agent responses
+			// Society Agent start - Auto-extract and create files from project agent responses
 			let filesCreated = 0
 			if (agentProjectId && fullResponse.length > 0) {
 				try {
@@ -1947,7 +1947,7 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 					log.warn(`[${agentName}] File extraction failed:`, err)
 				}
 			}
-			// kilocode_change end
+			// Society Agent end
 
 			// Update memory periodically (every 10 messages)
 			const history = agent.getHistory()
@@ -1968,19 +1968,19 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 				response: fullResponse,
 				status: "completed",
 				historyLength: history.length,
-				filesCreated, // kilocode_change - report files created
+				filesCreated, // Society Agent - report files created
 			})
 			return
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		// Initialize user agent if not exists (maintains conversation memory)
 		if (!userAgent) {
 			log.info("Creating user conversation agent...")
 
-			// kilocode_change start - use provider config instead of hardcoded Anthropic
+			// Society Agent start - use provider config instead of hardcoded Anthropic
 			const apiHandler = getApiHandlerFromConfig()
-			// kilocode_change end
+			// Society Agent end
 
 			userAgent = new ConversationAgent({
 				identity: {
@@ -2010,7 +2010,7 @@ Guidelines:
 						isStreaming: false,
 					})
 				},
-				// kilocode_change start - file creation tracking
+				// Society Agent start - file creation tracking
 				onFileCreated: (relativePath, fullPath, size) => {
 					log.info(`File created: ${fullPath} (${size} bytes)`)
 					io.emit("file-created", {
@@ -2021,8 +2021,8 @@ Guidelines:
 						timestamp: Date.now(),
 					})
 				},
-				// kilocode_change end
-				// kilocode_change start - summarization events
+				// Society Agent end
+				// Society Agent start - summarization events
 				onSummarizationStart: (meta) => {
 					log.info(`society-agent: Summarization started (${meta.messageCount} messages, ~${meta.tokenCount} tokens, ${meta.contextPercent.toFixed(1)}%)`)
 					io.emit("summarization-start", { 
@@ -2047,7 +2047,7 @@ Guidelines:
 						timestamp: Date.now() 
 					})
 				},
-				// kilocode_change end
+				// Society Agent end
 			})
 		}
 
@@ -2090,7 +2090,7 @@ Guidelines:
 	}
 })
 
-// kilocode_change start
+// Society Agent start
 /**
  * POST /api/purpose/launch - Launch a multi-agent team for a complex purpose
  * This is the real multi-agent flow: supervisor analyzes → team forms → workers execute
@@ -2149,7 +2149,7 @@ app.post("/api/purpose/launch", async (req, res): Promise<void> => {
 		res.status(500).json({ error: String(error) })
 	}
 })
-// kilocode_change end
+// Society Agent end
 
 /**
  * GET /api/purposes - Get all purposes (active + completed)
@@ -2164,7 +2164,7 @@ app.get("/api/purposes", (req, res): void => {
 		const state = societyManager.getState()
 
 		const active = Array.from(state.activePurposes.values()).map((purpose) => {
-			const pAny = purpose as any // kilocode_change
+			const pAny = purpose as any // Society Agent
 			return {
 				id: purpose.purpose.id,
 				description: purpose.purpose.description,
@@ -2207,7 +2207,7 @@ app.get("/api/purpose/:purposeId", (req, res): void => {
 			return
 		}
 
-		const pAny = purpose as any // kilocode_change
+		const pAny = purpose as any // Society Agent
 		res.json({
 			id: purpose.purpose.id,
 			description: purpose.purpose.description,
@@ -2236,7 +2236,7 @@ app.get("/api/agents", (req, res): void => {
 		const agents: any[] = []
 
 		state.activePurposes.forEach((purpose) => {
-			const pAny = purpose as any // kilocode_change
+			const pAny = purpose as any // Society Agent
 			if (!pAny.team) return
 			pAny.team.getAllMembers().forEach((member: any) => {
 				agents.push({
@@ -2273,7 +2273,7 @@ app.get("/api/agent/:agentId", (req, res): void => {
 		let foundAgent: any = null
 
 		state.activePurposes.forEach((purpose) => {
-			const pAny = purpose as any // kilocode_change
+			const pAny = purpose as any // Society Agent
 			if (!pAny.team) return
 			const member = pAny.team.getAllMembers().find((m: any) => m.identity.id === req.params.agentId)
 			if (member) {
@@ -2325,7 +2325,7 @@ app.post("/api/agent/:agentId/stop", async (req, res) => {
 	}
 })
 
-// kilocode_change start - persistent agent CRUD endpoints
+// Society Agent start - persistent agent CRUD endpoints
 /**
  * Helper: get or create a live ConversationAgent from a persistent profile
  */
@@ -2333,9 +2333,9 @@ function getOrCreateAgent(profile: import("./persistent-agent-store").Persistent
 	const existing = activeAgents.get(profile.id)
 	if (existing) return existing
 
-	// kilocode_change start - use provider config instead of hardcoded Anthropic
+	// Society Agent start - use provider config instead of hardcoded Anthropic
 	const apiHandler = getApiHandlerFromConfig()
-	// kilocode_change end
+	// Society Agent end
 
 	// Build system prompt with memory context
 	let fullPrompt = profile.systemPrompt
@@ -2368,7 +2368,7 @@ function getOrCreateAgent(profile: import("./persistent-agent-store").Persistent
 				timestamp: Date.now(),
 			})
 		},
-		// kilocode_change start - summarization events
+		// Society Agent start - summarization events
 		onSummarizationStart: (meta) => {
 			log.info(`${profile.id}: Summarization started (${meta.messageCount} msgs, ~${meta.tokenCount} tokens, ${meta.contextPercent.toFixed(1)}%)`)
 			io.emit("summarization-start", { 
@@ -2393,7 +2393,7 @@ function getOrCreateAgent(profile: import("./persistent-agent-store").Persistent
 				timestamp: Date.now() 
 			})
 		},
-		// kilocode_change end
+		// Society Agent end
 	})
 
 	activeAgents.set(profile.id, agent)
@@ -2515,16 +2515,16 @@ app.post("/api/persistent-agents/:id/reset", (req, res): void => {
 		// Clear memory but keep stats
 		agentStore.updateMemory(req.params.id, "")
 		log.info(`Reset agent memory: ${req.params.id}`)
-		// kilocode_change - notify open agent pages
+		// Society Agent - notify open agent pages
 		io.emit("agent-reset", { agentId: req.params.id, timestamp: Date.now() })
 		res.json({ success: true, message: `Agent ${profile.name} memory cleared` })
 	} catch (error) {
 		res.status(500).json({ error: String(error) })
 	}
 })
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - project CRUD endpoints
+// Society Agent start - project CRUD endpoints
 
 /**
  * GET /api/projects - List all projects
@@ -2580,7 +2580,7 @@ app.post("/api/projects", (req, res): void => {
 			return
 		}
 		
-		// kilocode_change start - Auto-create Main Supervisor if no agents provided
+		// Society Agent start - Auto-create Main Supervisor if no agents provided
 		let projectAgents = agents
 		if (!agents || agents.length === 0) {
 			const supervisorId = "supervisor"
@@ -2691,11 +2691,11 @@ Examples:
 - Made an important decision? → write_file("DECISIONS.md", "...")
 
 This way you (and future sessions) don't have to re-learn everything!`,
-				homeFolder: "/", // kilocode_change - supervisor works in project root, not subfolder
+				homeFolder: "/", // Society Agent - supervisor works in project root, not subfolder
 			}]
 			log.info(`[Project] Auto-created Main Supervisor for project "${name}"`)
 		}
-		// kilocode_change end
+		// Society Agent end
 		
 		const project = projectStore.create({ id, name, description: description || "", folder, knowledge, agents: projectAgents })
 		io.emit("system-event", { type: "project-created", projectId: id, name, timestamp: Date.now() })
@@ -2818,7 +2818,7 @@ app.post("/api/projects/:projectId/agents/:agentId/reset", (req, res): void => {
 		}
 		activeAgents.delete(req.params.agentId)
 		projectStore.resetAgentMemory(req.params.projectId, req.params.agentId)
-		// kilocode_change - notify open agent pages
+		// Society Agent - notify open agent pages
 		io.emit("agent-reset", { agentId: req.params.agentId, projectId: req.params.projectId, timestamp: Date.now() })
 		res.json({ success: true, message: `Agent ${agent.name} memory cleared` })
 	} catch (error) {
@@ -2826,9 +2826,9 @@ app.post("/api/projects/:projectId/agents/:agentId/reset", (req, res): void => {
 	}
 })
 
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - agent chat history endpoint
+// Society Agent start - agent chat history endpoint
 /**
  * GET /api/agent/:agentId/history - Get conversation history for an agent
  * Returns messages from the live agent (if cached), plus summary if available.
@@ -2881,7 +2881,7 @@ app.delete("/api/agent/:agentId/history", (req, res): void => {
 	}
 })
 
-// kilocode_change start - history backups and context stats endpoints
+// Society Agent start - history backups and context stats endpoints
 /**
  * GET /api/agent/:agentId/history-backups - Get pre-summarization history backups
  * Returns array of backups, each with full messages before summarization occurred.
@@ -3041,10 +3041,10 @@ app.post("/api/agent/:agentId/backups-enabled", (req, res): void => {
 		res.status(500).json({ error: String(error) })
 	}
 })
-// kilocode_change end
-// kilocode_change end
+// Society Agent end
+// Society Agent end
 
-// kilocode_change start - agent-scoped workspace & chat routes (session-based, single port)
+// Society Agent start - agent-scoped workspace & chat routes (session-based, single port)
 
 /**
  * Helper: resolve agent's workspace directory.
@@ -3075,7 +3075,7 @@ function securePath(agentDir: string, relativePath: string): { ok: boolean; full
 	return { ok: true, fullPath }
 }
 
-// kilocode_change start - Unified agent tools (all agents have the same capabilities)
+// Society Agent start - Unified agent tools (all agents have the same capabilities)
 const AGENT_TOOLS: Anthropic.Tool[] = [
 	{
 		name: "run_command",
@@ -3090,7 +3090,7 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			required: ["command"],
 		},
 	},
-	// kilocode_change start - Mind tools for persistent memory
+	// Society Agent start - Mind tools for persistent memory
 	{
 		name: "read_file",
 		description: "Read a file from your folder. Use this to read any files you've created - notes, plans, code, etc. This is how you remember things between conversations.",
@@ -3114,7 +3114,7 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			required: ["path", "content"],
 		},
 	},
-	// kilocode_change start - patch_file for targeted edits
+	// Society Agent start - patch_file for targeted edits
 	{
 		name: "patch_file",
 		description: "Make a targeted edit to a file - replace specific text with new text. Much more efficient than rewriting entire files! Use this when you only need to change a small part of a file.",
@@ -3128,7 +3128,7 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			required: ["path", "old_text", "new_text"],
 		},
 	},
-	// kilocode_change end
+	// Society Agent end
 	{
 		name: "list_files",
 		description: "List files in a directory within your folder. Use this to see what files exist.",
@@ -3140,8 +3140,8 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			required: ["path"],
 		},
 	},
-	// kilocode_change end
-	// kilocode_change start - Inter-agent communication
+	// Society Agent end
+	// Society Agent start - Inter-agent communication
 	{
 		name: "ask_agent",
 		description: "Ask a question to another agent in your project (including the supervisor/architect). Use this to coordinate, ask for information, request help, or clarify requirements. The other agent will respond to your question.",
@@ -3187,8 +3187,8 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			required: [],
 		},
 	},
-	// kilocode_change end
-	// kilocode_change start - Allow workers to READ from project (other agents' folders)
+	// Society Agent end
+	// Society Agent start - Allow workers to READ from project (other agents' folders)
 	{
 		name: "read_project_file",
 		description: "Read a file from anywhere in the project (READ ONLY). Use this to read code created by other agents, shared configuration, or project documentation. You can read from any agent's folder but can only WRITE to your own folder.",
@@ -3200,7 +3200,7 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			required: ["path"],
 		},
 	},
-	// kilocode_change start - Global skills (read-only for agents)
+	// Society Agent start - Global skills (read-only for agents)
 	{
 		name: "list_global_skills",
 		description: "List all available global skills. Global skills are shared across all projects and can be read but NOT created by agents (only users can create global skills).",
@@ -3221,8 +3221,8 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			required: ["skill_name"],
 		},
 	},
-	// kilocode_change end - Global skills
-	// kilocode_change start - MCP server integration (read-only for agents, user registers servers)
+	// Society Agent end - Global skills
+	// Society Agent start - MCP server integration (read-only for agents, user registers servers)
 	{
 		name: "list_mcps",
 		description: "List available MCP servers. MCP servers provide external integrations (GitHub, Playwright, etc.). User-managed only - agents cannot register MCPs.",
@@ -3256,7 +3256,7 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			required: ["server_name", "tool_name"],
 		},
 	},
-	// kilocode_change end - MCP
+	// Society Agent end - MCP
 	{
 		name: "list_project_files",
 		description: "List files in any directory within the project. Use this to see what other agents have created, explore the project structure, and understand the codebase you need to test.",
@@ -3268,7 +3268,7 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			required: ["path"],
 		},
 	},
-	// kilocode_change start - Additional development tools
+	// Society Agent start - Additional development tools
 	{
 		name: "search_in_files",
 		description: "Search for text/code patterns in your folder or the entire project. Like grep - find where functions are defined, where imports are used, etc. Automatically excludes node_modules.",
@@ -3415,8 +3415,8 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			required: ["path"],
 		},
 	},
-	// kilocode_change end
-	// kilocode_change start - Task pool tools for workers
+	// Society Agent end
+	// Society Agent start - Task pool tools for workers
 	{
 		name: "claim_task",
 		description: "Claim the next available task from the pool. You'll receive full task context including what files to create, where, and what conventions to follow. After claiming, use complete_task when done or fail_task if stuck.",
@@ -3469,8 +3469,8 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			required: ["reason"],
 		},
 	},
-	// kilocode_change end
-	// kilocode_change start - Team management tools (previously supervisor-only, now for all agents)
+	// Society Agent end
+	// Society Agent start - Team management tools (previously supervisor-only, now for all agents)
 	{
 		name: "list_team",
 		description: "List all agents in your project team with their IDs, names, roles, and current status. Use this to see who is available before delegating or asking for help.",
@@ -3565,7 +3565,7 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			required: ["name", "role", "purpose"],
 		},
 	},
-	// kilocode_change end - All agents now have full capabilities
+	// Society Agent end - All agents now have full capabilities
 ]
 
 // Ephemeral agents get a subset of tools - no delegation or spawning capabilities
@@ -3586,7 +3586,7 @@ const EPHEMERAL_TOOLS: Anthropic.Tool[] = AGENT_TOOLS.filter(
  */
 /**
  * Execute a single tool call for an agent.
- * kilocode_change - UNIFIED: supervisors and workers are identical.
+ * Society Agent - UNIFIED: supervisors and workers are identical.
  * This wrapper delegates to executeAgentTool to ensure all agents use the same code.
  */
 async function executeSupervisorTool(
@@ -3611,16 +3611,16 @@ async function executeSupervisorTool(
 	return { result, filesCreated }
 }
 
-// kilocode_change start - Worker tool execution (restricted to their folder)
+// Society Agent start - Worker tool execution (restricted to their folder)
 async function executeAgentTool(
 	toolName: string,
 	toolInput: any,
 	agentConfig: ProjectAgentConfig,
 	project: Project,
 	io: SocketIOServer,
-	apiKey?: string, // kilocode_change - Optional API key for spawning sub-agents
+	apiKey?: string, // Society Agent - Optional API key for spawning sub-agents
 ): Promise<{ result: string; filesCreated: number }> {
-	// kilocode_change start - Use task's workingDirectory if worker has a claimed task
+	// Society Agent start - Use task's workingDirectory if worker has a claimed task
 	const claimedTask = projectStore.getTasks(project.id).find(
 		t => t.claimedBy === agentConfig.id && ["claimed", "in-progress"].includes(t.status)
 	)
@@ -3635,7 +3635,7 @@ async function executeAgentTool(
 		// Fall back to agent's home folder
 		workingFolder = projectStore.agentHomeDir(project.id, agentConfig.id)
 	}
-	// kilocode_change end
+	// Society Agent end
 	
 	// Also keep agentFolder for tools that need it (like memory files)
 	const agentFolder = projectStore.agentHomeDir(project.id, agentConfig.id)
@@ -3648,7 +3648,7 @@ async function executeAgentTool(
 		fs.mkdirSync(agentFolder, { recursive: true })
 	}
 
-	// kilocode_change start - Emit tool-execution event for UI visibility
+	// Society Agent start - Emit tool-execution event for UI visibility
 	// Format the input in a human-readable way
 	const formatToolDetails = () => {
 		switch (toolName) {
@@ -3692,19 +3692,19 @@ async function executeAgentTool(
 		timestamp: Date.now(),
 		status: "started",
 	})
-	// kilocode_change end
+	// Society Agent end
 
-	// kilocode_change start - Handle all worker tools
+	// Society Agent start - Handle all worker tools
 	switch (toolName) {
 		case "read_file": {
 			const { path: filePath } = toolInput as { path: string }
 			
-			// kilocode_change - Reject absolute paths
+			// Society Agent - Reject absolute paths
 			if (filePath && filePath.startsWith("/")) {
 				return { result: `❌ Use relative paths only! Your working folder is: ${workingFolder}\nTry: read_file("src/App.js") or read_project_file() for project files`, filesCreated: 0 }
 			}
 			
-			// kilocode_change - Use workingFolder for file operations
+			// Society Agent - Use workingFolder for file operations
 			const fullPath = path.join(workingFolder, filePath)
 			
 			// Security: ensure path is within working folder
@@ -3729,12 +3729,12 @@ async function executeAgentTool(
 		case "write_file": {
 			const { path: filePath, content } = toolInput as { path: string; content: string }
 			
-			// kilocode_change - Reject absolute paths
+			// Society Agent - Reject absolute paths
 			if (filePath && filePath.startsWith("/")) {
 				return { result: `❌ Use relative paths only! Your working folder is: ${workingFolder}\nTry: write_file("src/App.js", content)`, filesCreated: 0 }
 			}
 			
-			// kilocode_change - Use workingFolder (task's directory) for file operations
+			// Society Agent - Use workingFolder (task's directory) for file operations
 			const fullPath = path.join(workingFolder, filePath)
 			
 			// Security: ensure path is within working folder
@@ -3751,7 +3751,7 @@ async function executeAgentTool(
 				fs.writeFileSync(fullPath, content, "utf-8")
 				log.info(`[Worker ${agentConfig.name}] Wrote file: ${fullPath} (${content.length} bytes)`)
 				
-				// kilocode_change - Calculate path relative to projects dir for file explorer
+				// Society Agent - Calculate path relative to projects dir for file explorer
 				const projectsDir = projectStore.projectsBaseDir
 				const relativeToProjects = path.relative(projectsDir, fullPath)
 				
@@ -3770,10 +3770,10 @@ async function executeAgentTool(
 			}
 		}
 
-		// kilocode_change start - patch_file for targeted edits
+		// Society Agent start - patch_file for targeted edits
 		case "patch_file": {
 			const { path: filePath, old_text, new_text } = toolInput as { path: string; old_text: string; new_text: string }
-			// kilocode_change - Use workingFolder for file operations
+			// Society Agent - Use workingFolder for file operations
 			const fullPath = path.join(workingFolder, filePath)
 			
 			// Security: ensure path is within working folder
@@ -3818,18 +3818,18 @@ async function executeAgentTool(
 				return { result: `❌ Error patching file: ${err.message}`, filesCreated: 0 }
 			}
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		case "list_files": {
 			const { path: dirPath } = toolInput as { path: string }
 			
-			// kilocode_change start - Reject absolute paths (agent confusion prevention)
+			// Society Agent start - Reject absolute paths (agent confusion prevention)
 			if (dirPath && dirPath.startsWith("/")) {
 				return { result: `❌ Use relative paths only! Your working folder is: ${workingFolder}\nTry: list_files(".")  or  list_files("src")`, filesCreated: 0 }
 			}
-			// kilocode_change end
+			// Society Agent end
 			
-			// kilocode_change - Use workingFolder for file operations
+			// Society Agent - Use workingFolder for file operations
 			const fullPath = path.join(workingFolder, dirPath || ".")
 			
 			// Security: ensure path is within working folder
@@ -3842,7 +3842,7 @@ async function executeAgentTool(
 					return { result: `❌ Directory not found: ${dirPath}`, filesCreated: 0 }
 				}
 				const items = fs.readdirSync(fullPath, { withFileTypes: true })
-				// kilocode_change - Filter out noise directories
+				// Society Agent - Filter out noise directories
 				const ignoreDirs = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.cache', 'coverage', '__pycache__'])
 				const listing = items
 					.filter(i => {
@@ -3866,14 +3866,14 @@ async function executeAgentTool(
 				timeout_ms?: number
 			}
 
-			// kilocode_change start - Validate command before executing
+			// Society Agent start - Validate command before executing
 			if (!command || typeof command !== "string") {
 				log.error(`[Worker ${agentConfig.name}] run_command received invalid command: ${JSON.stringify(toolInput)}`)
 				return { result: `❌ Error: run_command requires a valid 'command' string parameter. Received: ${JSON.stringify(toolInput)}`, filesCreated: 0 }
 			}
-			// kilocode_change end
+			// Society Agent end
 
-			// kilocode_change - Use workingFolder for commands
+			// Society Agent - Use workingFolder for commands
 			log.info(`[Worker ${agentConfig.name}] Running: ${command} (cwd: ${workingFolder}, bg: ${background || false})`)
 
 			io.emit("system-event", {
@@ -3960,17 +3960,17 @@ async function executeAgentTool(
 	}
 
 	// Foreground execution with real-time streaming
-	// kilocode_change start - Use spawn instead of execSync to stream output
+	// Society Agent start - Use spawn instead of execSync to stream output
 	const { spawn } = await import("child_process")
 	const timeout = timeout_ms || 300000 // 5 minutes default
 
-	// kilocode_change start - Auto-prepend sudo for apt commands
+	// Society Agent start - Auto-prepend sudo for apt commands
 	let finalCommand = command
 	if (/^\s*(apt-get|apt|dpkg)\s/.test(command) && !command.includes("sudo")) {
 		finalCommand = `sudo ${command}`
 		log.info(`[Worker ${agentConfig.name}] Auto-prepending sudo: ${finalCommand}`)
 	}
-	// kilocode_change end
+	// Society Agent end
 
 	return new Promise<{ result: string; filesCreated: number }>((resolve) => {
 		let output = ""
@@ -3988,7 +3988,7 @@ async function executeAgentTool(
 		})
 
 		const child = spawn("bash", ["-c", finalCommand], {
-			cwd: workingFolder, // kilocode_change - Use workingFolder for commands
+			cwd: workingFolder, // Society Agent - Use workingFolder for commands
 			env: { ...process.env, FORCE_COLOR: "0" },
 		})
 
@@ -4057,10 +4057,10 @@ async function executeAgentTool(
 			resolve({ result: `❌ Command error: ${err.message}`, filesCreated: 0 })
 		})
 	})
-	// kilocode_change end
+	// Society Agent end
 }
 
-	// kilocode_change start - Inter-agent communication tools
+	// Society Agent start - Inter-agent communication tools
 	case "ask_agent": {
 			const { agent_id, question } = toolInput as { agent_id: string; question: string }
 			const targetAgent = project.agents.find(a => a.id === agent_id)
@@ -4086,7 +4086,7 @@ async function executeAgentTool(
 			})
 
 			try {
-				// kilocode_change start - use createOneShot for inter-agent communication
+				// Society Agent start - use createOneShot for inter-agent communication
 				const targetFolder = projectStore.agentHomeDir(project.id, targetAgent.id)
 				const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 				
@@ -4098,7 +4098,7 @@ Another agent (${agentConfig.name}) is asking you a question. Answer briefly and
 If you don't know, say so. Be concise.`,
 					`[Question from ${agentConfig.name}]: ${question}`
 				)
-				// kilocode_change end
+				// Society Agent end
 				
 				io.emit("agent-message", {
 					agentId: agentConfig.id,
@@ -4123,9 +4123,9 @@ If you don't know, say so. Be concise.`,
 			}).join('\n')
 			return { result: `📋 **Agents in project "${project.name}":**\n${agents}`, filesCreated: 0 }
 		}
-		// kilocode_change end
+		// Society Agent end
 
-		// kilocode_change start - Allow workers to READ from project (other agents' folders)
+		// Society Agent start - Allow workers to READ from project (other agents' folders)
 		case "read_project_file": {
 			const { path: filePath } = toolInput as { path: string }
 			const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
@@ -4182,9 +4182,9 @@ If you don't know, say so. Be concise.`,
 				return { result: `❌ Error listing directory: ${err.message}`, filesCreated: 0 }
 			}
 		}
-		// kilocode_change end
+		// Society Agent end
 
-		// kilocode_change start - Global skills implementations
+		// Society Agent start - Global skills implementations
 		case "list_global_skills": {
 			const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 			const globalSkillsDir = path.join(workspacePath, "skills")
@@ -4237,9 +4237,9 @@ If you don't know, say so. Be concise.`,
 				return { result: `❌ Error reading global skill: ${err.message}`, filesCreated: 0 }
 			}
 		}
-		// kilocode_change end - Global skills
+		// Society Agent end - Global skills
 
-		// kilocode_change start - MCP tool implementations
+		// Society Agent start - MCP tool implementations
 		case "list_mcps": {
 			try {
 				const mcpManager = getMcpManager()
@@ -4271,9 +4271,9 @@ If you don't know, say so. Be concise.`,
 				return { result: `❌ MCP tool call failed: ${err.message}`, filesCreated: 0 }
 			}
 		}
-		// kilocode_change end - MCP
+		// Society Agent end - MCP
 
-		// kilocode_change start - Additional development tools implementations
+		// Society Agent start - Additional development tools implementations
 		case "search_in_files": {
 			const { pattern, path: searchPath, file_pattern } = toolInput as { pattern: string; path?: string; file_pattern?: string }
 			const { execSync } = await import("child_process")
@@ -4288,7 +4288,7 @@ If you don't know, say so. Be concise.`,
 			
 			try {
 				const fileGlob = file_pattern || "*"
-				// kilocode_change - Exclude node_modules, .git, dist, build, coverage from search
+				// Society Agent - Exclude node_modules, .git, dist, build, coverage from search
 				const excludeDirs = "--exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist --exclude-dir=build --exclude-dir=coverage --exclude-dir=.next --exclude-dir=.cache"
 				const cmd = `grep -rn ${excludeDirs} --include="${fileGlob}" "${pattern}" . 2>/dev/null | head -50`
 				const output = execSync(cmd, { cwd: searchDir, encoding: "utf-8", timeout: 30000 })
@@ -4299,7 +4299,7 @@ If you don't know, say so. Be concise.`,
 			}
 		}
 
-		// kilocode_change start - find_files tool (excludes node_modules etc)
+		// Society Agent start - find_files tool (excludes node_modules etc)
 		case "find_files": {
 			const { name_pattern, path: searchPath, type } = toolInput as { name_pattern: string; path?: string; type?: string }
 			const { execSync } = await import("child_process")
@@ -4329,7 +4329,7 @@ If you don't know, say so. Be concise.`,
 				return { result: `❌ Find error: ${err.message}`, filesCreated: 0 }
 			}
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		case "delete_file": {
 			const { path: filePath } = toolInput as { path: string }
@@ -4431,7 +4431,7 @@ If you don't know, say so. Be concise.`,
 			try {
 				const stagedFlag = staged ? "--cached " : ""
 				const file = filePath || ""
-				// kilocode_change - Use workingFolder for git commands
+				// Society Agent - Use workingFolder for git commands
 				const diff = execSync(`git diff ${stagedFlag}${file} 2>/dev/null | head -100`, { cwd: workingFolder, encoding: "utf-8" })
 				return { result: diff ? `📝 **Git Diff${filePath ? ` (${filePath})` : ""}:**\n\`\`\`diff\n${diff}\n\`\`\`` : `(no changes)`, filesCreated: 0 }
 			} catch (err: any) {
@@ -4533,9 +4533,9 @@ If you don't know, say so. Be concise.`,
 				return { result: `❌ Error: ${err.message}`, filesCreated: 0 }
 			}
 		}
-		// kilocode_change end
+		// Society Agent end
 
-		// kilocode_change start - Worker send_message (async to inbox)
+		// Society Agent start - Worker send_message (async to inbox)
 		case "send_message": {
 			const { agent_id, message, priority } = toolInput as { agent_id: string; message: string; priority?: string }
 			const targetAgent = project.agents.find(a => a.id === agent_id)
@@ -4561,9 +4561,9 @@ If you don't know, say so. Be concise.`,
 
 			return { result: `✅ Message sent to ${targetAgent.name}'s inbox${priority === "urgent" ? " (URGENT)" : ""}.`, filesCreated: 0 }
 		}
-		// kilocode_change end
+		// Society Agent end
 
-		// kilocode_change start - Worker read_inbox
+		// Society Agent start - Worker read_inbox
 		case "read_inbox": {
 			const { mark_read } = toolInput as { mark_read?: boolean }
 			const messages = readInbox(project.id, agentConfig.id, mark_read !== false)
@@ -4580,9 +4580,9 @@ If you don't know, say so. Be concise.`,
 
 			return { result: `📬 **${messages.length} message(s) in your inbox:**\n\n${formatted}`, filesCreated: 0 }
 		}
-		// kilocode_change end
+		// Society Agent end
 
-		// kilocode_change start - Worker task pool tools
+		// Society Agent start - Worker task pool tools
 		case "claim_task": {
 			const { task_id } = toolInput as { task_id?: string }
 			
@@ -4772,7 +4772,7 @@ If you don't know, say so. Be concise.`,
 			
 			return { result: `❌ **Task failed: ${myTask.title}**\n\nReason: ${reason}\n\nThe task has been returned to the pool for another worker.${agentConfig.ephemeral ? '\n\n👋 You will now self-destruct.' : ''}`, filesCreated: 0 }
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		default:
 			return { result: `Unknown tool: ${toolName}`, filesCreated: 0 }
@@ -4788,11 +4788,11 @@ async function handleWorkerChat(
 	project: Project,
 	apiKey: string,
 	io: SocketIOServer,
-	attachments?: any[], // kilocode_change - added attachments parameter for images
+	attachments?: any[], // Society Agent - added attachments parameter for images
 ): Promise<{ fullResponse: string }> {
 	log.info(`[handleWorkerChat] Called for ${agentConfig.id} with message: ${userMessage.substring(0, 80)}${attachments?.length ? ` + ${attachments.length} attachment(s)` : ''}`)
 	
-	// kilocode_change start - Activity log: task received
+	// Society Agent start - Activity log: task received
 	activityLogger.log({
 		projectId: project.id,
 		agentId: agentConfig.id,
@@ -4801,16 +4801,16 @@ async function handleWorkerChat(
 		summary: `Received task: ${userMessage.substring(0, 100)}${userMessage.length > 100 ? "..." : ""}`,
 		details: { messageLength: userMessage.length },
 	})
-	// kilocode_change end
+	// Society Agent end
 
-	// kilocode_change start - use provider config for model and API key
+	// Society Agent start - use provider config for model and API key
 	// Priority: 1) Standalone settings 2) ProviderSettings 3) Legacy config 4) Environment
 	let anthropic: Anthropic | null = null
-	let openRouterClient: OpenAI | null = null  // kilocode_change - OpenRouter support
+	let openRouterClient: OpenAI | null = null  // Society Agent - OpenRouter support
 	let model: string
-	let useOpenRouter = false  // kilocode_change - flag for OpenRouter
+	let useOpenRouter = false  // Society Agent - flag for OpenRouter
 
-	// kilocode_change start - Check standalone settings FIRST
+	// Society Agent start - Check standalone settings FIRST
 	if (standaloneSettings.isInitialized() && standaloneSettings.hasApiKey()) {
 		const providerConfig = standaloneSettings.getProvider()
 		log.info(`[handleWorkerChat] Using standalone settings: ${providerConfig.type}/${providerConfig.model}`)
@@ -4842,10 +4842,10 @@ async function handleWorkerChat(
 			model = providerConfig.model
 		}
 	}
-	// kilocode_change end
+	// Society Agent end
 	else if (currentProviderSettings) {
 		const provider = currentProviderSettings.apiProvider
-		// kilocode_change start - OpenRouter support
+		// Society Agent start - OpenRouter support
 		if (provider === "openrouter") {
 			useOpenRouter = true
 			openRouterClient = new OpenAI({
@@ -4855,7 +4855,7 @@ async function handleWorkerChat(
 			model = currentProviderSettings.openRouterModelId || "anthropic/claude-sonnet-4"
 			log.info(`[handleWorkerChat] Using OpenRouter with model: ${model}`)
 		}
-		// kilocode_change end
+		// Society Agent end
 		// Tool calling requires Anthropic-compatible API (Anthropic or MiniMax)
 		else if (provider === "anthropic" || provider === "minimax") {
 			anthropic = new Anthropic({
@@ -4882,7 +4882,7 @@ async function handleWorkerChat(
 	} else {
 		// Legacy provider config
 		const providerConfig = currentProviderConfig || loadProviderConfig(process.env.WORKSPACE_PATH || process.cwd())
-		// kilocode_change start - OpenRouter legacy support
+		// Society Agent start - OpenRouter legacy support
 		if (providerConfig && providerConfig.provider === "openrouter" && providerConfig.apiKey) {
 			useOpenRouter = true
 			openRouterClient = new OpenAI({
@@ -4891,7 +4891,7 @@ async function handleWorkerChat(
 			})
 			model = providerConfig.model || "anthropic/claude-sonnet-4"
 		}
-		// kilocode_change end
+		// Society Agent end
 		// Tool calling requires Anthropic-compatible API (Anthropic or MiniMax)
 		else if (providerConfig && (providerConfig.provider === "anthropic" || providerConfig.provider === "minimax")) {
 			anthropic = new Anthropic({
@@ -4904,13 +4904,13 @@ async function handleWorkerChat(
 			model = "claude-sonnet-4-20250514"
 		}
 	}
-	// kilocode_change end
+	// Society Agent end
 	const agent = getOrCreateProjectAgent(agentConfig, project, apiKey)
 
-	// kilocode_change - Use proper homeFolder from config
+	// Society Agent - Use proper homeFolder from config
 	const agentFolder = projectStore.agentHomeDir(project.id, agentConfig.id)
 	
-	// kilocode_change start - Build folder context for persistent memory
+	// Society Agent start - Build folder context for persistent memory
 	let folderContext = ""
 	try {
 		// Check what exists in folder
@@ -4950,7 +4950,7 @@ async function handleWorkerChat(
 	} catch (e) {
 		log.warn(`[handleWorkerChat] Error reading folder context: ${e}`)
 	}
-	// kilocode_change end
+	// Society Agent end
 	
 	const systemPrompt = `${agentConfig.systemPrompt || `You are ${agentConfig.name}, a worker agent.`}
 
@@ -5078,7 +5078,7 @@ See all agents you can communicate with.
 3. Match test imports to REAL file paths and component names
 4. If a test fails, fix it immediately - don't leave broken tests`
 
-	// kilocode_change start - Build content with attachments (images)
+	// Society Agent start - Build content with attachments (images)
 	let messageContent: string | Array<{ type: string; [key: string]: any }>
 	if (attachments && attachments.length > 0) {
 		// Build content blocks with images
@@ -5123,7 +5123,7 @@ See all agents you can communicate with.
 	} else {
 		messageContent = userMessage
 	}
-	// kilocode_change end
+	// Society Agent end
 
 	await (agent as any).addMessage("user", messageContent)
 	const history = agent.getHistory()
@@ -5133,15 +5133,15 @@ See all agents you can communicate with.
 	}))
 
 	let fullResponse = ""
-	const maxIterations = 15 // kilocode_change - Increased from 5 to allow auto-continue
+	const maxIterations = 15 // Society Agent - Increased from 5 to allow auto-continue
 
-	// kilocode_change start - Use appropriate tools based on agent type
+	// Society Agent start - Use appropriate tools based on agent type
 	const agentTools = agentConfig.ephemeral ? EPHEMERAL_TOOLS : AGENT_TOOLS
-	// kilocode_change end
+	// Society Agent end
 
 	log.info(`[handleAgentChat] Starting loop with model ${model}, ${messages.length} messages, ${agentTools.length} tools, useOpenRouter=${useOpenRouter}, ephemeral=${!!agentConfig.ephemeral}`)
 
-	// kilocode_change start - OpenRouter uses OpenAI SDK, need to convert tools
+	// Society Agent start - OpenRouter uses OpenAI SDK, need to convert tools
 	const openAiTools: OpenAI.Chat.ChatCompletionTool[] = useOpenRouter ? agentTools.map((t) => ({
 		type: "function" as const,
 		function: {
@@ -5150,12 +5150,12 @@ See all agents you can communicate with.
 			parameters: t.input_schema as Record<string, unknown>,
 		},
 	})) : []
-	// kilocode_change end
+	// Society Agent end
 
 	for (let iteration = 0; iteration < maxIterations; iteration++) {
 		log.info(`[handleWorkerChat] Iteration ${iteration + 1}`)
 		
-		// kilocode_change start - Check if agent was stopped
+		// Society Agent start - Check if agent was stopped
 		if (stoppedAgents.has(agentConfig.id)) {
 			log.info(`[Worker] ${agentConfig.name} was stopped by user`)
 			stoppedAgents.delete(agentConfig.id) // Clean up
@@ -5170,9 +5170,9 @@ See all agents you can communicate with.
 			})
 			break
 		}
-		// kilocode_change end
+		// Society Agent end
 		
-		// kilocode_change start - OpenRouter branch using OpenAI SDK
+		// Society Agent start - OpenRouter branch using OpenAI SDK
 		if (useOpenRouter && openRouterClient) {
 			// Convert Anthropic messages to OpenAI format
 			const openAiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
@@ -5240,14 +5240,14 @@ See all agents you can communicate with.
 				return true
 			})
 			
-			// kilocode_change start - TRUE STREAMING for OpenRouter
+			// Society Agent start - TRUE STREAMING for OpenRouter
 			const stream = await openRouterClient.chat.completions.create({
 				model,
 				max_tokens: 16384,
 				messages: validMessages,
 				tools: openAiTools,
 				stream: true,
-				stream_options: { include_usage: true }, // kilocode_change - get token usage in stream
+				stream_options: { include_usage: true }, // Society Agent - get token usage in stream
 			})
 			
 			let textContent = ""
@@ -5258,11 +5258,11 @@ See all agents you can communicate with.
 			
 			// Stream text in real-time
 			for await (const chunk of stream) {
-				// kilocode_change start - Capture usage from stream
+				// Society Agent start - Capture usage from stream
 				if ((chunk as any).usage) {
 					streamUsage = (chunk as any).usage
 				}
-				// kilocode_change end
+				// Society Agent end
 				
 				const choice = chunk.choices[0]
 				if (!choice) continue
@@ -5308,7 +5308,7 @@ See all agents you can communicate with.
 				function: { name: tc.name, arguments: tc.arguments }
 			}))
 			
-			// kilocode_change start - Track usage from streaming response
+			// Society Agent start - Track usage from streaming response
 			if (streamUsage) {
 				usageTracker.record({
 					projectId: project.id,
@@ -5319,7 +5319,7 @@ See all agents you can communicate with.
 					outputTokens: streamUsage.completion_tokens || 0,
 				})
 			}
-			// kilocode_change end
+			// Society Agent end
 			
 			if (toolCalls.length === 0) {
 				if (finishReason === "stop") {
@@ -5360,7 +5360,7 @@ See all agents you can communicate with.
 				const toolName = toolCall.function.name
 				const toolInput = safeParseToolArgs(toolCall.function.arguments)
 				
-				// kilocode_change start - Show detailed tool info for ALL tools
+				// Society Agent start - Show detailed tool info for ALL tools
 				let toolDisplay = `🔧 **${toolName}**`
 				if (toolName === "run_command" && toolInput.command) {
 					toolDisplay += `\n\`\`\`bash\n${toolInput.command}\n\`\`\``
@@ -5380,7 +5380,7 @@ See all agents you can communicate with.
 				} else if (toolName === "search_files" && toolInput.query) {
 					toolDisplay += ` → "${toolInput.query}"`
 				}
-				// kilocode_change end
+				// Society Agent end
 				
 				io.emit("agent-message", {
 					agentId: agentConfig.id,
@@ -5426,7 +5426,7 @@ See all agents you can communicate with.
 			messages.push({ role: "user", content: toolResults })
 			continue
 		}
-		// kilocode_change end - OpenRouter branch
+		// Society Agent end - OpenRouter branch
 		
 		// Original Anthropic SDK path
 		if (!anthropic) {
@@ -5434,7 +5434,7 @@ See all agents you can communicate with.
 		}
 		const stream = await anthropic.messages.stream({
 			model,
-			max_tokens: 16384, // kilocode_change - Increased from 4096 for longer tasks
+			max_tokens: 16384, // Society Agent - Increased from 4096 for longer tasks
 			system: systemPrompt,
 			messages,
 			tools: agentTools,
@@ -5443,7 +5443,7 @@ See all agents you can communicate with.
 		let textContent = ""
 		const finalMessage = await stream.finalMessage()
 
-		// kilocode_change start - Track token usage
+		// Society Agent start - Track token usage
 		if (finalMessage.usage) {
 			usageTracker.record({
 				projectId: project.id,
@@ -5454,7 +5454,7 @@ See all agents you can communicate with.
 				outputTokens: finalMessage.usage.output_tokens,
 			})
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		for (const block of finalMessage.content) {
 			if (block.type === "text") {
@@ -5474,7 +5474,7 @@ See all agents you can communicate with.
 
 		const toolBlocks = finalMessage.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use")
 
-		// kilocode_change start - Auto-continue on max_tokens, only stop on explicit end_turn
+		// Society Agent start - Auto-continue on max_tokens, only stop on explicit end_turn
 		if (toolBlocks.length === 0) {
 			if (finalMessage.stop_reason === "end_turn") {
 				// Model explicitly finished - done
@@ -5498,7 +5498,7 @@ See all agents you can communicate with.
 				break
 			}
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		messages.push({ role: "assistant", content: finalMessage.content })
 
@@ -5506,7 +5506,7 @@ See all agents you can communicate with.
 		for (const toolBlock of toolBlocks) {
 			const input = toolBlock.input as Record<string, any>
 			
-			// kilocode_change start - Show detailed tool info for ALL tools
+			// Society Agent start - Show detailed tool info for ALL tools
 			let toolDisplay = `🔧 **${toolBlock.name}**`
 			if (toolBlock.name === "run_command" && input.command) {
 				toolDisplay += `\n\`\`\`bash\n${input.command}\n\`\`\``
@@ -5526,7 +5526,7 @@ See all agents you can communicate with.
 			} else if (toolBlock.name === "search_files" && input.query) {
 				toolDisplay += ` → "${input.query}"`
 			}
-			// kilocode_change end
+			// Society Agent end
 			
 			io.emit("agent-message", {
 				agentId: agentConfig.id,
@@ -5545,7 +5545,7 @@ See all agents you can communicate with.
 				io,
 			)
 
-			// kilocode_change start - Activity log: tool used
+			// Society Agent start - Activity log: tool used
 			activityLogger.log({
 				projectId: project.id,
 				agentId: agentConfig.id,
@@ -5554,7 +5554,7 @@ See all agents you can communicate with.
 				summary: `Used ${toolBlock.name}: ${result.substring(0, 80)}${result.length > 80 ? "..." : ""}`,
 				details: { tool: toolBlock.name, input: toolBlock.input, resultLength: result.length },
 			})
-			// kilocode_change end
+			// Society Agent end
 
 			// Show result in UI
 			let resultDisplay = result
@@ -5580,7 +5580,7 @@ See all agents you can communicate with.
 
 		messages.push({ role: "user", content: toolResults })
 
-		// kilocode_change start - Auto-recovery: detect failures and prompt agent to fix
+		// Society Agent start - Auto-recovery: detect failures and prompt agent to fix
 		const hasError = toolResults.some(tr => {
 			const content = typeof tr.content === 'string' ? tr.content : ''
 			return content.includes('❌') || 
@@ -5602,7 +5602,7 @@ See all agents you can communicate with.
 				isStreaming: true,
 			})
 		}
-		// kilocode_change end
+		// Society Agent end
 	}
 
 	io.emit("agent-message", {
@@ -5615,7 +5615,7 @@ See all agents you can communicate with.
 		isDone: true,
 	})
 
-	// kilocode_change start - Activity log: task completed
+	// Society Agent start - Activity log: task completed
 	activityLogger.log({
 		projectId: project.id,
 		agentId: agentConfig.id,
@@ -5624,12 +5624,12 @@ See all agents you can communicate with.
 		summary: `Completed task (${fullResponse.length} chars response)`,
 		details: { responseLength: fullResponse.length },
 	})
-	// kilocode_change end
+	// Society Agent end
 
 	await (agent as any).addMessage("assistant", fullResponse)
 	return { fullResponse }
 }
-// kilocode_change end
+// Society Agent end
 
 /**
  * Handle supervisor chat with an agentic tool-use loop.
@@ -5647,7 +5647,7 @@ async function handleSupervisorChat(
 	delegationResults: Array<{ agentId: string; agentName: string; filesCreated: number; responseLength: number }>
 	totalFilesCreated: number
 }> {
-	// kilocode_change start - Progress indicator at start
+	// Society Agent start - Progress indicator at start
 	io.emit("agent-message", {
 		agentId: supervisorConfig.id,
 		agentName: supervisorConfig.name,
@@ -5657,16 +5657,16 @@ async function handleSupervisorChat(
 		isStreaming: true,
 		isProgress: true,
 	})
-	// kilocode_change end
+	// Society Agent end
 
-	// kilocode_change start - use provider config for model and API key
+	// Society Agent start - use provider config for model and API key
 	// Priority: 1) Standalone settings 2) ProviderSettings 3) Legacy config 4) Environment
 	let anthropic: Anthropic | null = null
 	let openRouterClient: OpenAI | null = null
 	let model: string
 	let useOpenRouter = false
 
-	// kilocode_change start - Check standalone settings FIRST
+	// Society Agent start - Check standalone settings FIRST
 	if (standaloneSettings.isInitialized() && standaloneSettings.hasApiKey()) {
 		const providerConfig = standaloneSettings.getProvider()
 		log.info(`[handleSupervisorChat] Using standalone settings: ${providerConfig.type}/${providerConfig.model}`)
@@ -5696,10 +5696,10 @@ async function handleSupervisorChat(
 			model = providerConfig.model
 		}
 	}
-	// kilocode_change end
+	// Society Agent end
 	else if (currentProviderSettings) {
 		const provider = currentProviderSettings.apiProvider
-		// kilocode_change start - Handle OpenRouter in currentProviderSettings
+		// Society Agent start - Handle OpenRouter in currentProviderSettings
 		if (provider === "openrouter") {
 			useOpenRouter = true
 			openRouterClient = new OpenAI({
@@ -5709,7 +5709,7 @@ async function handleSupervisorChat(
 			model = supervisorConfig.model || currentProviderSettings.openRouterModelId || "anthropic/claude-sonnet-4"
 			log.info(`[handleSupervisorChat] Using OpenRouter: ${model}`)
 		}
-		// kilocode_change end
+		// Society Agent end
 		// Tool calling requires Anthropic-compatible API (Anthropic or MiniMax)
 		else if (provider === "anthropic" || provider === "minimax") {
 			anthropic = new Anthropic({
@@ -5734,7 +5734,7 @@ async function handleSupervisorChat(
 	} else {
 		// Legacy provider config
 		const providerConfig = currentProviderConfig || loadProviderConfig(process.env.WORKSPACE_PATH || process.cwd())
-		// kilocode_change start - Handle OpenRouter in legacy config
+		// Society Agent start - Handle OpenRouter in legacy config
 		if (providerConfig && providerConfig.provider === "openrouter" && providerConfig.apiKey) {
 			useOpenRouter = true
 			openRouterClient = new OpenAI({
@@ -5743,7 +5743,7 @@ async function handleSupervisorChat(
 			})
 			model = supervisorConfig.model || providerConfig.model || "anthropic/claude-sonnet-4"
 		}
-		// kilocode_change end
+		// Society Agent end
 		// Tool calling requires Anthropic-compatible API (Anthropic or MiniMax)
 		else if (providerConfig && (providerConfig.provider === "anthropic" || providerConfig.provider === "minimax")) {
 			anthropic = new Anthropic({
@@ -5756,7 +5756,7 @@ async function handleSupervisorChat(
 			model = supervisorConfig.model || "claude-sonnet-4-20250514"
 		}
 	}
-	// kilocode_change end
+	// Society Agent end
 	const agent = getOrCreateProjectAgent(supervisorConfig, project, apiKey)
 
 	// Access the agent's system prompt (private field, accessed via cast)
@@ -5775,13 +5775,13 @@ async function handleSupervisorChat(
 	let fullResponse = ""
 	const delegationResults: Array<{ agentId: string; agentName: string; filesCreated: number; responseLength: number }> = []
 	let totalFilesCreated = 0
-	const MAX_TOOL_ITERATIONS = 15 // kilocode_change - Increased from 10 for auto-continue
-	let lastActionDescription = "" // kilocode_change - Track what the last step did
+	const MAX_TOOL_ITERATIONS = 15 // Society Agent - Increased from 10 for auto-continue
+	let lastActionDescription = "" // Society Agent - Track what the last step did
 
 	for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
 		log.info(`[Supervisor] ${supervisorConfig.name} iteration ${iteration + 1}, ${messages.length} messages, useOpenRouter=${useOpenRouter}`)
 
-		// kilocode_change start - Check if agent was stopped
+		// Society Agent start - Check if agent was stopped
 		if (stoppedAgents.has(supervisorConfig.id)) {
 			log.info(`[Supervisor] ${supervisorConfig.name} was stopped by user`)
 			stoppedAgents.delete(supervisorConfig.id) // Clean up
@@ -5796,9 +5796,9 @@ async function handleSupervisorChat(
 			})
 			break
 		}
-		// kilocode_change end
+		// Society Agent end
 
-		// kilocode_change start - Progress indicators
+		// Society Agent start - Progress indicators
 		if (iteration > 0) {
 			const progressMsg = lastActionDescription 
 				? `\n⏳ **Step ${iteration + 1}** - Continuing after: ${lastActionDescription}\n`
@@ -5813,9 +5813,9 @@ async function handleSupervisorChat(
 				isProgress: true,
 			})
 		}
-		// kilocode_change end
+		// Society Agent end
 
-		// kilocode_change start - OpenRouter path for supervisor
+		// Society Agent start - OpenRouter path for supervisor
 		if (useOpenRouter && openRouterClient) {
 			// Convert AGENT_TOOLS to OpenAI function format
 			const openAITools: OpenAI.Chat.ChatCompletionTool[] = AGENT_TOOLS.map((tool: any) => ({
@@ -5866,14 +5866,14 @@ async function handleSupervisorChat(
 				}
 			}
 
-			// kilocode_change start - TRUE STREAMING for OpenRouter supervisor
+			// Society Agent start - TRUE STREAMING for OpenRouter supervisor
 			const stream = await openRouterClient.chat.completions.create({
 				model,
 				max_tokens: 16384,
 				messages: openAIMessages,
 				tools: openAITools,
 				stream: true,
-				stream_options: { include_usage: true }, // kilocode_change - get token usage in stream
+				stream_options: { include_usage: true }, // Society Agent - get token usage in stream
 			})
 
 			let textContent = ""
@@ -5883,11 +5883,11 @@ async function handleSupervisorChat(
 			
 			// Stream text in real-time
 			for await (const chunk of stream) {
-				// kilocode_change start - Capture usage from stream
+				// Society Agent start - Capture usage from stream
 				if ((chunk as any).usage) {
 					streamUsage = (chunk as any).usage
 				}
-				// kilocode_change end
+				// Society Agent end
 				
 				const choice = chunk.choices[0]
 				if (!choice) continue
@@ -5933,7 +5933,7 @@ async function handleSupervisorChat(
 				function: { name: tc.name, arguments: tc.arguments }
 			}))
 			
-			// kilocode_change start - Track usage from streaming response
+			// Society Agent start - Track usage from streaming response
 			if (streamUsage) {
 				usageTracker.record({
 					projectId: project.id,
@@ -5944,7 +5944,7 @@ async function handleSupervisorChat(
 					outputTokens: streamUsage.completion_tokens || 0,
 				})
 			}
-			// kilocode_change end
+			// Society Agent end
 
 			// Check for tool calls
 			if (toolCallsList.length === 0) {
@@ -5981,7 +5981,7 @@ async function handleSupervisorChat(
 				const toolInput = safeParseToolArgs(toolCall.function.arguments)
 				log.info(`[Supervisor] OpenRouter Tool call: ${toolName}(${JSON.stringify(toolInput).substring(0, 200)})`)
 
-				// kilocode_change start - Show detailed tool info for ALL tools
+				// Society Agent start - Show detailed tool info for ALL tools
 				let toolDisplay = `🔧 **${toolName}**`
 				if (toolName === "run_command" && toolInput.command) {
 					toolDisplay += `\n\`\`\`bash\n${toolInput.command}\n\`\`\``
@@ -6000,7 +6000,7 @@ async function handleSupervisorChat(
 				} else if (toolName === "delegate_task" && toolInput.agent_id) {
 					toolDisplay += ` → ${toolInput.agent_id}: ${(toolInput.task || '').substring(0, 50)}...`
 				}
-				// kilocode_change end
+				// Society Agent end
 
 				io.emit("agent-message", {
 					agentId: supervisorConfig.id,
@@ -6044,7 +6044,7 @@ async function handleSupervisorChat(
 				toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result })
 			}
 
-			// kilocode_change start - Track what tools were used for progress message
+			// Society Agent start - Track what tools were used for progress message
 			const toolNames = toolCallsList.map((tc: any) => {
 				const name = tc.function.name
 				const args = safeParseToolArgs(tc.function.arguments)
@@ -6057,12 +6057,12 @@ async function handleSupervisorChat(
 				return name.replace(/_/g, ' ')
 			})
 			lastActionDescription = toolNames.join(", ")
-			// kilocode_change end
+			// Society Agent end
 
 			messages.push({ role: "user", content: toolResults })
 			continue
 		}
-		// kilocode_change end - OpenRouter path
+		// Society Agent end - OpenRouter path
 
 		// Anthropic path
 		if (!anthropic) {
@@ -6071,13 +6071,13 @@ async function handleSupervisorChat(
 
 		const stream = await anthropic.messages.stream({
 			model,
-			max_tokens: 16384, // kilocode_change - Increased from 8096 for longer tasks
+			max_tokens: 16384, // Society Agent - Increased from 8096 for longer tasks
 			system: systemPrompt,
 			messages,
 			tools: AGENT_TOOLS,
 		})
 
-		// kilocode_change start - TRUE STREAMING: emit text as it arrives
+		// Society Agent start - TRUE STREAMING: emit text as it arrives
 		let textContent = ""
 		
 		// Stream text chunks in real-time
@@ -6096,9 +6096,9 @@ async function handleSupervisorChat(
 
 		// Wait for complete message (needed for tool_use blocks)
 		const finalMessage = await stream.finalMessage()
-		// kilocode_change end
+		// Society Agent end
 
-		// kilocode_change start - Track token usage for supervisor
+		// Society Agent start - Track token usage for supervisor
 		if (finalMessage.usage) {
 			usageTracker.record({
 				projectId: project.id,
@@ -6109,14 +6109,14 @@ async function handleSupervisorChat(
 				outputTokens: finalMessage.usage.output_tokens,
 			})
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		// Note: text was already streamed via stream.on('text') above
 
 		// Check if the LLM wants to use tools
 		const toolBlocks = finalMessage.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use")
 
-		// kilocode_change start - Auto-continue on max_tokens for supervisor
+		// Society Agent start - Auto-continue on max_tokens for supervisor
 		if (toolBlocks.length === 0) {
 			if (finalMessage.stop_reason === "end_turn") {
 				// Model explicitly finished - done
@@ -6140,7 +6140,7 @@ async function handleSupervisorChat(
 				break
 			}
 		}
-		// kilocode_change end
+		// Society Agent end
 
 		// Add the assistant's message (with tool_use blocks) to conversation
 		messages.push({ role: "assistant", content: finalMessage.content })
@@ -6150,7 +6150,7 @@ async function handleSupervisorChat(
 		for (const toolBlock of toolBlocks) {
 			log.info(`[Supervisor] Tool call: ${toolBlock.name}(${JSON.stringify(toolBlock.input).substring(0, 200)})`)
 
-			// kilocode_change start - Show detailed tool info for ALL tools
+			// Society Agent start - Show detailed tool info for ALL tools
 			let toolDisplay = `🔧 **${toolBlock.name}**`
 			const input = toolBlock.input as Record<string, any>
 			if (toolBlock.name === "run_command" && input.command) {
@@ -6174,7 +6174,7 @@ async function handleSupervisorChat(
 			} else if (toolBlock.name === "list_team") {
 				toolDisplay += ` → checking team members`
 			}
-			// kilocode_change end
+			// Society Agent end
 
 			io.emit("agent-message", {
 				agentId: supervisorConfig.id,
@@ -6196,7 +6196,7 @@ async function handleSupervisorChat(
 
 			totalFilesCreated += filesCreated
 
-			// kilocode_change start - Emit tool result to UI so user can see command output
+			// Society Agent start - Emit tool result to UI so user can see command output
 			let resultDisplay = result
 			// Truncate very long results for display (full result still goes to LLM)
 			if (resultDisplay.length > 2000) {
@@ -6211,7 +6211,7 @@ async function handleSupervisorChat(
 				timestamp: Date.now(),
 				isStreaming: true,
 			})
-			// kilocode_change end
+			// Society Agent end
 
 			if (toolBlock.name === "delegate_task") {
 				const input = toolBlock.input as { agent_id: string; task: string }
@@ -6231,7 +6231,7 @@ async function handleSupervisorChat(
 			})
 		}
 
-		// kilocode_change start - Track what tools were used for progress message  
+		// Society Agent start - Track what tools were used for progress message  
 		const toolNames = toolBlocks.map((tb: Anthropic.ToolUseBlock) => {
 			const input = tb.input as Record<string, any>
 			if (tb.name === "write_file" && input.path) return `wrote ${input.path.split('/').pop()}`
@@ -6243,7 +6243,7 @@ async function handleSupervisorChat(
 			return tb.name.replace(/_/g, ' ')
 		})
 		lastActionDescription = toolNames.join(", ")
-		// kilocode_change end
+		// Society Agent end
 
 		// Add tool results as user message
 		messages.push({ role: "user", content: toolResults })
@@ -6273,7 +6273,7 @@ async function handleSupervisorChat(
 
 	return { fullResponse, delegationResults, totalFilesCreated }
 }
-// kilocode_change end
+// Society Agent end
 
 /**
  * Helper: create a ConversationAgent from a ProjectAgentConfig + project context
@@ -6286,16 +6286,16 @@ function getOrCreateProjectAgent(
 	const existing = activeAgents.get(agentConfig.id)
 	if (existing) return existing
 
-	// kilocode_change start - use provider config instead of hardcoded Anthropic
+	// Society Agent start - use provider config instead of hardcoded Anthropic
 	const apiHandler = getApiHandlerFromConfig()
-	// kilocode_change end
+	// Society Agent end
 
 	// Resolve project workspace path
 	const projectDir = projectStore.agentHomeDir(project.id, agentConfig.id)
 
 	// Build system prompt with project + agent context + file creation instructions
 	let fullPrompt = agentConfig.systemPrompt
-	// kilocode_change start - Tell the agent where its project folder is so it creates files there
+	// Society Agent start - Tell the agent where its project folder is so it creates files there
 	fullPrompt += `\n\n## File Creation Instructions
 You are working in project "${project.name}". Your project folder is: ${projectDir}
 When asked to create files, code, or any project artifacts, ALWAYS include the files in your response using this JSON format:
@@ -6307,9 +6307,9 @@ When asked to create files, code, or any project artifacts, ALWAYS include the f
 }
 \`\`\`
 This ensures files are automatically saved in your project folder. Do NOT just describe the files — include the actual content so they can be created.`
-	// kilocode_change end
+	// Society Agent end
 
-	// kilocode_change start - All agents get mind tools for persistent memory
+	// Society Agent start - All agents get mind tools for persistent memory
 	fullPrompt += `\n\n## Mind Tools - Your Persistent Memory
 You have tools to maintain your own knowledge across sessions:
 
@@ -6384,9 +6384,9 @@ use_mcp("playwright", "browser_navigate", { url: "https://example.com" })
 ⚠️ MCPs are registered by the user in /mcp-config.json (global) or projects/{project}/mcp.json (project).
 
 Your knowledge persists between conversations. Use it!`
-	// kilocode_change end
+	// Society Agent end
 
-	// kilocode_change start - All agents get tool-use awareness
+	// Society Agent start - All agents get tool-use awareness
 	const siblingAgents = project.agents.filter(a => a.id !== agentConfig.id)
 	fullPrompt += `\n\n## Available Tools
 
@@ -6419,7 +6419,7 @@ ${siblingAgents.length > 0 ? siblingAgents.map(a => `- "${a.id}": ${a.name} — 
 3. Spawn workers with \`spawn_worker(count)\`
 4. Monitor with \`list_tasks()\` until all show "completed"
 5. Update your knowledge files with what you learned`
-	// kilocode_change end
+	// Society Agent end
 
 	if (project.knowledge) {
 		fullPrompt += `\n\n## Project Knowledge (${project.name})\n${project.knowledge}`
@@ -6435,7 +6435,7 @@ ${siblingAgents.length > 0 ? siblingAgents.map(a => `- "${a.id}": ${a.name} — 
 		},
 		apiHandler,
 		systemPrompt: fullPrompt,
-		workspacePath: projectDir, // kilocode_change - files go to project folder
+		workspacePath: projectDir, // Society Agent - files go to project folder
 		onMessage: (message) => {
 			io.emit("agent-message", {
 				agentId: agentConfig.id,
@@ -6455,7 +6455,7 @@ ${siblingAgents.length > 0 ? siblingAgents.map(a => `- "${a.id}": ${a.name} — 
 				timestamp: Date.now(),
 			})
 		},
-		// kilocode_change start - summarization events
+		// Society Agent start - summarization events
 		onSummarizationStart: (meta) => {
 			log.info(`${agentConfig.id}: Summarization started (${meta.messageCount} msgs, ~${meta.tokenCount} tokens, ${meta.contextPercent.toFixed(1)}%)`)
 			io.emit("summarization-start", { 
@@ -6482,7 +6482,7 @@ ${siblingAgents.length > 0 ? siblingAgents.map(a => `- "${a.id}": ${a.name} — 
 				timestamp: Date.now() 
 			})
 		},
-		// kilocode_change end
+		// Society Agent end
 	})
 
 	activeAgents.set(agentConfig.id, agent)
@@ -6496,7 +6496,7 @@ ${siblingAgents.length > 0 ? siblingAgents.map(a => `- "${a.id}": ${a.name} — 
  * Body: { description: string, attachments?: any[] }
  */
 app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
-	// kilocode_change start - reject if system paused
+	// Society Agent start - reject if system paused
 	if (systemPaused) {
 		res.status(503).json({ 
 			error: "System is paused for maintenance",
@@ -6505,11 +6505,11 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 		})
 		return
 	}
-	// kilocode_change end
+	// Society Agent end
 	
 	try {
 		const { agentId } = req.params
-		// kilocode_change - Get API key from settings, header, or env
+		// Society Agent - Get API key from settings, header, or env
 		const providerConfig = standaloneSettings.getProvider()
 		const apiKey = (req.headers["x-api-key"] as string) || providerConfig.apiKey || process.env.ANTHROPIC_API_KEY
 		if (!apiKey) {
@@ -6529,7 +6529,7 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 			projectStore.recordActivity(found.project.id, agentId)
 			log.info(`[${found.agent.name}@${found.project.name}] chat: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
 
-			// kilocode_change start - All agents use tool-based agentic loop
+			// Society Agent start - All agents use tool-based agentic loop
 			const result = await handleSupervisorChat(
 				description,
 				found.agent,
@@ -6560,7 +6560,7 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 				delegations: result.delegationResults.length > 0 ? result.delegationResults : undefined,
 			})
 			return
-			// kilocode_change end
+			// Society Agent end
 		}
 
 		// Legacy fallback: persistent agent store
@@ -6628,7 +6628,7 @@ app.get("/api/agent/:agentId/workspace/files", async (req, res): Promise<void> =
 		const agentDir = agentWorkspaceDir(req.params.agentId)
 		const files: { path: string; size: number; modified: string; isDir: boolean }[] = []
 
-		// kilocode_change - Skip heavy directories that slow down file listing
+		// Society Agent - Skip heavy directories that slow down file listing
 		const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".next", ".cache", "coverage", "__pycache__", ".git"])
 
 		async function walkDir(dir: string, prefix: string = "") {
@@ -6636,7 +6636,7 @@ app.get("/api/agent/:agentId/workspace/files", async (req, res): Promise<void> =
 				const entries = await fs.promises.readdir(dir, { withFileTypes: true })
 				for (const entry of entries) {
 					if (entry.name.startsWith(".")) continue
-					if (SKIP_DIRS.has(entry.name)) continue // kilocode_change - skip heavy dirs
+					if (SKIP_DIRS.has(entry.name)) continue // Society Agent - skip heavy dirs
 					const fullPath = path.join(dir, entry.name)
 					const relPath = prefix ? `${prefix}/${entry.name}` : entry.name
 					if (entry.isDirectory()) {
@@ -6686,7 +6686,7 @@ app.get("/api/agent/:agentId/workspace/file", async (req, res): Promise<void> =>
 	}
 })
 
-// kilocode_change start - Raw file serving for agent workspace (PDFs, images, etc.)
+// Society Agent start - Raw file serving for agent workspace (PDFs, images, etc.)
 /**
  * GET /api/agent/:agentId/workspace/file/raw - Serve raw file from agent's workspace
  * Used for PDF viewing, image display, and file downloads
@@ -6765,7 +6765,7 @@ app.get("/api/agent/:agentId/workspace/file/raw", async (req, res): Promise<void
 		}
 	}
 })
-// kilocode_change end
+// Society Agent end
 
 /**
  * POST /api/agent/:agentId/workspace/file - Create/upload a file in agent's workspace
@@ -6907,7 +6907,7 @@ app.get("/api/agent/:agentId/workspace/git-status", async (req, res): Promise<vo
 	}
 })
 
-// kilocode_change end
+// Society Agent end
 
 // ============================================================================
 // Terminal & Command Execution
@@ -7061,7 +7061,7 @@ io.on("connection", (socket) => {
 
 	log.info(`Client connected: ${clientId}`)
 
-	// kilocode_change start - terminal (node-pty) per socket
+	// Society Agent start - terminal (node-pty) per socket
 	let ptyProcess: pty.IPty | null = null
 
 	socket.on("terminal-start", (opts: { shell?: string; cols?: number; rows?: number; agentId?: string; projectId?: string }) => {
@@ -7074,7 +7074,7 @@ io.on("connection", (socket) => {
 		}
 
 		const shell = opts.shell || process.env.SHELL || "/bin/bash"
-		// kilocode_change start - scope terminal cwd to agent's workspace folder
+		// Society Agent start - scope terminal cwd to agent's workspace folder
 		let cwd: string
 		if (opts.projectId && opts.agentId) {
 			// Persistent agent within a project - use projectStore to resolve homeFolder
@@ -7088,7 +7088,7 @@ io.on("connection", (socket) => {
 		}
 		// Ensure workspace folder exists
 		try { fs.mkdirSync(cwd, { recursive: true }) } catch {}
-		// kilocode_change end
+		// Society Agent end
 		const cols = opts.cols || 80
 		const rows = opts.rows || 24
 
@@ -7138,7 +7138,7 @@ io.on("connection", (socket) => {
 			ptyProcess = null
 		}
 	})
-	// kilocode_change end
+	// Society Agent end
 
 	socket.on("subscribe-purpose", (purposeId: string) => {
 		log.info(`Client ${clientId} subscribed to purpose ${purposeId}`)
@@ -7155,7 +7155,7 @@ io.on("connection", (socket) => {
 		socket.join(`agent:${agentId}`)
 	})
 
-	// kilocode_change start - Stop agent handler
+	// Society Agent start - Stop agent handler
 	socket.on("stop-agent", (data: { agentId?: string }) => {
 		const agentId = data.agentId || "default"
 		log.info(`Client ${clientId} requested stop for agent ${agentId}`)
@@ -7166,17 +7166,17 @@ io.on("connection", (socket) => {
 		// Emit acknowledgment
 		socket.emit("agent-stopped", { agentId })
 	})
-	// kilocode_change end
+	// Society Agent end
 
 	socket.on("disconnect", () => {
-		// kilocode_change start - clean up terminal on disconnect
+		// Society Agent start - clean up terminal on disconnect
 		if (ptyProcess) {
 			try {
 				ptyProcess.kill()
 			} catch {}
 			ptyProcess = null
 		}
-		// kilocode_change end
+		// Society Agent end
 		connectedClients.delete(clientId)
 		log.info(`Client disconnected: ${clientId}`)
 	})
@@ -7186,23 +7186,23 @@ io.on("connection", (socket) => {
 // Serve React SPA
 // ============================================================================
 
-// kilocode_change start - serve agent-specific page
+// Society Agent start - serve agent-specific page
 app.get("/agent/:agentId", (req, res) => {
 	res.sendFile(path.join(__dirname, "public/agent.html"))
 })
-// kilocode_change end
+// Society Agent end
 
-// kilocode_change start - serve project page
+// Society Agent start - serve project page
 app.get("/project/:projectId", (req, res) => {
 	res.sendFile(path.join(__dirname, "public/project.html"))
 })
 app.get("/project/:projectId/agent/:agentId", (req, res) => {
 	res.sendFile(path.join(__dirname, "public/agent.html"))
 })
-// kilocode_change end
+// Society Agent end
 
 app.get("*", (req, res) => {
-	res.sendFile(path.join(__dirname, "public/index.html"))  // kilocode_change - serve standalone frontend
+	res.sendFile(path.join(__dirname, "public/index.html"))  // Society Agent - serve standalone frontend
 })
 
 // ============================================================================
@@ -7223,16 +7223,16 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 
 async function start() {
 	try {
-		// kilocode_change start - initialize standalone settings
+		// Society Agent start - initialize standalone settings
 		const workspacePath = getWorkspacePath()
 		initializeSettings(workspacePath)
 		log.info(getSettingsSummary())
-		// kilocode_change end
+		// Society Agent end
 		
-		// kilocode_change start - initialize MCP client manager
+		// Society Agent start - initialize MCP client manager
 		initMcpManager(workspacePath)
 		log.info(`MCP client manager initialized`)
-		// kilocode_change end
+		// Society Agent end
 		
 		log.info(`Society Agent Web Server | Environment: ${NODE_ENV} | Port: ${PORT}`)
 
