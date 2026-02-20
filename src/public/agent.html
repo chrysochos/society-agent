@@ -305,6 +305,7 @@
     </div>
     <div class="stat-row"><span class="label">Folder</span><span id="folderName">-</span></div>
     <div class="stat-row"><span class="label">Files</span><span id="fileCount">0</span></div>
+    <div class="stat-row"><span class="label">🔀 Git</span><span id="gitStatus" style="cursor:pointer" onclick="refreshGitStatus()" title="Click to refresh">-</span></div>
     <!-- kilocode_change start - usage tracking for this agent -->
     <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
       <div class="stat-row"><span class="label">💰 Tokens</span><span id="agentTokens" style="cursor:pointer" onclick="showUsageDetails()" title="Click for details">0</span></div>
@@ -1436,10 +1437,43 @@ async function refreshFiles() {
       return;
     }
     renderTreeFromCache();
+    refreshGitStatus();
   } catch (e) {
     addLog('warn', 'Failed to refresh files');
   }
 }
+
+// kilocode_change start - Git status display
+async function refreshGitStatus() {
+  const el = document.getElementById('gitStatus');
+  if (!el) return;
+  try {
+    const res = await agentFileApi('/git-status');
+    const data = await res.json();
+    if (!data.isRepo) {
+      el.textContent = 'not a repo';
+      el.style.color = 'var(--muted)';
+      return;
+    }
+    const parts = [];
+    if (data.staged > 0) parts.push(`${data.staged}✓`);
+    if (data.unstaged > 0) parts.push(`${data.unstaged}M`);
+    if (data.untracked > 0) parts.push(`${data.untracked}?`);
+    
+    if (parts.length === 0) {
+      el.textContent = '✓ clean';
+      el.style.color = 'var(--green)';
+    } else {
+      el.textContent = parts.join(' ');
+      el.style.color = data.staged > 0 ? 'var(--green)' : 'var(--yellow)';
+    }
+    el.title = `Branch: ${data.branch}\nStaged: ${data.staged}\nUnstaged: ${data.unstaged}\nUntracked: ${data.untracked}\nClick to refresh`;
+  } catch (e) {
+    el.textContent = '-';
+    el.style.color = 'var(--muted)';
+  }
+}
+// kilocode_change end
 
 // kilocode_change start - Render tree from cached data (no API call, instant)
 function renderTreeFromCache() {

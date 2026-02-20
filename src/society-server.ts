@@ -6869,6 +6869,44 @@ app.post("/api/agent/:agentId/workspace/move", async (req, res): Promise<void> =
 	}
 })
 
+/**
+ * GET /api/agent/:agentId/workspace/git-status - Get git status for agent's workspace
+ */
+app.get("/api/agent/:agentId/workspace/git-status", async (req, res): Promise<void> => {
+	try {
+		const agentDir = agentWorkspaceDir(req.params.agentId)
+		if (!fs.existsSync(agentDir)) {
+			res.json({ isRepo: false, unstaged: 0, staged: 0, untracked: 0, branch: null })
+			return
+		}
+
+		// Check if it's a git repo
+		const { execSync } = require("child_process")
+		try {
+			const branch = execSync("git rev-parse --abbrev-ref HEAD 2>/dev/null", { cwd: agentDir, encoding: "utf-8" }).trim()
+			const status = execSync("git status --porcelain 2>/dev/null", { cwd: agentDir, encoding: "utf-8" })
+			
+			const lines = status.split("\n").filter((l: string) => l.trim())
+			let unstaged = 0, staged = 0, untracked = 0
+			
+			for (const line of lines) {
+				const x = line[0] // staged status
+				const y = line[1] // unstaged status
+				if (x === "?" && y === "?") untracked++
+				else if (y !== " " && y !== "?") unstaged++
+				if (x !== " " && x !== "?") staged++
+			}
+			
+			res.json({ isRepo: true, branch, unstaged, staged, untracked, total: lines.length })
+		} catch {
+			// Not a git repo
+			res.json({ isRepo: false, unstaged: 0, staged: 0, untracked: 0, branch: null })
+		}
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
 // kilocode_change end
 
 // ============================================================================
