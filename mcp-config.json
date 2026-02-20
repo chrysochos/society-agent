@@ -1,0 +1,15 @@
+{
+  "$schema": "./mcp-config.schema.json",
+  "_comment": "Global MCP servers - available to all projects. User-managed only (agents cannot modify).",
+  "servers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@anthropic/mcp-playwright"
+      ],
+      "description": "Browser automation - navigate, click, screenshot, fill forms",
+      "enabled": true
+    }
+  }
+}

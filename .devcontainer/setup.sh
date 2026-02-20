@@ -24,6 +24,9 @@ sudo apt-get install -y python3-pip python3-venv
 # LaTeX for document generation
 sudo apt-get install -y texlive-latex-base texlive-latex-extra texlive-pictures texlive-fonts-extra texlive-fonts-recommended latexmk
 
+# SVG to PDF conversion (for LaTeX figures)
+sudo apt-get install -y librsvg2-bin
+
 # Clean up apt cache to reduce container size
 sudo apt-get clean
 sudo rm -rf /var/lib/apt/lists/*

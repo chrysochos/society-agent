@@ -27,6 +27,29 @@
   header .project-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
   header .project-folder { font-size: 11px; color: var(--accent); font-family: monospace; }
   header .header-actions { display: flex; gap: 8px; }
+  
+  /* kilocode_change - System pause banner */
+  .pause-banner { 
+    background: rgba(210,153,34,0.15); 
+    border-bottom: 1px solid var(--yellow);
+    padding: 8px 24px;
+    display: none;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .pause-banner.visible { display: flex; }
+  .pause-banner .icon { font-size: 16px; }
+  .pause-banner .text { color: var(--yellow); }
+  .pause-indicator { 
+    background: rgba(210,153,34,0.2);
+    color: var(--yellow);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    display: none;
+  }
+  .pause-indicator.visible { display: block; }
 
   /* Buttons */
   .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border); cursor: pointer;
@@ -292,10 +315,20 @@
     <div class="project-desc" id="projectDesc"></div>
     <div class="project-folder" id="projectFolder"></div>
   </div>
+  <!-- kilocode_change - pause button and indicator -->
+  <button class="btn btn-sm" id="pauseBtn" onclick="toggleSystemPause()" style="margin-right:8px">🔧 Maintenance</button>
+  <span class="pause-indicator" id="pauseIndicator">⏸ System Paused</span>
   <div class="header-actions">
     <button class="btn btn-sm" onclick="editProjectSettings()">&#9881; Settings</button>
   </div>
 </header>
+
+<!-- kilocode_change - System pause banner -->
+<div class="pause-banner" id="pauseBanner">
+  <span class="icon">⚠️</span>
+  <span class="text"><strong>System Paused</strong> — Maintenance mode active. New requests are blocked.</span>
+  <a href="/" style="margin-left:auto;color:var(--accent);font-size:12px">Go to Dashboard to resume →</a>
+</div>
 
 <div class="main">
   <!-- Agents section -->
@@ -354,6 +387,47 @@
     <div class="section-body">
       <div class="file-list" id="fileList">
         <div style="color:var(--muted);font-size:13px">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Skills & MCPs Row -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+    <!-- Skills Section -->
+    <div class="section">
+      <div class="section-header">
+        <h3>🎯 Skills</h3>
+        <span class="count" id="skillCount">-</span>
+        <button class="btn btn-sm" onclick="refreshProjectSkills()">&#8635;</button>
+      </div>
+      <div class="section-body" style="flex-direction:column;align-items:stretch;">
+        <div id="globalSkillsList" style="margin-bottom:12px;">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;">Global Skills</div>
+          <div id="globalSkillsContent" style="color:var(--muted);font-size:12px;">Loading...</div>
+        </div>
+        <div id="projectSkillsList">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;">Project Skills</div>
+          <div id="projectSkillsContent" style="color:var(--muted);font-size:12px;">Loading...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MCPs Section -->
+    <div class="section">
+      <div class="section-header">
+        <h3>🔌 MCP Servers</h3>
+        <span class="count" id="mcpCount">-</span>
+        <button class="btn btn-sm" onclick="refreshProjectMcps()">&#8635;</button>
+      </div>
+      <div class="section-body" style="flex-direction:column;align-items:stretch;">
+        <div id="globalMcpsList" style="margin-bottom:12px;">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;">Global MCPs</div>
+          <div id="globalMcpsContent" style="color:var(--muted);font-size:12px;">Loading...</div>
+        </div>
+        <div id="projectMcpsList">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;">Project MCPs</div>
+          <div id="projectMcpsContent" style="color:var(--muted);font-size:12px;">Loading...</div>
+        </div>
       </div>
     </div>
   </div>
@@ -564,6 +638,8 @@ function renderProject() {
   renderEphemeralWorkers();
   refreshTasks();
   refreshFiles();
+  refreshProjectSkills();
+  refreshProjectMcps();
 }
 
 async function fetchHeartbeats() {
@@ -992,6 +1068,128 @@ function getFileIcon(name) {
 }
 
 // ============================================================================
+// Skills & MCPs
+// ============================================================================
+
+async function refreshProjectSkills() {
+  const globalEl = document.getElementById('globalSkillsContent');
+  const projectEl = document.getElementById('projectSkillsContent');
+  const countEl = document.getElementById('skillCount');
+  
+  // Load global skills
+  try {
+    const res = await fetch(`${API}/api/skills`);
+    const data = await res.json();
+    if (data.skills && data.skills.length > 0) {
+      globalEl.innerHTML = data.skills.map(s => `
+        <div style="padding:6px 8px;background:var(--bg);border-radius:6px;margin-bottom:4px;">
+          <div style="font-weight:500;color:var(--text);font-size:12px;">${escapeHtml(s.name)}</div>
+          <div style="font-size:11px;color:var(--muted);">${escapeHtml(s.description || '')}</div>
+        </div>
+      `).join('');
+    } else {
+      globalEl.innerHTML = '<div style="font-size:11px;color:var(--muted);">None</div>';
+    }
+  } catch (e) {
+    globalEl.innerHTML = '<div style="color:var(--red);">Error</div>';
+  }
+  
+  // Load project skills
+  try {
+    const res = await fetch(`${API}/api/project/${projectId}/skills`);
+    const data = await res.json();
+    if (data.skills && data.skills.length > 0) {
+      projectEl.innerHTML = data.skills.map(s => `
+        <div style="padding:6px 8px;background:var(--bg);border-radius:6px;margin-bottom:4px;">
+          <div style="font-weight:500;color:var(--text);font-size:12px;">${escapeHtml(s.name)}</div>
+          <div style="font-size:11px;color:var(--muted);">${escapeHtml(s.description || '')}</div>
+        </div>
+      `).join('');
+      countEl.textContent = `${data.skills.length} project`;
+    } else {
+      projectEl.innerHTML = '<div style="font-size:11px;color:var(--muted);">None - add to projects/${projectId}/skills/</div>';
+      countEl.textContent = '-';
+    }
+  } catch (e) {
+    projectEl.innerHTML = '<div style="color:var(--red);">Error</div>';
+  }
+}
+
+async function refreshProjectMcps() {
+  const globalEl = document.getElementById('globalMcpsContent');
+  const projectEl = document.getElementById('projectMcpsContent');
+  const countEl = document.getElementById('mcpCount');
+  
+  // Load global MCPs
+  try {
+    const res = await fetch(`${API}/api/mcps`);
+    const data = await res.json();
+    if (data.mcps && data.mcps.length > 0) {
+      globalEl.innerHTML = data.mcps.map(m => `
+        <div style="padding:6px 8px;background:var(--bg);border-radius:6px;margin-bottom:4px;display:flex;align-items:center;gap:8px;">
+          <div style="flex:1;">
+            <div style="font-weight:500;color:var(--text);font-size:12px;">
+              <span style="color:${m.enabled ? 'var(--green)' : 'var(--muted)'};">●</span> ${escapeHtml(m.name)}
+            </div>
+            <div style="font-size:11px;color:var(--muted);">${escapeHtml(m.description || '')}</div>
+          </div>
+          <button class="btn btn-sm" style="font-size:10px;padding:2px 6px;" 
+            onclick="toggleGlobalMcp('${escapeAttr(m.name)}')">${m.enabled ? 'Disable' : 'Enable'}</button>
+        </div>
+      `).join('');
+    } else {
+      globalEl.innerHTML = '<div style="font-size:11px;color:var(--muted);">None - add to /mcp-config.json</div>';
+    }
+  } catch (e) {
+    globalEl.innerHTML = '<div style="color:var(--red);">Error</div>';
+  }
+  
+  // Load project MCPs
+  try {
+    const res = await fetch(`${API}/api/project/${projectId}/mcps`);
+    const data = await res.json();
+    if (data.mcps && data.mcps.length > 0) {
+      projectEl.innerHTML = data.mcps.map(m => `
+        <div style="padding:6px 8px;background:var(--bg);border-radius:6px;margin-bottom:4px;display:flex;align-items:center;gap:8px;">
+          <div style="flex:1;">
+            <div style="font-weight:500;color:var(--text);font-size:12px;">
+              <span style="color:${m.enabled ? 'var(--green)' : 'var(--muted)'};">●</span> ${escapeHtml(m.name)}
+            </div>
+            <div style="font-size:11px;color:var(--muted);">${escapeHtml(m.description || '')}</div>
+          </div>
+          <button class="btn btn-sm" style="font-size:10px;padding:2px 6px;"
+            onclick="toggleProjectMcp('${escapeAttr(m.name)}')">${m.enabled ? 'Disable' : 'Enable'}</button>
+        </div>
+      `).join('');
+      countEl.textContent = `${data.mcps.length} project`;
+    } else {
+      projectEl.innerHTML = '<div style="font-size:11px;color:var(--muted);">None - add to projects/${projectId}/mcp.json</div>';
+      countEl.textContent = '-';
+    }
+  } catch (e) {
+    projectEl.innerHTML = '<div style="color:var(--red);">Error</div>';
+  }
+}
+
+async function toggleGlobalMcp(name) {
+  try {
+    await fetch(`${API}/api/mcps/${encodeURIComponent(name)}/toggle`, { method: 'POST' });
+    refreshProjectMcps();
+  } catch (e) {
+    console.error('Failed to toggle MCP:', e);
+  }
+}
+
+async function toggleProjectMcp(name) {
+  try {
+    await fetch(`${API}/api/project/${projectId}/mcps/${encodeURIComponent(name)}/toggle`, { method: 'POST' });
+    refreshProjectMcps();
+  } catch (e) {
+    console.error('Failed to toggle MCP:', e);
+  }
+}
+
+// ============================================================================
 // File Viewer
 // ============================================================================
 
@@ -1260,6 +1458,65 @@ function showToast(msg, type = 'success') {
 // Init
 // ============================================================================
 
+// kilocode_change start - System pause state management
+let isSystemPaused = false;
+
+function updatePauseUI(paused) {
+  isSystemPaused = paused;
+  const banner = document.getElementById('pauseBanner');
+  const indicator = document.getElementById('pauseIndicator');
+  const btn = document.getElementById('pauseBtn');
+  
+  if (paused) {
+    banner.classList.add('visible');
+    indicator.classList.add('visible');
+    if (btn) btn.innerHTML = '▶️ Resume';
+  } else {
+    banner.classList.remove('visible');
+    indicator.classList.remove('visible');
+    if (btn) btn.innerHTML = '🔧 Maintenance';
+  }
+}
+
+async function toggleSystemPause() {
+  const endpoint = isSystemPaused ? '/api/system/resume' : '/api/system/pause';
+  try {
+    const res = await fetch(endpoint, { method: 'POST' });
+    if (res.ok) {
+      const data = await res.json();
+      updatePauseUI(!isSystemPaused);
+      showToast(data.message, 'success');
+    } else {
+      showToast('Failed to toggle system state', 'error');
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message, 'error');
+  }
+}
+
+async function checkSystemPauseState() {
+  try {
+    const res = await fetch('/api/system/state');
+    if (res.ok) {
+      const data = await res.json();
+      updatePauseUI(data.systemPaused);
+    }
+  } catch (e) {
+    console.warn('Failed to check system pause state:', e);
+  }
+}
+
+socket.on('system-event', (data) => {
+  if (data.type === 'system-paused') {
+    updatePauseUI(true);
+  }
+  if (data.type === 'system-resumed') {
+    updatePauseUI(false);
+  }
+});
+// kilocode_change end
+
+checkSystemPauseState();
 loadProject();
 
 // Refresh on events

@@ -230,6 +230,20 @@
     box-shadow: 0 4px 12px rgba(0,0,0,0.3); animation: toastIn 0.2s ease-out; }
   @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(10px); }
     to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+
+  /* kilocode_change start - Pause banner and indicator */
+  .pause-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+    background: linear-gradient(90deg, rgba(210,153,34,0.2), rgba(210,153,34,0.1));
+    border-bottom: 2px solid #d29922; padding: 10px 20px; text-align: center;
+    font-size: 14px; color: #d29922; display: none; }
+  .pause-banner.visible { display: block; }
+  .pause-banner a { color: var(--accent); text-decoration: underline; margin-left: 12px; }
+  .pause-indicator { display: none; padding: 4px 10px; border-radius: 12px; font-size: 11px;
+    background: rgba(210,153,34,0.15); color: #d29922; border: 1px solid rgba(210,153,34,0.3);
+    margin-right: 12px; }
+  .pause-indicator.visible { display: inline-flex; align-items: center; gap: 6px; }
+  .pause-indicator::before { content: '⏸'; }
+  /* kilocode_change end */
 </style>
 </head>
 <body>
@@ -257,11 +271,22 @@
   </style>
   <!-- kilocode_change end -->
   <div class="agent-stats" id="agentStats"></div>
+  <!-- kilocode_change start - Pause button and indicator -->
+  <button class="btn btn-sm" id="pauseBtn" onclick="toggleSystemPause()" style="margin-right:8px;padding:4px 10px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer">🔧 Maintenance</button>
+  <span class="pause-indicator" id="pauseIndicator">System Paused</span>
+  <!-- kilocode_change end -->
   <div class="status">
     <span class="dot" id="statusDot"></span>
     <span id="statusText">Connecting...</span>
   </div>
 </header>
+
+<!-- kilocode_change start - Pause banner -->
+<div class="pause-banner" id="pauseBanner">
+  ⏸️ <strong>System Paused</strong> - All agent activity is suspended.
+  <a href="/">Go to Dashboard to Resume</a>
+</div>
+<!-- kilocode_change end -->
 
 <div class="main">
   <!-- Sidebar: agent's file explorer -->
@@ -2127,6 +2152,62 @@ document.getElementById('input').addEventListener('input', function() {
     try { localStorage.setItem('agent-sidebar-width', sidebar.style.width); } catch {} }
   try { const s = localStorage.getItem('agent-sidebar-width'); if (s) sidebar.style.width = s; } catch {}
 })();
+
+// kilocode_change start - System pause state management
+let isSystemPaused = false;
+
+function updatePauseUI(paused) {
+  isSystemPaused = paused;
+  const banner = document.getElementById('pauseBanner');
+  const indicator = document.getElementById('pauseIndicator');
+  const btn = document.getElementById('pauseBtn');
+  
+  if (paused) {
+    banner.classList.add('visible');
+    indicator.classList.add('visible');
+    if (btn) btn.innerHTML = '▶️ Resume';
+  } else {
+    banner.classList.remove('visible');
+    indicator.classList.remove('visible');
+    if (btn) btn.innerHTML = '🔧 Maintenance';
+  }
+}
+
+async function toggleSystemPause() {
+  const endpoint = isSystemPaused ? '/api/system/resume' : '/api/system/pause';
+  try {
+    const res = await fetch(endpoint, { method: 'POST' });
+    if (res.ok) {
+      updatePauseUI(!isSystemPaused);
+    }
+  } catch (e) {
+    console.error('Failed to toggle system state:', e);
+  }
+}
+
+async function checkSystemPauseState() {
+  try {
+    const res = await fetch('/api/system/state');
+    if (res.ok) {
+      const data = await res.json();
+      updatePauseUI(data.systemPaused);
+    }
+  } catch (e) {
+    console.warn('Failed to check system pause state:', e);
+  }
+}
+
+socket.on('system-event', (data) => {
+  if (data.type === 'system-paused') {
+    updatePauseUI(true);
+  }
+  if (data.type === 'system-resumed') {
+    updatePauseUI(false);
+  }
+});
+
+checkSystemPauseState();
+// kilocode_change end
 </script>
 </body>
 </html>

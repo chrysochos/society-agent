@@ -26,6 +26,51 @@
   header .dot { width: 8px; height: 8px; border-radius: 50%; }
   header .dot.online { background: var(--green); }
   header .dot.offline { background: var(--red); }
+  header .dot.paused { background: var(--yellow); }
+  
+  /* System pause banner */
+  .pause-banner { 
+    background: rgba(210,153,34,0.15); 
+    border-bottom: 1px solid var(--yellow);
+    padding: 8px 20px;
+    display: none;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .pause-banner.visible { display: flex; }
+  .pause-banner .icon { font-size: 16px; }
+  .pause-banner .text { color: var(--yellow); }
+  .pause-banner button { 
+    margin-left: auto;
+    background: var(--yellow);
+    color: var(--bg);
+    border: none;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .pause-banner button:hover { opacity: 0.9; }
+  
+  /* Pause/Resume button in header */
+  .pause-btn { 
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-right: 8px;
+  }
+  .pause-btn:hover { border-color: var(--yellow); color: var(--yellow); }
+  .pause-btn.paused { border-color: var(--green); color: var(--green); }
+  .pause-btn.paused:hover { border-color: var(--green); }
 
   /* Layout */
   .main { display: flex; flex: 1; overflow: hidden; }
@@ -326,10 +371,23 @@
     <button id="reconnectBtn" onclick="manualReconnect()" style="margin-left:8px;background:none;border:1px solid var(--border);color:var(--muted);cursor:pointer;font-size:11px;padding:2px 8px;border-radius:4px;display:none" title="Click to reconnect">↻ Reconnect</button>
   </div>
   <div style="flex:1"></div>
+  <!-- kilocode_change - System pause/resume for external oversight -->
+  <button class="pause-btn" id="pauseBtn" onclick="toggleSystemPause()" title="Pause system for maintenance">
+    <span id="pauseBtnIcon">⏸</span>
+    <span id="pauseBtnText">Maintenance</span>
+  </button>
   <!-- kilocode_change - Clear & Reset button for troubleshooting -->
   <button class="btn btn-secondary" onclick="clearAndReset()" style="font-size:11px;margin-right:8px;color:var(--yellow)" title="Clear all state and reload">&#9888; Reset</button>
   <button class="btn btn-secondary" onclick="showApiKeyModal()" style="font-size:12px">&#9881; Settings</button>
 </header>
+
+<!-- kilocode_change - System pause banner -->
+<div class="pause-banner" id="pauseBanner">
+  <span class="icon">⚠️</span>
+  <span class="text"><strong>System Paused</strong> — Maintenance mode active. New requests are blocked.</span>
+  <span id="pauseReason" style="color:var(--muted);font-size:12px"></span>
+  <button onclick="resumeSystem()">▶️ Resume System</button>
+</div>
 
 <div class="main">
   <div class="sidebar" id="sidebar" style="width:280px">
@@ -371,6 +429,28 @@
     <div id="projectList">
       <div style="padding:8px 16px;color:var(--muted);font-size:12px">No projects</div>
     </div>
+
+    <!-- kilocode_change start - Global Skills section -->
+    <h2 style="margin-top:8px;display:flex;align-items:center;gap:6px">
+      🎯 Global Skills
+      <span style="flex:1"></span>
+      <button class="act-btn" onclick="refreshSkills()" title="Refresh" style="font-size:13px;background:none;border:none;color:var(--muted);cursor:pointer">&#8635;</button>
+    </h2>
+    <div id="skillsList" style="font-size:12px">
+      <div style="padding:8px 16px;color:var(--muted)">Loading...</div>
+    </div>
+    <!-- kilocode_change end -->
+
+    <!-- kilocode_change start - Global MCPs section -->
+    <h2 style="margin-top:8px;display:flex;align-items:center;gap:6px">
+      🔌 Global MCPs
+      <span style="flex:1"></span>
+      <button class="act-btn" onclick="refreshMcps()" title="Refresh" style="font-size:13px;background:none;border:none;color:var(--muted);cursor:pointer">&#8635;</button>
+    </h2>
+    <div id="mcpsList" style="font-size:12px">
+      <div style="padding:8px 16px;color:var(--muted)">Loading...</div>
+    </div>
+    <!-- kilocode_change end -->
   </div>
 
   <div class="chat-area">
@@ -536,6 +616,7 @@ socket.on('connect', () => {
     addLog('info', 'Connected to Society Agent server');
     checkApiKey();
     checkServerStatus();
+    checkSystemPauseState(); // kilocode_change - check if system is paused
     // Reload data after reconnect
     loadProjects();
   } catch (e) {
@@ -777,11 +858,112 @@ socket.on('file-deleted', (data) => {
 
 // System events (multi-agent)
 socket.on('system-event', (data) => {
-  addLog(data.type.includes('error') ? 'error' : 'info', data.message);
+  addLog(data.type.includes('error') ? 'error' : 'info', data.message || data.type);
   if (data.type === 'purpose-launching') {
     addMessage('system', data.message);
   }
+  // kilocode_change - handle system pause/resume events
+  if (data.type === 'system-paused') {
+    updatePauseUI(true, data.reason);
+    addLog('warn', `System PAUSED: ${data.reason || 'Maintenance mode'}`);
+  }
+  if (data.type === 'system-resumed') {
+    updatePauseUI(false);
+    addLog('info', 'System RESUMED - accepting new work');
+  }
 });
+
+// kilocode_change start - System pause/resume management
+let isSystemPaused = false;
+
+function updatePauseUI(paused, reason = '') {
+  isSystemPaused = paused;
+  const banner = document.getElementById('pauseBanner');
+  const btn = document.getElementById('pauseBtn');
+  const btnIcon = document.getElementById('pauseBtnIcon');
+  const btnText = document.getElementById('pauseBtnText');
+  const reasonEl = document.getElementById('pauseReason');
+  const statusDot = document.getElementById('statusDot');
+  
+  if (paused) {
+    banner.classList.add('visible');
+    btn.classList.add('paused');
+    btnIcon.textContent = '▶️';
+    btnText.textContent = 'Resume';
+    if (reason) reasonEl.textContent = `(${reason})`;
+    statusDot.classList.remove('online');
+    statusDot.classList.add('paused');
+  } else {
+    banner.classList.remove('visible');
+    btn.classList.remove('paused');
+    btnIcon.textContent = '⏸';
+    btnText.textContent = 'Maintenance';
+    reasonEl.textContent = '';
+    statusDot.classList.remove('paused');
+    statusDot.classList.add('online');
+  }
+}
+
+async function toggleSystemPause() {
+  if (isSystemPaused) {
+    await resumeSystem();
+  } else {
+    await pauseSystem();
+  }
+}
+
+async function pauseSystem() {
+  const reason = prompt('Enter reason for maintenance pause (optional):', 'Manual maintenance');
+  if (reason === null) return; // cancelled
+  
+  try {
+    const res = await fetch('/api/system/pause', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: reason || 'Manual maintenance' })
+    });
+    const data = await res.json();
+    if (data.success) {
+      updatePauseUI(true, data.pausedState?.reason);
+      addLog('warn', 'System paused for maintenance');
+    } else {
+      addLog('error', data.message || 'Failed to pause system');
+    }
+  } catch (e) {
+    addLog('error', 'Failed to pause system: ' + e.message);
+  }
+}
+
+async function resumeSystem() {
+  try {
+    const res = await fetch('/api/system/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const data = await res.json();
+    if (data.success) {
+      updatePauseUI(false);
+      addLog('info', 'System resumed');
+    } else {
+      addLog('error', data.message || 'Failed to resume system');
+    }
+  } catch (e) {
+    addLog('error', 'Failed to resume system: ' + e.message);
+  }
+}
+
+async function checkSystemPauseState() {
+  try {
+    const res = await fetch('/api/system/state');
+    if (res.ok) {
+      const data = await res.json();
+      updatePauseUI(data.systemPaused, data.pausedState?.reason);
+    }
+  } catch (e) {
+    console.warn('Failed to check system pause state:', e);
+  }
+}
+// kilocode_change end - System pause/resume
 
 // ============================================================================
 // API Functions
@@ -2053,6 +2235,75 @@ async function loadProjects() {
   }
 }
 
+// ============================================================================
+// Skills & MCPs
+// ============================================================================
+
+async function refreshSkills() {
+  const list = document.getElementById('skillsList');
+  if (!list) return;
+  list.innerHTML = '<div class="skill-item" style="color:#8b949e;">Loading...</div>';
+  try {
+    const res = await fetch(`${API}/api/skills`);
+    const data = await res.json();
+    if (data.skills && data.skills.length > 0) {
+      list.innerHTML = data.skills.map(s => `
+        <div class="skill-item" style="padding:8px 0;border-bottom:1px solid #21262d;">
+          <div style="font-weight:500;color:#e6edf3;">${escapeHtml(s.name)}</div>
+          <div style="font-size:12px;color:#8b949e;margin-top:2px;">${escapeHtml(s.description || 'No description')}</div>
+          ${s.version ? `<div style="font-size:11px;color:#6e7681;margin-top:2px;">v${escapeHtml(s.version)}</div>` : ''}
+        </div>
+      `).join('');
+    } else {
+      list.innerHTML = '<div style="color:#8b949e;font-size:13px;">No global skills installed.<br><span style="font-size:12px;">Add .js files to /skills/ folder</span></div>';
+    }
+  } catch (e) {
+    list.innerHTML = '<div style="color:#f85149;">Error loading skills</div>';
+  }
+}
+
+async function refreshMcps() {
+  const list = document.getElementById('mcpsList');
+  if (!list) return;
+  list.innerHTML = '<div class="mcp-item" style="color:#8b949e;">Loading...</div>';
+  try {
+    const res = await fetch(`${API}/api/mcps`);
+    const data = await res.json();
+    if (data.mcps && data.mcps.length > 0) {
+      list.innerHTML = data.mcps.map(m => `
+        <div class="mcp-item" style="padding:8px 0;border-bottom:1px solid #21262d;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="color:${m.enabled ? '#3fb950' : '#8b949e'};">●</span>
+            <span style="font-weight:500;color:#e6edf3;flex:1;">${escapeHtml(m.name)}</span>
+            <button onclick="toggleGlobalMcp('${escapeHtml(m.name)}')" 
+              style="background:${m.enabled ? 'rgba(248,81,73,0.15)' : 'rgba(63,185,80,0.15)'};
+                     color:${m.enabled ? '#f85149' : '#3fb950'};
+                     border:1px solid ${m.enabled ? 'rgba(248,81,73,0.3)' : 'rgba(63,185,80,0.3)'};
+                     border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;">
+              ${m.enabled ? 'Disable' : 'Enable'}
+            </button>
+          </div>
+          <div style="font-size:12px;color:#8b949e;margin-top:4px;margin-left:16px;">${escapeHtml(m.description || 'No description')}</div>
+          <div style="font-size:11px;color:#6e7681;margin-top:2px;margin-left:16px;font-family:monospace;">${escapeHtml(m.command)} ${(m.args || []).map(a => escapeHtml(a)).join(' ')}</div>
+        </div>
+      `).join('');
+    } else {
+      list.innerHTML = '<div style="color:#8b949e;font-size:13px;">No global MCPs configured.<br><span style="font-size:12px;">Add servers to /mcp-config.json</span></div>';
+    }
+  } catch (e) {
+    list.innerHTML = '<div style="color:#f85149;">Error loading MCPs</div>';
+  }
+}
+
+async function toggleGlobalMcp(name) {
+  try {
+    await fetch(`${API}/api/mcps/${encodeURIComponent(name)}/toggle`, { method: 'POST' });
+    refreshMcps();
+  } catch (e) {
+    console.error('Failed to toggle MCP:', e);
+  }
+}
+
 function renderAgentSelector() {
   const sel = document.getElementById('agentSelect');
   const prev = sel.value;
@@ -2278,7 +2529,11 @@ async function deleteProject(id, name) {
 }
 
 // Load projects on startup
-socket.on('connect', () => { loadProjects(); });
+socket.on('connect', () => { 
+  loadProjects(); 
+  refreshSkills();
+  refreshMcps();
+});
 // Refresh on agent events
 socket.on('system-event', (data) => {
   if (data.type === 'agent-created' || data.type === 'agent-deleted') loadProjects();

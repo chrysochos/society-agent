@@ -633,6 +633,32 @@ export class ProjectStore {
 
 ---
 
+## 🎯 Skills Index
+
+**Anthropic-compatible skills. Folders with SKILL.md + optional context files.**
+
+| Skill | Folder | Trigger | Description |
+|-------|--------|---------|-------------|
+| (none yet) | - | - | - |
+
+**Skill Format (Anthropic standard):**
+\`\`\`
+skills/
+  skill-name/
+    SKILL.md      # YAML frontmatter + instructions
+    context.md    # Optional supplementary context
+    script.sh     # Optional executable
+\`\`\`
+
+**Skills vs Playbooks:**
+- **Skills** = Formal procedures in \`skills/\` folder, triggered with /skill-name
+- **Playbooks** = Informal notes in KNOWLEDGE.md, project-specific context
+
+When user says "create a skill for X" → create \`skills/x/SKILL.md\`
+When learning organically → add to KNOWLEDGE.md as playbook
+
+---
+
 ## 🗂️ Objects & Entities Registry
 
 **Quick lookup - detailed docs in linked files.**

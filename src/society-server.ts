@@ -58,6 +58,9 @@ import * as pty from "node-pty"
 // kilocode_change start - standalone settings system
 import { settings as standaloneSettings, initializeSettings, getSettingsSummary, PROVIDER_BASE_URLS } from "./settings"
 // kilocode_change end
+// kilocode_change start - MCP server integration
+import { initMcpManager, getMcpManager } from "./mcp-client"
+// kilocode_change end
 
 const app = express()
 const server = http.createServer(app)
@@ -92,6 +95,66 @@ let societyManager: SocietyManager | null = null
 const connectedClients = new Set<string>()
 let userAgent: ConversationAgent | null = null // Single agent for user conversations
 const stoppedAgents = new Set<string>() // kilocode_change - track agents that should stop
+
+// kilocode_change start - system pause/resume for external oversight
+let systemPaused = false
+const PAUSED_STATE_FILE = path.join(getWorkspacePath(), ".system-paused-state.json")
+
+interface PausedState {
+	timestamp: number
+	reason: string
+	activeConversations: Array<{
+		agentId: string
+		projectId: string
+		lastMessage?: string
+	}>
+}
+
+function saveSystemState(reason: string): PausedState {
+	const state: PausedState = {
+		timestamp: Date.now(),
+		reason,
+		activeConversations: []
+	}
+	
+	// Save active agent conversations
+	for (const [agentId, agent] of activeAgents.entries()) {
+		// Find which project this agent belongs to
+		const project = projectStore.getAll().find((p: Project) => p.agents.some((a: ProjectAgentConfig) => a.id === agentId))
+		if (project) {
+			state.activeConversations.push({
+				agentId,
+				projectId: project.id,
+				lastMessage: (agent as any).conversationHistory?.slice(-1)[0]?.content?.substring(0, 200)
+			})
+		}
+	}
+	
+	fs.writeFileSync(PAUSED_STATE_FILE, JSON.stringify(state, null, 2))
+	return state
+}
+
+function loadPausedState(): PausedState | null {
+	try {
+		if (fs.existsSync(PAUSED_STATE_FILE)) {
+			return JSON.parse(fs.readFileSync(PAUSED_STATE_FILE, "utf-8"))
+		}
+	} catch (e) {
+		log.warn("Failed to load paused state:", e)
+	}
+	return null
+}
+
+function clearPausedState(): void {
+	try {
+		if (fs.existsSync(PAUSED_STATE_FILE)) {
+			fs.unlinkSync(PAUSED_STATE_FILE)
+		}
+	} catch (e) {
+		log.warn("Failed to clear paused state:", e)
+	}
+}
+// kilocode_change end - system pause/resume
 
 // kilocode_change start - persistent agent system
 const agentStore = new PersistentAgentStore(getWorkspacePath())
@@ -590,9 +653,298 @@ app.get("/api/status", (req, res) => {
 		workspacePath,
 		outputDir: path.join(workspacePath, "projects"),
 		timestamp: new Date().toISOString(),
+		systemPaused, // kilocode_change - include pause status
 	})
 	// kilocode_change end
 })
+
+// kilocode_change start - System pause/resume API for external oversight
+/**
+ * POST /api/system/pause - Pause the system for maintenance
+ * External agents (like GitHub Copilot) use this before making code changes.
+ * Saves current state and rejects new work until resumed.
+ */
+app.post("/api/system/pause", (req, res): void => {
+	const { reason } = req.body || {}
+	
+	if (systemPaused) {
+		res.json({ 
+			success: false, 
+			message: "System is already paused",
+			pausedState: loadPausedState()
+		})
+		return
+	}
+	
+	systemPaused = true
+	const state = saveSystemState(reason || "External maintenance")
+	
+	// Notify all connected clients
+	io.emit("system-event", { 
+		type: "system-paused", 
+		reason: reason || "External maintenance",
+		timestamp: Date.now() 
+	})
+	
+	log.info(`[System] PAUSED for: ${reason || "External maintenance"}`)
+	log.info(`[System] ${state.activeConversations.length} active conversations saved`)
+	
+	res.json({ 
+		success: true, 
+		message: "System paused. Safe to make code changes.",
+		pausedState: state,
+		instructions: [
+			"1. Make your code changes",
+			"2. Restart the server: pkill -f tsx && npm start",
+			"3. Or call POST /api/system/resume to continue without restart"
+		]
+	})
+})
+
+/**
+ * POST /api/system/resume - Resume the system after maintenance
+ */
+app.post("/api/system/resume", (req, res): void => {
+	if (!systemPaused) {
+		res.json({ 
+			success: false, 
+			message: "System is not paused" 
+		})
+		return
+	}
+	
+	const previousState = loadPausedState()
+	systemPaused = false
+	clearPausedState()
+	
+	// Notify all connected clients
+	io.emit("system-event", { 
+		type: "system-resumed", 
+		timestamp: Date.now() 
+	})
+	
+	log.info(`[System] RESUMED`)
+	
+	res.json({ 
+		success: true, 
+		message: "System resumed. Accepting new work.",
+		previousState
+	})
+})
+
+/**
+ * GET /api/system/state - Get current system state (for external oversight)
+ */
+app.get("/api/system/state", (req, res): void => {
+	const pausedState = loadPausedState()
+	
+	res.json({
+		systemPaused,
+		pausedState,
+		activeAgentCount: activeAgents.size,
+		activeAgents: Array.from(activeAgents.keys()),
+		projectCount: projectStore.getAll().length,
+		timestamp: new Date().toISOString()
+	})
+})
+
+/**
+ * GET /api/skills - Get all global skills
+ */
+app.get("/api/skills", (req, res): void => {
+	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+	const skillsDir = path.join(workspacePath, "skills")
+	
+	try {
+		if (!fs.existsSync(skillsDir)) {
+			res.json({ skills: [], message: "No global skills folder" })
+			return
+		}
+		const items = fs.readdirSync(skillsDir, { withFileTypes: true })
+		const skills = items.filter(i => i.isDirectory()).map(s => {
+			const skillPath = path.join(skillsDir, s.name, "SKILL.md")
+			let description = "(no description)"
+			let version = "1.0"
+			if (fs.existsSync(skillPath)) {
+				const content = fs.readFileSync(skillPath, "utf-8")
+				const descMatch = content.match(/description:\s*(.+)/)
+				const verMatch = content.match(/version:\s*(.+)/)
+				if (descMatch) description = descMatch[1].trim()
+				if (verMatch) version = verMatch[1].trim()
+			}
+			return { name: s.name, description, version, scope: "global" }
+		})
+		res.json({ skills })
+	} catch (err: any) {
+		res.status(500).json({ error: err.message })
+	}
+})
+
+/**
+ * GET /api/mcps - Get all global MCPs
+ */
+app.get("/api/mcps", (req, res): void => {
+	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+	const configPath = path.join(workspacePath, "mcp-config.json")
+	
+	try {
+		if (!fs.existsSync(configPath)) {
+			res.json({ mcps: [], message: "No global MCP config" })
+			return
+		}
+		const content = fs.readFileSync(configPath, "utf-8")
+		const config = JSON.parse(content)
+		const mcps = Object.entries(config.servers || {}).map(([name, cfg]: [string, any]) => ({
+			name,
+			description: cfg.description || "(no description)",
+			command: cfg.command,
+			args: cfg.args || [],
+			enabled: cfg.enabled !== false, // default true
+			scope: "global"
+		}))
+		res.json({ mcps })
+	} catch (err: any) {
+		res.status(500).json({ error: err.message })
+	}
+})
+
+/**
+ * POST /api/mcps/:name/toggle - Toggle enabled state for a global MCP
+ */
+app.post("/api/mcps/:name/toggle", (req, res): void => {
+	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+	const configPath = path.join(workspacePath, "mcp-config.json")
+	const { name } = req.params
+	
+	try {
+		if (!fs.existsSync(configPath)) {
+			res.status(404).json({ error: "No MCP config file" })
+			return
+		}
+		const content = fs.readFileSync(configPath, "utf-8")
+		const config = JSON.parse(content)
+		if (!config.servers || !config.servers[name]) {
+			res.status(404).json({ error: `MCP "${name}" not found` })
+			return
+		}
+		// Toggle enabled state
+		const current = config.servers[name].enabled !== false
+		config.servers[name].enabled = !current
+		fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
+		res.json({ name, enabled: !current })
+	} catch (err: any) {
+		res.status(500).json({ error: err.message })
+	}
+})
+
+/**
+ * GET /api/project/:projectId/skills - Get project-specific skills
+ */
+app.get("/api/project/:projectId/skills", (req, res): void => {
+	const project = projectStore.get(req.params.projectId)
+	if (!project) {
+		res.status(404).json({ error: "Project not found" })
+		return
+	}
+	
+	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+	const projectFolder = project.folder || project.id
+	const skillsDir = path.join(workspacePath, "projects", projectFolder, "skills")
+	
+	try {
+		if (!fs.existsSync(skillsDir)) {
+			res.json({ skills: [] })
+			return
+		}
+		const items = fs.readdirSync(skillsDir, { withFileTypes: true })
+		const skills = items.filter(i => i.isDirectory()).map(s => {
+			const skillPath = path.join(skillsDir, s.name, "SKILL.md")
+			let description = "(no description)"
+			let version = "1.0"
+			if (fs.existsSync(skillPath)) {
+				const content = fs.readFileSync(skillPath, "utf-8")
+				const descMatch = content.match(/description:\s*(.+)/)
+				const verMatch = content.match(/version:\s*(.+)/)
+				if (descMatch) description = descMatch[1].trim()
+				if (verMatch) version = verMatch[1].trim()
+			}
+			return { name: s.name, description, version, scope: "project" }
+		})
+		res.json({ skills })
+	} catch (err: any) {
+		res.status(500).json({ error: err.message })
+	}
+})
+
+/**
+ * GET /api/project/:projectId/mcps - Get project-specific MCPs
+ */
+app.get("/api/project/:projectId/mcps", (req, res): void => {
+	const project = projectStore.get(req.params.projectId)
+	if (!project) {
+		res.status(404).json({ error: "Project not found" })
+		return
+	}
+	
+	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+	const projectFolder = project.folder || project.id
+	const configPath = path.join(workspacePath, "projects", projectFolder, "mcp.json")
+	
+	try {
+		if (!fs.existsSync(configPath)) {
+			res.json({ mcps: [] })
+			return
+		}
+		const content = fs.readFileSync(configPath, "utf-8")
+		const config = JSON.parse(content)
+		const mcps = Object.entries(config.servers || {}).map(([name, cfg]: [string, any]) => ({
+			name,
+			description: cfg.description || "(no description)",
+			command: cfg.command,
+			args: cfg.args || [],
+			enabled: cfg.enabled !== false,
+			scope: "project"
+		}))
+		res.json({ mcps })
+	} catch (err: any) {
+		res.status(500).json({ error: err.message })
+	}
+})
+
+/**
+ * POST /api/project/:projectId/mcps/:name/toggle - Toggle enabled state for project MCP
+ */
+app.post("/api/project/:projectId/mcps/:name/toggle", (req, res): void => {
+	const project = projectStore.get(req.params.projectId)
+	if (!project) {
+		res.status(404).json({ error: "Project not found" })
+		return
+	}
+	
+	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+	const projectFolder = project.folder || project.id
+	const configPath = path.join(workspacePath, "projects", projectFolder, "mcp.json")
+	const { name } = req.params
+	
+	try {
+		if (!fs.existsSync(configPath)) {
+			res.status(404).json({ error: "No project MCP config" })
+			return
+		}
+		const content = fs.readFileSync(configPath, "utf-8")
+		const config = JSON.parse(content)
+		if (!config.servers || !config.servers[name]) {
+			res.status(404).json({ error: `MCP "${name}" not found` })
+			return
+		}
+		config.servers[name].enabled = !(config.servers[name].enabled !== false)
+		fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
+		res.json({ name, enabled: config.servers[name].enabled })
+	} catch (err: any) {
+		res.status(500).json({ error: err.message })
+	}
+})
+// kilocode_change end - System pause/resume API
 
 // kilocode_change start - activity log API
 /**
@@ -2727,7 +3079,7 @@ function securePath(agentDir: string, relativePath: string): { ok: boolean; full
 const AGENT_TOOLS: Anthropic.Tool[] = [
 	{
 		name: "run_command",
-		description: "Execute a shell command in YOUR agent folder. Use this to install dependencies (npm install), run/stop servers, run tests, or any terminal operation. Commands run in your designated folder within the project.",
+		description: "Execute a shell command in YOUR agent folder. Use this to install dependencies (npm install), run/stop servers, run tests, or any terminal operation. Commands run in your designated folder within the project. IMPORTANT: Always examine the command output for errors (look for '!' or 'Error' or non-zero exit codes). If a command fails, read log files or adjust your approach before retrying.",
 		input_schema: {
 			type: "object" as const,
 			properties: {
@@ -2848,6 +3200,63 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			required: ["path"],
 		},
 	},
+	// kilocode_change start - Global skills (read-only for agents)
+	{
+		name: "list_global_skills",
+		description: "List all available global skills. Global skills are shared across all projects and can be read but NOT created by agents (only users can create global skills).",
+		input_schema: {
+			type: "object" as const,
+			properties: {},
+			required: [],
+		},
+	},
+	{
+		name: "read_global_skill",
+		description: "Read a global skill's SKILL.md file. Global skills are shared across all projects. Use list_global_skills first to see available skills.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				skill_name: { type: "string", description: "Name of the skill folder (e.g. 'compile-latex')" },
+			},
+			required: ["skill_name"],
+		},
+	},
+	// kilocode_change end - Global skills
+	// kilocode_change start - MCP server integration (read-only for agents, user registers servers)
+	{
+		name: "list_mcps",
+		description: "List available MCP servers. MCP servers provide external integrations (GitHub, Playwright, etc.). User-managed only - agents cannot register MCPs.",
+		input_schema: {
+			type: "object" as const,
+			properties: {},
+			required: [],
+		},
+	},
+	{
+		name: "list_mcp_tools",
+		description: "List tools available from a specific MCP server. Use list_mcps() first to see available servers. This connects to the server and fetches its tool definitions.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				server_name: { type: "string", description: "Name of the MCP server (e.g. 'playwright', 'github')" },
+			},
+			required: ["server_name"],
+		},
+	},
+	{
+		name: "use_mcp",
+		description: "Call a tool on an MCP server. Use list_mcp_tools() first to see available tools and their parameters.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				server_name: { type: "string", description: "Name of the MCP server" },
+				tool_name: { type: "string", description: "Name of the tool to call" },
+				params: { type: "object", description: "Tool parameters (depends on the tool)" },
+			},
+			required: ["server_name", "tool_name"],
+		},
+	},
+	// kilocode_change end - MCP
 	{
 		name: "list_project_files",
 		description: "List files in any directory within the project. Use this to see what other agents have created, explore the project structure, and understand the codebase you need to test.",
@@ -3253,7 +3662,7 @@ async function executeAgentTool(
 			case "list_files":
 				return `📁 Listing: ${toolInput.path || '.'}`
 			case "run_command":
-				return `💻 Running: ${toolInput.command}${toolInput.background ? ' (background)' : ''}`
+				return `💻 Running: ${toolInput.command || '(invalid command)'}${toolInput.background ? ' (background)' : ''}`
 			case "ask_agent":
 				return `💬 Asking ${toolInput.agent_id}: ${(toolInput.question || '').substring(0, 100)}...`
 			case "send_message":
@@ -3456,6 +3865,13 @@ async function executeAgentTool(
 				background?: boolean
 				timeout_ms?: number
 			}
+
+			// kilocode_change start - Validate command before executing
+			if (!command || typeof command !== "string") {
+				log.error(`[Worker ${agentConfig.name}] run_command received invalid command: ${JSON.stringify(toolInput)}`)
+				return { result: `❌ Error: run_command requires a valid 'command' string parameter. Received: ${JSON.stringify(toolInput)}`, filesCreated: 0 }
+			}
+			// kilocode_change end
 
 			// kilocode_change - Use workingFolder for commands
 			log.info(`[Worker ${agentConfig.name}] Running: ${command} (cwd: ${workingFolder}, bg: ${background || false})`)
@@ -3767,6 +4183,95 @@ If you don't know, say so. Be concise.`,
 			}
 		}
 		// kilocode_change end
+
+		// kilocode_change start - Global skills implementations
+		case "list_global_skills": {
+			const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+			const globalSkillsDir = path.join(workspacePath, "skills")
+			
+			try {
+				if (!fs.existsSync(globalSkillsDir)) {
+					return { result: `📭 No global skills folder exists yet.\n\nGlobal skills are user-managed. Ask the user to create skills/ folder with shared skills.`, filesCreated: 0 }
+				}
+				const items = fs.readdirSync(globalSkillsDir, { withFileTypes: true })
+				const skills = items.filter(i => i.isDirectory())
+				if (skills.length === 0) {
+					return { result: `📭 Global skills folder exists but is empty.`, filesCreated: 0 }
+				}
+				
+				// Read each skill's description from SKILL.md frontmatter
+				const skillList = skills.map(s => {
+					const skillPath = path.join(globalSkillsDir, s.name, "SKILL.md")
+					let desc = "(no description)"
+					if (fs.existsSync(skillPath)) {
+						const content = fs.readFileSync(skillPath, "utf-8")
+						const match = content.match(/description:\s*(.+)/)
+						if (match) desc = match[1].trim()
+					}
+					return `- **${s.name}**: ${desc}`
+				}).join("\n")
+				
+				return { result: `🌐 **Global Skills** (READ ONLY - shared across all projects):\n\n${skillList}\n\nUse \`read_global_skill(skill_name)\` to read the full skill.\n\n⚠️ You can READ global skills but cannot CREATE them. To create a new project-specific skill, use \`write_file("skills/name/SKILL.md", ...)\``, filesCreated: 0 }
+			} catch (err: any) {
+				return { result: `❌ Error listing global skills: ${err.message}`, filesCreated: 0 }
+			}
+		}
+
+		case "read_global_skill": {
+			const { skill_name } = toolInput as { skill_name: string }
+			const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+			const skillPath = path.join(workspacePath, "skills", skill_name, "SKILL.md")
+			
+			// Security: sanitize skill_name to prevent path traversal
+			if (skill_name.includes("..") || skill_name.includes("/")) {
+				return { result: `❌ Invalid skill name. Use just the skill folder name (e.g. 'compile-latex')`, filesCreated: 0 }
+			}
+			
+			try {
+				if (!fs.existsSync(skillPath)) {
+					return { result: `❌ Global skill not found: ${skill_name}\n\nUse \`list_global_skills()\` to see available skills.`, filesCreated: 0 }
+				}
+				const content = fs.readFileSync(skillPath, "utf-8")
+				return { result: `🌐 **Global Skill: ${skill_name}** (READ ONLY):\n\n${content}`, filesCreated: 0 }
+			} catch (err: any) {
+				return { result: `❌ Error reading global skill: ${err.message}`, filesCreated: 0 }
+			}
+		}
+		// kilocode_change end - Global skills
+
+		// kilocode_change start - MCP tool implementations
+		case "list_mcps": {
+			try {
+				const mcpManager = getMcpManager()
+				const result = mcpManager.listMcps(project.id)
+				return { result, filesCreated: 0 }
+			} catch (err: any) {
+				return { result: `❌ MCP error: ${err.message}`, filesCreated: 0 }
+			}
+		}
+
+		case "list_mcp_tools": {
+			const { server_name } = toolInput as { server_name: string }
+			try {
+				const mcpManager = getMcpManager()
+				const result = await mcpManager.listMcpTools(server_name, project.id)
+				return { result, filesCreated: 0 }
+			} catch (err: any) {
+				return { result: `❌ Failed to list MCP tools: ${err.message}`, filesCreated: 0 }
+			}
+		}
+
+		case "use_mcp": {
+			const { server_name, tool_name, params } = toolInput as { server_name: string; tool_name: string; params?: any }
+			try {
+				const mcpManager = getMcpManager()
+				const result = await mcpManager.useMcp(server_name, tool_name, params || {}, project.id)
+				return { result, filesCreated: 0 }
+			} catch (err: any) {
+				return { result: `❌ MCP tool call failed: ${err.message}`, filesCreated: 0 }
+			}
+		}
+		// kilocode_change end - MCP
 
 		// kilocode_change start - Additional development tools implementations
 		case "search_in_files": {
@@ -4462,6 +4967,11 @@ Execute shell commands in your folder.
 - \`run_command(command="npm start", background=true)\` - start server
 - \`run_command(command="ls -la")\` - list files
 - \`run_command(command="npm install")\` - install deps
+**IMPORTANT:** Always examine command output for errors! Look for:
+- Lines starting with \`!\` (LaTeX errors)
+- \`Error:\` or \`error:\` messages
+- Non-zero exit codes (\`exit 1\`, \`failed\`)
+If a command fails, read log files or adjust before retrying.
 
 ### 2. read_file
 Read files from your folder.
@@ -5821,6 +6331,58 @@ You have tools to maintain your own knowledge across sessions:
 - Record decisions: \`write_file("decisions.md", "# Architecture Decisions\\n...")\`
 - Track conventions: \`write_file("style-guide.md", "# Code Style\\n...")\`
 
+**When you learn something, decide WHERE to store it:**
+
+| Store In | When | Example |
+|----------|------|---------|
+| **Project Skill** (\`skills/name/SKILL.md\`) | Formal procedure, reusable steps, multi-step workflow | LaTeX compilation, deployment, testing protocol |
+| **Playbook** (\`KNOWLEDGE.md\`) | Quick tips, rules of thumb, project-specific context | "API uses port 3001", "Always check .log files" |
+| **AGENTS.md** | State updates, file index, skill registry | Update Current State, add to Skills Index |
+
+**Decision criteria:**
+- Can it be reused across projects? → **Skill**
+- Does it have 3+ steps? → **Skill**
+- Is it a quick tip or context? → **Playbook in KNOWLEDGE.md**
+- Is it a state change? → **Update AGENTS.md**
+
+**Skills: Global vs Project (IMPORTANT!)**
+
+| Location | Access | Who Creates |
+|----------|--------|-------------|
+| **Global** (\`/skills/\`) | All projects (read-only) | User only |
+| **Project** (\`skills/\` in your folder) | This project only | You (agent) |
+
+**Skill Resolution Order:**
+1. Check your project's \`skills/name/\` first (project override)
+2. Fall back to global \`/skills/name/\` (shared)
+
+**Skill Commands:**
+- \`list_global_skills()\` - See shared skills available to all projects
+- \`read_global_skill(skill_name)\` - Read a global skill
+- \`read_file("skills/name/SKILL.md")\` - Read your project's skills
+- \`write_file("skills/name/SKILL.md", ...)\` - Create project skill (you can do this!)
+
+⚠️ You can CREATE project skills but NOT global skills. Global skills require user action.
+
+## MCP Servers (External Integrations)
+
+MCP servers provide external integrations (GitHub, Playwright, Google Workspace, etc.).
+Like global skills, MCPs are **user-managed** - you can USE them but not register them.
+
+**MCP Commands:**
+- \`list_mcps()\` - See available MCP servers (name + description)
+- \`list_mcp_tools(server_name)\` - List tools from a specific server (connects on first use)
+- \`use_mcp(server_name, tool_name, params)\` - Call an MCP tool
+
+**Example:**
+\`\`\`
+list_mcps()  →  Shows: playwright, github, etc.
+list_mcp_tools("playwright")  →  Shows: browser_navigate, browser_click, browser_screenshot...
+use_mcp("playwright", "browser_navigate", { url: "https://example.com" })
+\`\`\`
+
+⚠️ MCPs are registered by the user in /mcp-config.json (global) or projects/{project}/mcp.json (project).
+
 Your knowledge persists between conversations. Use it!`
 	// kilocode_change end
 
@@ -5934,6 +6496,17 @@ ${siblingAgents.length > 0 ? siblingAgents.map(a => `- "${a.id}": ${a.name} — 
  * Body: { description: string, attachments?: any[] }
  */
 app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
+	// kilocode_change start - reject if system paused
+	if (systemPaused) {
+		res.status(503).json({ 
+			error: "System is paused for maintenance",
+			message: "The system is temporarily paused. Please wait for maintenance to complete.",
+			systemPaused: true
+		})
+		return
+	}
+	// kilocode_change end
+	
 	try {
 		const { agentId } = req.params
 		// kilocode_change - Get API key from settings, header, or env
@@ -6616,6 +7189,11 @@ async function start() {
 		const workspacePath = getWorkspacePath()
 		initializeSettings(workspacePath)
 		log.info(getSettingsSummary())
+		// kilocode_change end
+		
+		// kilocode_change start - initialize MCP client manager
+		initMcpManager(workspacePath)
+		log.info(`MCP client manager initialized`)
 		// kilocode_change end
 		
 		log.info(`Society Agent Web Server | Environment: ${NODE_ENV} | Port: ${PORT}`)
