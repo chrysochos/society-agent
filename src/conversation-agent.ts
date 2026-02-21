@@ -25,6 +25,7 @@ export interface AgentMessage {
 	role: "user" | "assistant"
 	content: string
 	timestamp: number
+	attachments?: any[] // Society Agent - support for image attachments
 }
 
 export interface AgentState {
@@ -621,6 +622,34 @@ Respond with ONLY the JSON object.`
 
 		return message
 		// Society Agent end
+	}
+
+	/**
+	 * Add message with attachments to conversation history
+	 * Society Agent - supports image attachments
+	 */
+	private async addMessageWithAttachments(role: "user" | "assistant", content: string, attachments: any[]): Promise<AgentMessage> {
+		const message: AgentMessage = {
+			role,
+			content,
+			timestamp: Date.now(),
+			attachments,
+		}
+		this.state.conversationHistory.push(message)
+		this.onMessage?.(message)
+
+		// Check summarization threshold
+		const tokenCount = this.estimateTokenCount()
+		const contextPercent = (tokenCount / this.contextWindowSize) * 100
+		const shouldSummarize = contextPercent >= this.contextThresholdPercent || 
+			this.state.conversationHistory.length >= this.summaryThreshold
+		
+		if (shouldSummarize) {
+			getLog().info(`${this.state.identity.id}: Triggering summarization (${tokenCount} tokens, ${contextPercent.toFixed(1)}% of context, ${this.state.conversationHistory.length} messages)`)
+			await this.summarizeOldMessages()
+		}
+
+		return message
 	}
 
 	/**

@@ -248,6 +248,23 @@ function safeParseToolArgs(jsonStr: string | undefined): Record<string, any> {
 		return { _parseError: e.message, _rawArgs: jsonStr }
 	}
 }
+
+// Society Agent - Extract clean preview from tool results for UI tool cards
+function extractCleanPreview(result: string, maxLines = 2): { preview: string; lineCount: number } {
+	// Strip markdown formatting to get actual content
+	let content = result
+	// Remove markdown headers like "📄 **filename**:"
+	content = content.replace(/^[📄📝✅❌🔍🔎📁💻📨💬🎯✏️📖][^\n]*\*\*[^*]+\*\*:?\s*\n?/gm, '')
+	// Remove code block markers
+	content = content.replace(/^```\w*\n?/gm, '').replace(/\n?```$/gm, '')
+	// Trim whitespace
+	content = content.trim()
+	
+	const lines = content.split('\n').filter(l => l.trim() !== '')
+	const preview = lines.slice(0, maxLines).join('\n') + (lines.length > maxLines ? '...' : '')
+	
+	return { preview, lineCount: lines.length }
+}
 // Society Agent end
 
 interface UsageSummary {
@@ -2747,21 +2764,54 @@ app.delete("/api/projects/:id", (req, res): void => {
  */
 app.post("/api/projects/:id/agents", (req, res): void => {
 	try {
-		const { id, name, role, systemPrompt, homeFolder, model } = req.body
-		if (!id || !name || !role || !systemPrompt) {
-			res.status(400).json({ error: "id, name, role, and systemPrompt are required" })
+		const { id, name, role, systemPrompt, homeFolder, model, ephemeral, reportsTo, capabilities } = req.body
+		if (!id || !name || !role) {
+			res.status(400).json({ error: "id, name, and role are required" })
 			return
 		}
+		
+		// Generate default system prompt if not provided
+		const defaultPrompt = systemPrompt || `You are ${name}, a ${role}.
+
+Your responsibilities:
+${capabilities?.length ? capabilities.map((c: string) => `- ${c}`).join('\n') : `- Fulfill your role as ${role}`}
+
+Work collaboratively with other agents in the project. Use available tools to complete tasks.`
+
+		// Determine home folder - nest under parent if specified
+		const project = projectStore.get(req.params.id)
+		let agentHomeFolder = homeFolder
+		if (!agentHomeFolder) {
+			if (reportsTo && project) {
+				const parentAgent = project.agents.find(a => a.id === reportsTo)
+				const parentHome = parentAgent?.homeFolder || reportsTo
+				agentHomeFolder = parentHome === "/" ? id : `${parentHome}/${id}`
+			} else {
+				agentHomeFolder = id
+			}
+		}
+
 		const agent = projectStore.addAgent(req.params.id, {
 			id, name, role,
-			systemPrompt,
-			homeFolder: homeFolder || "/",
+			systemPrompt: defaultPrompt,
+			homeFolder: agentHomeFolder,
 			model,
+			ephemeral: ephemeral || false,
+			reportsTo,
 		})
 		if (!agent) {
 			res.status(404).json({ error: "Project not found" })
 			return
 		}
+		
+		// Create the agent's home directory
+		const projectFolder = project?.folder || req.params.id
+		const agentDir = path.join(projectStore.projectsBaseDir, projectFolder, agentHomeFolder)
+		if (!fs.existsSync(agentDir)) {
+			fs.mkdirSync(agentDir, { recursive: true })
+			log.info(`[API] Created directory for new agent: ${agentDir}`)
+		}
+		
 		io.emit("system-event", { type: "agent-added", projectId: req.params.id, agentId: id, timestamp: Date.now() })
 		res.status(201).json(agent)
 	} catch (error) {
@@ -3165,13 +3215,14 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 	},
 	{
 		name: "send_message",
-		description: "Send an async message to another agent's inbox. They'll see it when they check their inbox. Use for non-urgent updates, requests for later, or FYI messages. Does not wait for response.",
+		description: "Send a message to another agent. This triggers them to process your message immediately. Use for requests, instructions, or any communication. For complex tasks with detailed responses, use delegate_task instead.",
 		input_schema: {
 			type: "object" as const,
 			properties: {
 				agent_id: { type: "string", description: "ID of the agent to message" },
 				message: { type: "string", description: "Your message content" },
 				priority: { type: "string", enum: ["normal", "urgent"], description: "Priority level. Default: normal" },
+				wait_for_response: { type: "boolean", description: "If true, include the agent's full response. Default: false (just confirms delivery)" },
 			},
 			required: ["agent_id", "message"],
 		},
@@ -3553,14 +3604,27 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 		},
 	},
 	{
+		name: "reset_tasks",
+		description: "Reset stale/orphaned tasks back to available status. Use when workers have crashed or tasks are stuck.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				max_age_minutes: { type: "number", description: "Reset tasks claimed longer than this many minutes ago. Default: 5" },
+				cleanup_workers: { type: "boolean", description: "Also remove all ephemeral workers. Default: true" },
+			},
+			required: [],
+		},
+	},
+	{
 		name: "propose_new_agent",
-		description: "Propose creating a new permanent agent for the project. Requires human approval.",
+		description: "Propose creating a new permanent agent for the project. By default reports to you, but you can specify a different parent agent.",
 		input_schema: {
 			type: "object" as const,
 			properties: {
 				name: { type: "string", description: "Agent name (e.g. 'Testing Specialist')" },
 				role: { type: "string", description: "Agent role description" },
 				purpose: { type: "string", description: "Why this agent is needed" },
+				reports_to: { type: "string", description: "Agent ID that this new agent should report to. Default: you (the caller)" },
 			},
 			required: ["name", "role", "purpose"],
 		},
@@ -3604,11 +3668,7 @@ async function executeSupervisorTool(
 	}
 	
 	// Delegate to the unified agent tool execution
-	const { result } = await executeAgentTool(toolName, toolInput, agentConfig, project, io, apiKey)
-	
-	// Track filesCreated for write_file operations
-	const filesCreated = (toolName === "write_file" && result.includes("✅")) ? 1 : 0
-	return { result, filesCreated }
+	return executeAgentTool(toolName, toolInput, agentConfig, project, io, apiKey)
 }
 
 // Society Agent start - Worker tool execution (restricted to their folder)
@@ -3620,19 +3680,15 @@ async function executeAgentTool(
 	io: SocketIOServer,
 	apiKey?: string, // Society Agent - Optional API key for spawning sub-agents
 ): Promise<{ result: string; filesCreated: number }> {
-	// Society Agent start - Use task's workingDirectory if worker has a claimed task
-	const claimedTask = projectStore.getTasks(project.id).find(
-		t => t.claimedBy === agentConfig.id && ["claimed", "in-progress"].includes(t.status)
-	)
-	
-	// Determine the working folder
+	// Society Agent start - Determine the working folder
+	// For ephemeral workers: use parent agent's folder (the one who spawned them)
+	// For persistent agents: use their own folder
 	let workingFolder: string
-	if (claimedTask && claimedTask.context.workingDirectory && claimedTask.context.workingDirectory !== "/") {
-		// Use the task's working directory (relative to project folder)
-		const projectFolder = project.folder || project.id
-		workingFolder = path.join(projectStore.projectsBaseDir, projectFolder, claimedTask.context.workingDirectory)
+	if (agentConfig.ephemeral && agentConfig.reportsTo) {
+		// Ephemeral worker - write to parent agent's folder
+		workingFolder = projectStore.agentHomeDir(project.id, agentConfig.reportsTo)
 	} else {
-		// Fall back to agent's home folder
+		// Persistent agent - use own folder
 		workingFolder = projectStore.agentHomeDir(project.id, agentConfig.id)
 	}
 	// Society Agent end
@@ -3764,7 +3820,7 @@ async function executeAgentTool(
 					timestamp: Date.now(),
 				})
 				
-				return { result: `✅ Wrote ${relativeToProjects} (${content.length} bytes)`, filesCreated: 0 }
+				return { result: `✅ Wrote ${relativeToProjects} (${content.length} bytes)`, filesCreated: 1 }
 			} catch (err: any) {
 				return { result: `❌ Error writing file: ${err.message}`, filesCreated: 0 }
 			}
@@ -4123,6 +4179,30 @@ If you don't know, say so. Be concise.`,
 			}).join('\n')
 			return { result: `📋 **Agents in project "${project.name}":**\n${agents}`, filesCreated: 0 }
 		}
+
+		case "list_team": {
+			// Show persistent team members that report to this agent or are siblings
+			const myId = agentConfig.id
+			const subordinates = project.agents.filter(a => !a.ephemeral && a.reportsTo === myId)
+			const siblings = agentConfig.reportsTo 
+				? project.agents.filter(a => !a.ephemeral && a.reportsTo === agentConfig.reportsTo && a.id !== myId)
+				: []
+			
+			let result = `👥 **Your Team:**\n`
+			if (subordinates.length > 0) {
+				result += `\n**Subordinates (report to you):**\n`
+				result += subordinates.map(a => `- **${a.name}** (${a.id}) - ${a.role}`).join('\n')
+			} else {
+				result += `\nNo subordinates.`
+			}
+			
+			if (siblings.length > 0) {
+				result += `\n\n**Peers (same level):**\n`
+				result += siblings.map(a => `- **${a.name}** (${a.id}) - ${a.role}`).join('\n')
+			}
+			
+			return { result, filesCreated: 0 }
+		}
 		// Society Agent end
 
 		// Society Agent start - Allow workers to READ from project (other agents' folders)
@@ -4178,6 +4258,37 @@ If you don't know, say so. Be concise.`,
 					.map(i => i.isDirectory() ? `📁 ${i.name}/` : `📄 ${i.name}`)
 					.join("\n")
 				return { result: `📂 **Project: ${dirPath || "."}** (READ ONLY):\n${listing || "(empty)"}`, filesCreated: 0 }
+			} catch (err: any) {
+				return { result: `❌ Error listing directory: ${err.message}`, filesCreated: 0 }
+			}
+		}
+
+		case "list_agent_files": {
+			const { agent_id, path: dirPath } = toolInput as { agent_id: string; path?: string }
+			const targetAgentDir = projectStore.agentHomeDir(project.id, agent_id)
+			const fullPath = path.join(targetAgentDir, dirPath || ".")
+			
+			// Security: ensure path is within agent folder
+			if (!fullPath.startsWith(targetAgentDir)) {
+				return { result: `❌ Error: Cannot list files outside the agent's directory`, filesCreated: 0 }
+			}
+			
+			try {
+				if (!fs.existsSync(fullPath)) {
+					return { result: `❌ Directory not found: ${dirPath || "."}`, filesCreated: 0 }
+				}
+				const items = fs.readdirSync(fullPath, { withFileTypes: true })
+				// Filter out noise
+				const ignoreDirs = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.cache', 'coverage', '__pycache__'])
+				const listing = items
+					.filter(i => {
+						if (i.name.startsWith(".") && i.name !== ".env") return false
+						if (i.isDirectory() && ignoreDirs.has(i.name)) return false
+						return true
+					})
+					.map(i => i.isDirectory() ? `📁 ${i.name}/` : `📄 ${i.name}`)
+					.join("\n")
+				return { result: `📂 **Agent ${agent_id}: ${dirPath || "."}**\n${listing || "(empty)"}`, filesCreated: 0 }
 			} catch (err: any) {
 				return { result: `❌ Error listing directory: ${err.message}`, filesCreated: 0 }
 			}
@@ -4535,9 +4646,9 @@ If you don't know, say so. Be concise.`,
 		}
 		// Society Agent end
 
-		// Society Agent start - Worker send_message (async to inbox)
+		// Society Agent start - Worker send_message (triggers receiving agent)
 		case "send_message": {
-			const { agent_id, message, priority } = toolInput as { agent_id: string; message: string; priority?: string }
+			const { agent_id, message, priority, wait_for_response } = toolInput as { agent_id: string; message: string; priority?: string; wait_for_response?: boolean }
 			const targetAgent = project.agents.find(a => a.id === agent_id)
 
 			if (!targetAgent) {
@@ -4548,7 +4659,11 @@ If you don't know, say so. Be concise.`,
 				return { result: `❌ You cannot message yourself. Save your own notes with write_file.`, filesCreated: 0 }
 			}
 
-			sendToInbox(project.id, { id: agentConfig.id, name: agentConfig.name }, agent_id, message, (priority as "normal" | "urgent") || "normal")
+			// If ephemeral worker, just save to inbox (they can't be triggered)
+			if (targetAgent.ephemeral) {
+				sendToInbox(project.id, { id: agentConfig.id, name: agentConfig.name }, agent_id, message, (priority as "normal" | "urgent") || "normal")
+				return { result: `✅ Message saved to ${targetAgent.name}'s inbox (ephemeral worker - will see on next task).`, filesCreated: 0 }
+			}
 
 			io.emit("agent-message", {
 				agentId: agentConfig.id,
@@ -4559,7 +4674,33 @@ If you don't know, say so. Be concise.`,
 				isStreaming: true,
 			})
 
-			return { result: `✅ Message sent to ${targetAgent.name}'s inbox${priority === "urgent" ? " (URGENT)" : ""}.`, filesCreated: 0 }
+			// Execute the message via handleSupervisorChat for the target agent
+			log.info(`[${agentConfig.name}] Sending message to ${targetAgent.name}: ${message.substring(0, 100)}...`)
+			
+			try {
+				const messageApiKey = apiKey || process.env.ANTHROPIC_API_KEY || ""
+				const result = await handleSupervisorChat(
+					`[Message from ${agentConfig.name}]\n\n${message}`,
+					targetAgent,
+					project,
+					messageApiKey,
+					io,
+				)
+				
+				if (wait_for_response) {
+					return { 
+						result: `✅ **Message delivered to ${targetAgent.name}**\n\n**Response:**\n${result.fullResponse.substring(0, 1500)}${result.fullResponse.length > 1500 ? '...(truncated)' : ''}`, 
+						filesCreated: result.totalFilesCreated 
+					}
+				} else {
+					return { 
+						result: `✅ Message delivered to ${targetAgent.name}. They created ${result.totalFilesCreated} file(s).`, 
+						filesCreated: result.totalFilesCreated 
+					}
+				}
+			} catch (err: any) {
+				return { result: `❌ Message delivery failed: ${err.message}`, filesCreated: 0 }
+			}
 		}
 		// Society Agent end
 
@@ -4772,865 +4913,338 @@ If you don't know, say so. Be concise.`,
 			
 			return { result: `❌ **Task failed: ${myTask.title}**\n\nReason: ${reason}\n\nThe task has been returned to the pool for another worker.${agentConfig.ephemeral ? '\n\n👋 You will now self-destruct.' : ''}`, filesCreated: 0 }
 		}
+
+		case "create_task": {
+			const { title, description, priority = 5, working_directory } = toolInput as {
+				title: string
+				description: string
+				priority?: number
+				working_directory?: string
+			}
+			
+			// Workers will write to their parent's folder - working_directory is just informational
+			const context: TaskContext = {
+				workingDirectory: working_directory || ".",
+				conventions: (project as any).conventions,
+				existingPatterns: (project as any).existingPatterns,
+			}
+			
+			const task = projectStore.createTask(
+				project.id,
+				agentConfig.id,
+				title,
+				description,
+				context,
+				priority
+			)
+			
+			if (!task) {
+				return { result: `❌ Failed to create task. Project may not exist.`, filesCreated: 0 }
+			}
+			
+			io.emit("task-created", {
+				projectId: project.id,
+				taskId: task.id,
+				title: task.title,
+				description: task.description,
+				priority: task.priority,
+				createdBy: agentConfig.id,
+				timestamp: Date.now(),
+			})
+			
+			return { result: `✅ **Task created: ${title}**\n\n📋 ID: \`${task.id}\`\n⚡ Priority: ${priority}/10\n📝 ${description.substring(0, 100)}${description.length > 100 ? '...' : ''}\n\nSpawn a worker with \`spawn_worker()\` to execute tasks.`, filesCreated: 0 }
+		}
+
+		case "list_tasks": {
+			const { status = "all" } = toolInput as { status?: string }
+			const tasks = projectStore.getTasks(project.id)
+			
+			let filteredTasks = tasks
+			if (status !== "all") {
+				filteredTasks = tasks.filter(t => t.status === status)
+			}
+			
+			if (filteredTasks.length === 0) {
+				return { result: `📋 No tasks found${status !== "all" ? ` with status "${status}"` : ""}.`, filesCreated: 0 }
+			}
+			
+			const statusEmoji: Record<string, string> = {
+				available: "🟢",
+				claimed: "🟡",
+				"in-progress": "🔵",
+				completed: "✅",
+				failed: "❌",
+			}
+			
+			const taskList = filteredTasks
+				.sort((a, b) => b.priority - a.priority)
+				.map(t => {
+					const emoji = statusEmoji[t.status] || "⚪"
+					const claimed = t.claimedBy ? ` (claimed by ${t.claimedBy})` : ""
+					return `${emoji} **${t.title}** [P${t.priority}] - ${t.status}${claimed}\n   ${t.description.substring(0, 80)}${t.description.length > 80 ? '...' : ''}`
+				})
+				.join("\n\n")
+			
+			return { result: `📋 **Task Pool (${filteredTasks.length} tasks):**\n\n${taskList}`, filesCreated: 0 }
+		}
+		// Society Agent end
+
+		// Society Agent start - spawn_worker implementation
+		case "spawn_worker": {
+			const { count = 1 } = toolInput as { count?: number }
+			
+			// Check if we can spawn more workers
+			const activeWorkers = projectStore.getActiveWorkerCount(project.id)
+			const maxWorkers = (project as any).maxConcurrentWorkers || 5
+			const canSpawn = Math.min(count, maxWorkers - activeWorkers)
+			
+			if (canSpawn <= 0) {
+				return { result: `⚠️ Cannot spawn more workers. Active: ${activeWorkers}/${maxWorkers}\n\n💡 **TIP:** If workers are stuck from a previous session, run \`reset_tasks()\` to clean them up, then try spawning again.`, filesCreated: 0 }
+			}
+			
+			// Check if there are tasks to work on
+			const availableTasks = projectStore.getAvailableTaskCount(project.id)
+			if (availableTasks === 0) {
+				return { result: `⚠️ No available tasks in the pool. Create tasks first with \`create_task()\` before spawning workers.`, filesCreated: 0 }
+			}
+			
+			const spawnedWorkers: string[] = []
+			
+			for (let i = 0; i < canSpawn; i++) {
+				const workerId = `worker-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
+				const workerName = `Worker ${spawnedWorkers.length + activeWorkers + 1}`
+				
+				// Create ephemeral worker agent
+				const workerConfig: ProjectAgentConfig = {
+					id: workerId,
+					name: workerName,
+					role: "Ephemeral worker - claims and executes tasks from the pool",
+					systemPrompt: `You are an ephemeral worker agent. Your job is to:
+1. Claim a task from the pool with \`claim_task()\`
+2. Read the task details and understand what needs to be done
+3. Execute the task using available tools (read_file, write_file, run_command, etc.)
+4. When done, call \`complete_task(files_created, files_modified, summary)\`
+5. If you encounter an unrecoverable error, call \`fail_task(reason)\`
+
+You will self-destruct after completing or failing your task. Focus on the task at hand.
+DO NOT spawn more workers or create new tasks - that's the supervisor's job.`,
+					ephemeral: true,
+					reportsTo: agentConfig.id,
+				}
+				
+				// Add worker to project
+				projectStore.addAgent(project.id, workerConfig)
+				spawnedWorkers.push(workerId)
+				
+				// Emit worker spawned event
+				io.emit("worker-spawned", {
+					projectId: project.id,
+					workerId,
+					workerName,
+					spawnedBy: agentConfig.id,
+					timestamp: Date.now(),
+				})
+				
+				log.info(`[Supervisor ${agentConfig.name}] Spawned worker: ${workerName} (${workerId})`)
+				
+				// Start the worker's execution loop in the background
+				// The worker will claim a task and execute it
+				;(async () => {
+					try {
+						const workerApiKey = apiKey || process.env.ANTHROPIC_API_KEY || ""
+						await runEphemeralWorker(workerConfig, project, workerApiKey, io)
+					} catch (err: any) {
+						log.error(`[Worker ${workerId}] Error in execution loop:`, err)
+						io.emit("worker-error", {
+							projectId: project.id,
+							workerId,
+							error: err.message,
+							timestamp: Date.now(),
+						})
+					}
+				})()
+			}
+			
+			const tasksNote = availableTasks > canSpawn 
+				? `\n\n💡 ${availableTasks - canSpawn} more tasks available. Spawn more workers if needed.`
+				: ""
+			
+			return { 
+				result: `✅ **Spawned ${spawnedWorkers.length} worker(s)**\n\nWorker IDs:\n${spawnedWorkers.map(w => `  - ${w}`).join('\n')}\n\nThey will claim tasks and start working autonomously.${tasksNote}`, 
+				filesCreated: 0 
+			}
+		}
+
+		case "reset_tasks": {
+			const { max_age_minutes = 5, cleanup_workers = true } = toolInput as { max_age_minutes?: number; cleanup_workers?: boolean }
+			
+			const maxAgeMs = max_age_minutes * 60 * 1000
+			let result = ""
+			
+			// Only clean up workers spawned by THIS agent (scoped cleanup)
+			if (cleanup_workers) {
+				const removedWorkers = projectStore.removeEphemeralWorkers(project.id, agentConfig.id)
+				if (removedWorkers > 0) {
+					result += `🧹 Removed ${removedWorkers} of your stale ephemeral worker(s)\n`
+					io.emit("workers-cleaned", {
+						projectId: project.id,
+						count: removedWorkers,
+						spawnedBy: agentConfig.id,
+						timestamp: Date.now(),
+					})
+				}
+			}
+			
+			// Reset stale tasks claimed by THIS agent's workers only
+			const resetCount = projectStore.resetStaleTasks(project.id, maxAgeMs, agentConfig.id)
+			
+			if (resetCount > 0) {
+				result += `♻️ Reset ${resetCount} stale task(s) to available\n`
+				io.emit("tasks-reset", {
+					projectId: project.id,
+					count: resetCount,
+					spawnedBy: agentConfig.id,
+					timestamp: Date.now(),
+				})
+			}
+			
+			if (!result) {
+				result = "✅ No stale tasks or workers found (for your workers)."
+			} else {
+				result += "\n💡 Tasks are now available. Spawn workers with `spawn_worker()` to process them."
+			}
+			
+			return { result, filesCreated: 0 }
+		}
+
+		case "propose_new_agent": {
+			const { name, role, purpose, reports_to } = toolInput as { name: string; role: string; purpose: string; reports_to?: string }
+			
+			if (!name || !role || !purpose) {
+				return { result: `❌ Please provide name, role, and purpose for the new agent.`, filesCreated: 0 }
+			}
+			
+			// Determine the parent agent
+			let parentId = agentConfig.id
+			let parentName = agentConfig.name
+			if (reports_to) {
+				const parentAgent = project.agents.find(a => a.id === reports_to && !a.ephemeral)
+				if (!parentAgent) {
+					const available = project.agents.filter(a => !a.ephemeral).map(a => `  - ${a.id}: ${a.name}`).join('\n')
+					return { result: `❌ Agent "${reports_to}" not found.\n\nAvailable agents:\n${available}`, filesCreated: 0 }
+				}
+				parentId = parentAgent.id
+				parentName = parentAgent.name
+			}
+			
+			// Generate a reasonable ID from the name
+			const agentId = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+			
+			// Check if agent already exists
+			const existing = project.agents.find(a => a.id === agentId)
+			if (existing) {
+				return { result: `❌ An agent with ID "${agentId}" already exists in this project.`, filesCreated: 0 }
+			}
+			
+			// Get parent agent's home folder to nest under it
+			const parentAgent = project.agents.find(a => a.id === parentId)
+			const parentHome = parentAgent?.homeFolder || parentId
+			const agentHome = parentHome === "/" ? agentId : `${parentHome}/${agentId}`
+			
+			// Create the agent
+			const newAgent = projectStore.addAgent(project.id, {
+				id: agentId,
+				name,
+				role,
+				systemPrompt: `You are ${name}, a ${role}.
+
+Your purpose: ${purpose}
+
+Work collaboratively with other agents in the project. Use available tools to complete tasks.
+You report to ${parentName}.`,
+				homeFolder: agentHome,  // Nested under parent's folder
+				ephemeral: false,
+				reportsTo: parentId,
+			})
+			
+			if (!newAgent) {
+				return { result: `❌ Failed to create agent. Project may not exist.`, filesCreated: 0 }
+			}
+			
+			// Create the agent's home directory
+			const projectFolder = project.folder || project.id
+			const agentDir = path.join(projectStore.projectsBaseDir, projectFolder, agentHome)
+			if (!fs.existsSync(agentDir)) {
+				fs.mkdirSync(agentDir, { recursive: true })
+				log.info(`[propose_new_agent] Created directory for new agent: ${agentDir}`)
+			}
+			
+			io.emit("agent-added", {
+				projectId: project.id,
+				agentId: newAgent.id,
+				agentName: newAgent.name,
+				parentId: parentId,
+				timestamp: Date.now(),
+			})
+			
+			return { 
+				result: `✅ **New agent created: ${name}**\n\n🆔 ID: \`${agentId}\`\n👔 Role: ${role}\n📋 Purpose: ${purpose}\n👤 Reports to: ${parentName}\n\nYou can now delegate tasks to this agent using \`delegate_task("${agentId}", "task description")\`.`, 
+				filesCreated: 0 
+			}
+		}
+		// Society Agent end
+
+		// Society Agent start - delegate_task to persistent agents
+		case "delegate_task": {
+			const { agent_id, task, context } = toolInput as { agent_id: string; task: string; context?: string }
+			
+			// Find target agent
+			const targetAgent = project.agents.find(a => a.id === agent_id && !a.ephemeral)
+			if (!targetAgent) {
+				const available = project.agents.filter(a => !a.ephemeral && a.id !== agentConfig.id)
+				return { 
+					result: `❌ Agent "${agent_id}" not found or is ephemeral.\n\nAvailable persistent agents:\n${available.map(a => `  - ${a.id}: ${a.name}`).join('\n') || '(none)'}`, 
+					filesCreated: 0 
+				}
+			}
+			
+			// Emit delegation event
+			io.emit("task-delegated", {
+				projectId: project.id,
+				fromAgent: agentConfig.id,
+				toAgent: agent_id,
+				task,
+				context,
+				timestamp: Date.now(),
+			})
+			
+			log.info(`[${agentConfig.name}] Delegating to ${targetAgent.name}: ${task.substring(0, 100)}...`)
+			
+			// Execute the task via handleSupervisorChat for the target agent
+			try {
+				const delegateApiKey = apiKey || process.env.ANTHROPIC_API_KEY || ""
+				const result = await handleSupervisorChat(
+					`[Delegated from ${agentConfig.name}]\n\n${task}${context ? `\n\nContext: ${context}` : ""}`,
+					targetAgent,
+					project,
+					delegateApiKey,
+					io,
+				)
+				
+				return { 
+					result: `✅ **Delegation to ${targetAgent.name} complete**\n\n**Response:**\n${result.fullResponse.substring(0, 2000)}${result.fullResponse.length > 2000 ? '...(truncated)' : ''}`, 
+					filesCreated: result.totalFilesCreated 
+				}
+			} catch (err: any) {
+				return { result: `❌ Delegation failed: ${err.message}`, filesCreated: 0 }
+			}
+		}
 		// Society Agent end
 
 		default:
 			return { result: `Unknown tool: ${toolName}`, filesCreated: 0 }
 	}
 }
-
-/**
- * Handle worker agent chat with tools.
- */
-async function handleWorkerChat(
-	userMessage: string,
-	agentConfig: ProjectAgentConfig,
-	project: Project,
-	apiKey: string,
-	io: SocketIOServer,
-	attachments?: any[], // Society Agent - added attachments parameter for images
-): Promise<{ fullResponse: string }> {
-	log.info(`[handleWorkerChat] Called for ${agentConfig.id} with message: ${userMessage.substring(0, 80)}${attachments?.length ? ` + ${attachments.length} attachment(s)` : ''}`)
-	
-	// Society Agent start - Activity log: task received
-	activityLogger.log({
-		projectId: project.id,
-		agentId: agentConfig.id,
-		agentName: agentConfig.name,
-		type: "task_received",
-		summary: `Received task: ${userMessage.substring(0, 100)}${userMessage.length > 100 ? "..." : ""}`,
-		details: { messageLength: userMessage.length },
-	})
-	// Society Agent end
-
-	// Society Agent start - use provider config for model and API key
-	// Priority: 1) Standalone settings 2) ProviderSettings 3) Legacy config 4) Environment
-	let anthropic: Anthropic | null = null
-	let openRouterClient: OpenAI | null = null  // Society Agent - OpenRouter support
-	let model: string
-	let useOpenRouter = false  // Society Agent - flag for OpenRouter
-
-	// Society Agent start - Check standalone settings FIRST
-	if (standaloneSettings.isInitialized() && standaloneSettings.hasApiKey()) {
-		const providerConfig = standaloneSettings.getProvider()
-		log.info(`[handleWorkerChat] Using standalone settings: ${providerConfig.type}/${providerConfig.model}`)
-		
-		if (providerConfig.type === "openrouter") {
-			useOpenRouter = true
-			openRouterClient = new OpenAI({
-				baseURL: "https://openrouter.ai/api/v1",
-				apiKey: providerConfig.apiKey,
-			})
-			model = providerConfig.model
-		} else if (providerConfig.type === "anthropic" || providerConfig.type === "minimax") {
-			anthropic = new Anthropic({
-				apiKey: providerConfig.apiKey,
-				baseURL: providerConfig.type === "minimax" ? "https://api.minimax.io/anthropic" : undefined,
-			})
-			model = providerConfig.model
-		} else if (providerConfig.type === "openai" || providerConfig.type === "groq" || providerConfig.type === "deepseek" || providerConfig.type === "mistral") {
-			// These providers use OpenAI-compatible API
-			useOpenRouter = true  // Use OpenAI SDK path
-			openRouterClient = new OpenAI({
-				baseURL: providerConfig.baseUrl || PROVIDER_BASE_URLS[providerConfig.type],
-				apiKey: providerConfig.apiKey,
-			})
-			model = providerConfig.model
-		} else {
-			// Fallback to Anthropic SDK
-			anthropic = new Anthropic({ apiKey: providerConfig.apiKey })
-			model = providerConfig.model
-		}
-	}
-	// Society Agent end
-	else if (currentProviderSettings) {
-		const provider = currentProviderSettings.apiProvider
-		// Society Agent start - OpenRouter support
-		if (provider === "openrouter") {
-			useOpenRouter = true
-			openRouterClient = new OpenAI({
-				baseURL: "https://openrouter.ai/api/v1",
-				apiKey: currentProviderSettings.openRouterApiKey || "not-provided",
-			})
-			model = currentProviderSettings.openRouterModelId || "anthropic/claude-sonnet-4"
-			log.info(`[handleWorkerChat] Using OpenRouter with model: ${model}`)
-		}
-		// Society Agent end
-		// Tool calling requires Anthropic-compatible API (Anthropic or MiniMax)
-		else if (provider === "anthropic" || provider === "minimax") {
-			anthropic = new Anthropic({
-				apiKey: provider === "anthropic" ? currentProviderSettings.apiKey : currentProviderSettings.minimaxApiKey,
-				baseURL: provider === "minimax" ? "https://api.minimax.io/anthropic" : undefined,
-			})
-			model = currentProviderSettings.apiModelId || "claude-sonnet-4-20250514"
-		} else {
-			// Other providers - try OpenRouter as fallback if key available
-			if (currentProviderSettings.openRouterApiKey) {
-				useOpenRouter = true
-				openRouterClient = new OpenAI({
-					baseURL: "https://openrouter.ai/api/v1",
-					apiKey: currentProviderSettings.openRouterApiKey,
-				})
-				model = currentProviderSettings.openRouterModelId || "anthropic/claude-sonnet-4"
-				log.info(`[handleWorkerChat] Fallback to OpenRouter with model: ${model}`)
-			} else {
-				// Last resort - use Anthropic
-				anthropic = new Anthropic({ apiKey: apiKey })
-				model = "claude-sonnet-4-20250514"
-			}
-		}
-	} else {
-		// Legacy provider config
-		const providerConfig = currentProviderConfig || loadProviderConfig(process.env.WORKSPACE_PATH || process.cwd())
-		// Society Agent start - OpenRouter legacy support
-		if (providerConfig && providerConfig.provider === "openrouter" && providerConfig.apiKey) {
-			useOpenRouter = true
-			openRouterClient = new OpenAI({
-				baseURL: "https://openrouter.ai/api/v1",
-				apiKey: providerConfig.apiKey,
-			})
-			model = providerConfig.model || "anthropic/claude-sonnet-4"
-		}
-		// Society Agent end
-		// Tool calling requires Anthropic-compatible API (Anthropic or MiniMax)
-		else if (providerConfig && (providerConfig.provider === "anthropic" || providerConfig.provider === "minimax")) {
-			anthropic = new Anthropic({
-				apiKey: providerConfig.apiKey,
-				baseURL: providerConfig.provider === "minimax" ? "https://api.minimax.io/anthropic" : undefined,
-			})
-			model = providerConfig.model || "claude-sonnet-4-20250514"
-		} else {
-			anthropic = new Anthropic({ apiKey: apiKey }) // fallback to env ANTHROPIC_API_KEY
-			model = "claude-sonnet-4-20250514"
-		}
-	}
-	// Society Agent end
-	const agent = getOrCreateProjectAgent(agentConfig, project, apiKey)
-
-	// Society Agent - Use proper homeFolder from config
-	const agentFolder = projectStore.agentHomeDir(project.id, agentConfig.id)
-	
-	// Society Agent start - Build folder context for persistent memory
-	let folderContext = ""
-	try {
-		// Check what exists in folder
-		if (fs.existsSync(agentFolder)) {
-			const files = fs.readdirSync(agentFolder)
-			const fileList = files.filter(f => !f.startsWith('.') && f !== 'node_modules').slice(0, 20)
-			folderContext += `\n\n## YOUR FOLDER CONTENTS\nFiles in ${agentFolder}:\n${fileList.map(f => `- ${f}`).join('\n')}`
-			
-			// Check package.json for project type
-			const pkgPath = path.join(agentFolder, 'package.json')
-			if (fs.existsSync(pkgPath)) {
-				try {
-					const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'))
-					folderContext += `\n\nProject: ${pkg.name || 'unknown'}`
-					if (pkg.scripts) {
-						folderContext += `\nAvailable scripts: ${Object.keys(pkg.scripts).join(', ')}`
-					}
-					if (pkg.dependencies) {
-						const deps = Object.keys(pkg.dependencies).slice(0, 10)
-						folderContext += `\nDependencies: ${deps.join(', ')}`
-					}
-				} catch (e) { /* ignore parse errors */ }
-			}
-			
-			// Check for server.js
-			if (fs.existsSync(path.join(agentFolder, 'server.js'))) {
-				folderContext += `\n\nYou have a server.js file - this is likely your Express server.`
-			}
-			
-			// Check for src/ folder (React)
-			if (fs.existsSync(path.join(agentFolder, 'src'))) {
-				folderContext += `\nYou have a src/ folder - this is likely a React frontend.`
-			}
-		} else {
-			folderContext += `\n\n## YOUR FOLDER\nYour folder does not exist yet. Create it by creating files.`
-		}
-	} catch (e) {
-		log.warn(`[handleWorkerChat] Error reading folder context: ${e}`)
-	}
-	// Society Agent end
-	
-	const systemPrompt = `${agentConfig.systemPrompt || `You are ${agentConfig.name}, a worker agent.`}
-
-You are working in project "${project.name}".
-Your working folder is: ${agentFolder}
-${folderContext}
-
-## YOUR TOOLS
-
-You have these tools - **USE THEM**, don't output code blocks!
-
-### 1. run_command
-Execute shell commands in your folder.
-- \`run_command(command="npm start", background=true)\` - start server
-- \`run_command(command="ls -la")\` - list files
-- \`run_command(command="npm install")\` - install deps
-**IMPORTANT:** Always examine command output for errors! Look for:
-- Lines starting with \`!\` (LaTeX errors)
-- \`Error:\` or \`error:\` messages
-- Non-zero exit codes (\`exit 1\`, \`failed\`)
-If a command fails, read log files or adjust before retrying.
-
-### 2. read_file
-Read files from your folder.
-- \`read_file(path="AGENTS.md")\` - READ THIS FIRST! Your knowledge base
-- \`read_file(path="package.json")\` - read config
-
-### 3. write_file  
-Create NEW files or COMPLETELY REWRITE files in your folder.
-- \`write_file(path="AGENTS.md", content="...")\` - update your knowledge
-- \`write_file(path="src/App.js", content="...")\` - create code
-
-### 4. patch_file (PREFERRED FOR EDITS!)
-Make TARGETED edits to existing files - much more efficient!
-- \`patch_file(path="src/App.js", old_text="old code here", new_text="new code here")\`
-- Only replaces the specific text you specify
-- Include enough context in old_text to be unique
-- USE THIS instead of rewriting entire files!
-
-### 5. list_files
-List files in a directory.
-- \`list_files(path=".")\` - list your folder
-- \`list_files(path="src")\` - list src folder
-
-### 6. ask_agent (IMPORTANT!)
-Ask questions to other agents in your project, including the supervisor/architect.
-- \`ask_agent(agent_id="architect", question="What port should I use?")\` - ask supervisor
-- \`ask_agent(agent_id="agent1", question="What's your API endpoint?")\` - ask another worker
-Use this to coordinate, get requirements, or resolve conflicts!
-
-### 7. list_agents
-See all agents you can communicate with.
-- \`list_agents()\` - shows all agents and their roles
-
-## AGENTS.md - KNOWLEDGE INDEX (LAZY LOADING!)
-
-**AGENTS.md is your INDEX for LAZY LOADING knowledge.**
-
-### The Pattern:
-1. **Read AGENTS.md FIRST** - It's your index/table of contents
-2. **Check what files exist** - The index tells you what knowledge is available
-3. **Only load what you NEED** - Read specific files relevant to current task
-4. **Don't read everything** - That's wasteful! Use the index to decide.
-
-### At the START of a task:
-\`\`\`
-1. read_file("AGENTS.md")     # Read the INDEX
-2. Check "Knowledge Files Index" table
-3. Identify which files are relevant to THIS task
-4. read_file("RELEVANT_FILE.md")  # Only load what you need
-\`\`\`
-
-### Example - Task: "Fix the API endpoint"
-\`\`\`
-1. Read AGENTS.md (index)
-2. See: API.md exists → "Endpoints, contracts" → RELEVANT!
-3. See: ARCHITECTURE.md exists → Maybe relevant
-4. See: TROUBLESHOOTING.md exists → Check if similar issue
-5. Read only: API.md, maybe TROUBLESHOOTING.md
-6. DON'T read: PROCEDURES.md, DEPENDENCIES.md (not relevant)
-\`\`\`
-
-### After COMPLETING work - Update the INDEX:
-1. Update \`Current State\` in AGENTS.md
-2. Update \`Recent Activity\` log
-3. If you created/modified knowledge:
-   - Create/update the detailed .md file
-   - Update the \`Knowledge Files Index\` table in AGENTS.md
-   - Add to \`Objects & Entities Registry\` if new objects
-
-### Standard Knowledge Files:
-| File | Purpose | Create When |
-|------|---------|-------------|
-| \`STATE.md\` | Detailed state tracking | Complex state to track |
-| \`ARCHITECTURE.md\` | System design | Building structure |
-| \`API.md\` | Endpoints, schemas | Working with APIs |
-| \`PROCEDURES.md\` | Workflows | Repeatable processes |
-| \`TROUBLESHOOTING.md\` | Issues & fixes | Solving problems |
-
-## RULES
-- ALWAYS read AGENTS.md (index) FIRST!
-- LAZY LOAD: Only read files you NEED for the current task
-- Keep index updated when you create/modify files
-- NEVER output bash code blocks - USE the tools!
-- For servers use background=true
-- NEVER use \`pkill -f node\` - kills everything!
-
-## IMPORTANT: COMPLETE YOUR TASKS FULLY
-
-### Before writing code or tests:
-1. **READ the actual source code first** using read_project_file
-2. Understand what components/functions ACTUALLY exist
-3. Never assume - verify by reading
-
-### When tests or commands fail:
-1. **Read the error carefully**
-2. **Diagnose the cause** - wrong file path? missing component? typo?
-3. **Fix the issue** - edit your files to correct the mistake
-4. **Re-run** to verify the fix worked
-5. **Don't stop until it works** or you've explained why it can't
-
-### Testing best practices:
-1. Use list_project_files to see what exists
-2. Use read_project_file to read actual code BEFORE writing tests
-3. Match test imports to REAL file paths and component names
-4. If a test fails, fix it immediately - don't leave broken tests`
-
-	// Society Agent start - Build content with attachments (images)
-	let messageContent: string | Array<{ type: string; [key: string]: any }>
-	if (attachments && attachments.length > 0) {
-		// Build content blocks with images
-		const contentBlocks: Array<{ type: string; [key: string]: any }> = []
-		
-		// Add images first - handle both frontend format (source.data) and raw format (base64)
-		// NOTE: Frontend resizeImage() always converts to JPEG, so we hardcode image/jpeg
-		for (const att of attachments) {
-			// Frontend sends: { type: 'image', source: { type: 'base64', media_type: ..., data: ... } }
-			if (att.type === 'image' && att.source?.data) {
-				contentBlocks.push({
-					type: "image",
-					source: {
-						type: "base64",
-						media_type: 'image/jpeg', // Always JPEG - frontend resizes to JPEG
-						data: att.source.data,
-					}
-				})
-				log.info(`[handleWorkerChat] Added image block (source format)`)
-			}
-			// Raw format: { type: 'image/png', base64: '...' }
-			else if (att.type?.startsWith('image/') && att.base64) {
-				contentBlocks.push({
-					type: "image",
-					source: {
-						type: "base64",
-						media_type: 'image/jpeg', // Always JPEG - frontend resizes to JPEG
-						data: att.base64,
-					}
-				})
-				log.info(`[handleWorkerChat] Added image block (raw format)`)
-			}
-		}
-		
-		// Add text message
-		if (userMessage) {
-			contentBlocks.push({ type: "text", text: userMessage })
-		}
-		
-		messageContent = contentBlocks.length > 0 ? contentBlocks : userMessage
-		log.info(`[handleWorkerChat] Built ${contentBlocks.length} content blocks from ${attachments.length} attachments`)
-	} else {
-		messageContent = userMessage
-	}
-	// Society Agent end
-
-	await (agent as any).addMessage("user", messageContent)
-	const history = agent.getHistory()
-	const messages: Anthropic.MessageParam[] = history.map((m: any) => ({
-		role: m.role as "user" | "assistant",
-		content: m.content,
-	}))
-
-	let fullResponse = ""
-	const maxIterations = 15 // Society Agent - Increased from 5 to allow auto-continue
-
-	// Society Agent start - Use appropriate tools based on agent type
-	const agentTools = agentConfig.ephemeral ? EPHEMERAL_TOOLS : AGENT_TOOLS
-	// Society Agent end
-
-	log.info(`[handleAgentChat] Starting loop with model ${model}, ${messages.length} messages, ${agentTools.length} tools, useOpenRouter=${useOpenRouter}, ephemeral=${!!agentConfig.ephemeral}`)
-
-	// Society Agent start - OpenRouter uses OpenAI SDK, need to convert tools
-	const openAiTools: OpenAI.Chat.ChatCompletionTool[] = useOpenRouter ? agentTools.map((t) => ({
-		type: "function" as const,
-		function: {
-			name: t.name,
-			description: t.description || "",
-			parameters: t.input_schema as Record<string, unknown>,
-		},
-	})) : []
-	// Society Agent end
-
-	for (let iteration = 0; iteration < maxIterations; iteration++) {
-		log.info(`[handleWorkerChat] Iteration ${iteration + 1}`)
-		
-		// Society Agent start - Check if agent was stopped
-		if (stoppedAgents.has(agentConfig.id)) {
-			log.info(`[Worker] ${agentConfig.name} was stopped by user`)
-			stoppedAgents.delete(agentConfig.id) // Clean up
-			io.emit("agent-message", {
-				agentId: agentConfig.id,
-				agentName: agentConfig.name,
-				projectId: project.id,
-				message: "\n⛔ **Stopped by user**\n",
-				timestamp: Date.now(),
-				isStreaming: false,
-				isDone: true,
-			})
-			break
-		}
-		// Society Agent end
-		
-		// Society Agent start - OpenRouter branch using OpenAI SDK
-		if (useOpenRouter && openRouterClient) {
-			// Convert Anthropic messages to OpenAI format
-			const openAiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-				{ role: "system", content: systemPrompt },
-				...messages.map((m): OpenAI.Chat.ChatCompletionMessageParam => {
-					if (m.role === "user") {
-						// Handle tool results
-						if (Array.isArray(m.content) && m.content.length > 0 && (m.content[0] as any).type === "tool_result") {
-							// Return tool results as separate messages
-							return {
-								role: "tool" as const,
-								tool_call_id: (m.content[0] as any).tool_use_id,
-								content: typeof (m.content[0] as any).content === "string" 
-									? (m.content[0] as any).content 
-									: JSON.stringify((m.content[0] as any).content),
-							}
-						}
-						// Regular user message
-						return {
-							role: "user" as const,
-							content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
-						}
-					} else {
-						// Assistant message - might have tool calls
-						const assistantMsg: OpenAI.Chat.ChatCompletionAssistantMessageParam = {
-							role: "assistant" as const,
-							content: "",
-						}
-						if (Array.isArray(m.content)) {
-							const textParts: string[] = []
-							const toolCalls: OpenAI.Chat.ChatCompletionMessageToolCall[] = []
-							for (const block of m.content) {
-								if ((block as any).type === "text") {
-									textParts.push((block as any).text)
-								} else if ((block as any).type === "tool_use") {
-									toolCalls.push({
-										id: (block as any).id,
-										type: "function" as const,
-										function: {
-											name: (block as any).name,
-											arguments: JSON.stringify((block as any).input),
-										},
-									})
-								}
-							}
-							assistantMsg.content = textParts.join("")
-							if (toolCalls.length > 0) {
-								assistantMsg.tool_calls = toolCalls
-							}
-						} else {
-							assistantMsg.content = typeof m.content === "string" ? m.content : ""
-						}
-						return assistantMsg
-					}
-				}),
-			]
-			
-			// Filter out invalid messages (tool results need special handling)
-			const validMessages = openAiMessages.filter((m, i) => {
-				if (m.role === "tool") {
-					// Check if previous message has matching tool call
-					const prev = openAiMessages[i - 1]
-					return prev?.role === "assistant" && (prev as any).tool_calls?.some((tc: any) => tc.id === (m as any).tool_call_id)
-				}
-				return true
-			})
-			
-			// Society Agent start - TRUE STREAMING for OpenRouter
-			const stream = await openRouterClient.chat.completions.create({
-				model,
-				max_tokens: 16384,
-				messages: validMessages,
-				tools: openAiTools,
-				stream: true,
-				stream_options: { include_usage: true }, // Society Agent - get token usage in stream
-			})
-			
-			let textContent = ""
-			let toolCalls: any[] = []
-			let finishReason: string | null = null
-			let streamUsage: { prompt_tokens?: number; completion_tokens?: number } | null = null
-			const toolCallsMap = new Map<number, { id: string; name: string; arguments: string }>()
-			
-			// Stream text in real-time
-			for await (const chunk of stream) {
-				// Society Agent start - Capture usage from stream
-				if ((chunk as any).usage) {
-					streamUsage = (chunk as any).usage
-				}
-				// Society Agent end
-				
-				const choice = chunk.choices[0]
-				if (!choice) continue
-				
-				// Handle text content
-				const delta = choice.delta
-				if (delta?.content) {
-					textContent += delta.content
-					fullResponse += delta.content
-					io.emit("agent-message", {
-						agentId: agentConfig.id,
-						agentName: agentConfig.name,
-						projectId: project.id,
-						message: delta.content,
-						timestamp: Date.now(),
-						isStreaming: true,
-					})
-				}
-				
-				// Handle tool calls (streamed incrementally)
-				if (delta?.tool_calls) {
-					for (const tc of delta.tool_calls) {
-						const idx = tc.index ?? 0
-						if (!toolCallsMap.has(idx)) {
-							toolCallsMap.set(idx, { id: tc.id || "", name: tc.function?.name || "", arguments: "" })
-						}
-						const existing = toolCallsMap.get(idx)!
-						if (tc.id) existing.id = tc.id
-						if (tc.function?.name) existing.name = tc.function.name
-						if (tc.function?.arguments) existing.arguments += tc.function.arguments
-					}
-				}
-				
-				if (choice.finish_reason) {
-					finishReason = choice.finish_reason
-				}
-			}
-			
-			// Convert accumulated tool calls to array
-			toolCalls = Array.from(toolCallsMap.values()).filter(tc => tc.id && tc.name).map(tc => ({
-				id: tc.id,
-				type: "function",
-				function: { name: tc.name, arguments: tc.arguments }
-			}))
-			
-			// Society Agent start - Track usage from streaming response
-			if (streamUsage) {
-				usageTracker.record({
-					projectId: project.id,
-					agentId: agentConfig.id,
-					agentName: agentConfig.name,
-					model,
-					inputTokens: streamUsage.prompt_tokens || 0,
-					outputTokens: streamUsage.completion_tokens || 0,
-				})
-			}
-			// Society Agent end
-			
-			if (toolCalls.length === 0) {
-				if (finishReason === "stop") {
-					break
-				} else if (finishReason === "length") {
-					log.info(`[handleWorkerChat] OpenRouter hit length limit, auto-continuing`)
-					messages.push({ 
-						role: "assistant", 
-						content: textContent || "" 
-					})
-					messages.push({ role: "user", content: "Continue from where you left off." })
-					continue
-				} else {
-					break
-				}
-			}
-			
-			// Build assistant message with tool calls for history
-			const assistantContent: any[] = []
-			if (textContent) {
-				assistantContent.push({ type: "text", text: textContent })
-			}
-			for (const tc of toolCalls) {
-				const toolCall = tc as any
-				assistantContent.push({
-					type: "tool_use",
-					id: toolCall.id,
-					name: toolCall.function.name,
-					input: safeParseToolArgs(toolCall.function.arguments),
-				})
-			}
-			messages.push({ role: "assistant", content: assistantContent })
-			
-			// Execute tool calls
-			const toolResults: Anthropic.ToolResultBlockParam[] = []
-			for (const tc of toolCalls) {
-				const toolCall = tc as any
-				const toolName = toolCall.function.name
-				const toolInput = safeParseToolArgs(toolCall.function.arguments)
-				
-				// Society Agent start - Show detailed tool info for ALL tools
-				let toolDisplay = `🔧 **${toolName}**`
-				if (toolName === "run_command" && toolInput.command) {
-					toolDisplay += `\n\`\`\`bash\n${toolInput.command}\n\`\`\``
-					if (toolInput.background) toolDisplay += `\n⚡ Background mode`
-				} else if (toolName === "write_file" && toolInput.path) {
-					toolDisplay += ` → \`${toolInput.path}\` (${toolInput.content?.length || 0} bytes)`
-				} else if (toolName === "read_file" && toolInput.path) {
-					toolDisplay += ` → \`${toolInput.path}\``
-				} else if (toolName === "list_files") {
-					toolDisplay += ` → \`${toolInput.path || '.'}\``
-				} else if (toolName === "patch_file" && toolInput.path) {
-					toolDisplay += ` → \`${toolInput.path}\``
-				} else if (toolName === "read_project_file" && toolInput.path) {
-					toolDisplay += ` → \`${toolInput.path}\``
-				} else if (toolName === "find_files" && toolInput.pattern) {
-					toolDisplay += ` → "${toolInput.pattern}"`
-				} else if (toolName === "search_files" && toolInput.query) {
-					toolDisplay += ` → "${toolInput.query}"`
-				}
-				// Society Agent end
-				
-				io.emit("agent-message", {
-					agentId: agentConfig.id,
-					agentName: agentConfig.name,
-					projectId: project.id,
-					message: `\n${toolDisplay}\n`,
-					timestamp: Date.now(),
-					isStreaming: true,
-				})
-
-				const { result } = await executeAgentTool(toolName, toolInput, agentConfig, project, io)
-
-				activityLogger.log({
-					projectId: project.id,
-					agentId: agentConfig.id,
-					agentName: agentConfig.name,
-					type: "tool_used",
-					summary: `Used ${toolName}: ${result.substring(0, 80)}${result.length > 80 ? "..." : ""}`,
-					details: { tool: toolName, input: toolInput, resultLength: result.length },
-				})
-
-				let resultDisplay = result
-				if (resultDisplay.length > 2000) {
-					resultDisplay = resultDisplay.substring(0, 2000) + "\n...(truncated)"
-				}
-				
-				io.emit("agent-message", {
-					agentId: agentConfig.id,
-					agentName: agentConfig.name,
-					projectId: project.id,
-					message: `\n📤 **Result:**\n\`\`\`\n${resultDisplay}\n\`\`\`\n`,
-					timestamp: Date.now(),
-					isStreaming: true,
-				})
-
-				toolResults.push({
-					type: "tool_result",
-					tool_use_id: tc.id,
-					content: result,
-				})
-			}
-			
-			messages.push({ role: "user", content: toolResults })
-			continue
-		}
-		// Society Agent end - OpenRouter branch
-		
-		// Original Anthropic SDK path
-		if (!anthropic) {
-			throw new Error("No API client configured")
-		}
-		const stream = await anthropic.messages.stream({
-			model,
-			max_tokens: 16384, // Society Agent - Increased from 4096 for longer tasks
-			system: systemPrompt,
-			messages,
-			tools: agentTools,
-		})
-
-		let textContent = ""
-		const finalMessage = await stream.finalMessage()
-
-		// Society Agent start - Track token usage
-		if (finalMessage.usage) {
-			usageTracker.record({
-				projectId: project.id,
-				agentId: agentConfig.id,
-				agentName: agentConfig.name,
-				model,
-				inputTokens: finalMessage.usage.input_tokens,
-				outputTokens: finalMessage.usage.output_tokens,
-			})
-		}
-		// Society Agent end
-
-		for (const block of finalMessage.content) {
-			if (block.type === "text") {
-				textContent += block.text
-				io.emit("agent-message", {
-					agentId: agentConfig.id,
-					agentName: agentConfig.name,
-					projectId: project.id,
-					message: block.text,
-					timestamp: Date.now(),
-					isStreaming: true,
-				})
-			}
-		}
-
-		fullResponse += textContent
-
-		const toolBlocks = finalMessage.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use")
-
-		// Society Agent start - Auto-continue on max_tokens, only stop on explicit end_turn
-		if (toolBlocks.length === 0) {
-			if (finalMessage.stop_reason === "end_turn") {
-				// Model explicitly finished - done
-				break
-			} else if (finalMessage.stop_reason === "max_tokens") {
-				// Hit token limit - auto-continue
-				log.info(`[handleWorkerChat] Hit max_tokens, auto-continuing (iteration ${iteration + 1})`)
-				io.emit("agent-message", {
-					agentId: agentConfig.id,
-					agentName: agentConfig.name,
-					projectId: project.id,
-					message: "\n*[Auto-continuing...]*\n",
-					timestamp: Date.now(),
-					isStreaming: true,
-				})
-				messages.push({ role: "assistant", content: finalMessage.content })
-				messages.push({ role: "user", content: "Continue from where you left off." })
-				continue
-			} else {
-				// Other stop reason (e.g., tool_use without blocks?) - stop to be safe
-				break
-			}
-		}
-		// Society Agent end
-
-		messages.push({ role: "assistant", content: finalMessage.content })
-
-		const toolResults: Anthropic.ToolResultBlockParam[] = []
-		for (const toolBlock of toolBlocks) {
-			const input = toolBlock.input as Record<string, any>
-			
-			// Society Agent start - Show detailed tool info for ALL tools
-			let toolDisplay = `🔧 **${toolBlock.name}**`
-			if (toolBlock.name === "run_command" && input.command) {
-				toolDisplay += `\n\`\`\`bash\n${input.command}\n\`\`\``
-				if (input.background) toolDisplay += `\n⚡ Background mode`
-			} else if (toolBlock.name === "write_file" && input.path) {
-				toolDisplay += ` → \`${input.path}\` (${input.content?.length || 0} bytes)`
-			} else if (toolBlock.name === "read_file" && input.path) {
-				toolDisplay += ` → \`${input.path}\``
-			} else if (toolBlock.name === "list_files") {
-				toolDisplay += ` → \`${input.path || '.'}\``
-			} else if (toolBlock.name === "patch_file" && input.path) {
-				toolDisplay += ` → \`${input.path}\``
-			} else if (toolBlock.name === "read_project_file" && input.path) {
-				toolDisplay += ` → \`${input.path}\``
-			} else if (toolBlock.name === "find_files" && input.pattern) {
-				toolDisplay += ` → "${input.pattern}"`
-			} else if (toolBlock.name === "search_files" && input.query) {
-				toolDisplay += ` → "${input.query}"`
-			}
-			// Society Agent end
-			
-			io.emit("agent-message", {
-				agentId: agentConfig.id,
-				agentName: agentConfig.name,
-				projectId: project.id,
-				message: `\n${toolDisplay}\n`,
-				timestamp: Date.now(),
-				isStreaming: true,
-			})
-
-			const { result } = await executeAgentTool(
-				toolBlock.name,
-				toolBlock.input,
-				agentConfig,
-				project,
-				io,
-			)
-
-			// Society Agent start - Activity log: tool used
-			activityLogger.log({
-				projectId: project.id,
-				agentId: agentConfig.id,
-				agentName: agentConfig.name,
-				type: "tool_used",
-				summary: `Used ${toolBlock.name}: ${result.substring(0, 80)}${result.length > 80 ? "..." : ""}`,
-				details: { tool: toolBlock.name, input: toolBlock.input, resultLength: result.length },
-			})
-			// Society Agent end
-
-			// Show result in UI
-			let resultDisplay = result
-			if (resultDisplay.length > 2000) {
-				resultDisplay = resultDisplay.substring(0, 2000) + "\n...(truncated)"
-			}
-			
-			io.emit("agent-message", {
-				agentId: agentConfig.id,
-				agentName: agentConfig.name,
-				projectId: project.id,
-				message: `\n📤 **Result:**\n\`\`\`\n${resultDisplay}\n\`\`\`\n`,
-				timestamp: Date.now(),
-				isStreaming: true,
-			})
-
-			toolResults.push({
-				type: "tool_result",
-				tool_use_id: toolBlock.id,
-				content: result,
-			})
-		}
-
-		messages.push({ role: "user", content: toolResults })
-
-		// Society Agent start - Auto-recovery: detect failures and prompt agent to fix
-		const hasError = toolResults.some(tr => {
-			const content = typeof tr.content === 'string' ? tr.content : ''
-			return content.includes('❌') || 
-				   content.includes('Command failed') || 
-				   content.includes('Error:') ||
-				   content.includes('Cannot find module') ||
-				   content.includes('FAIL') ||
-				   content.includes('exit 1')
-		})
-		
-		if (hasError) {
-			log.info(`[handleWorkerChat] Error detected in tool results, prompting auto-recovery`)
-			io.emit("agent-message", {
-				agentId: agentConfig.id,
-				agentName: agentConfig.name,
-				projectId: project.id,
-				message: "\n⚠️ *Error detected - analyzing and fixing...*\n",
-				timestamp: Date.now(),
-				isStreaming: true,
-			})
-		}
-		// Society Agent end
-	}
-
-	io.emit("agent-message", {
-		agentId: agentConfig.id,
-		agentName: agentConfig.name,
-		projectId: project.id,
-		message: "",
-		timestamp: Date.now(),
-		isStreaming: false,
-		isDone: true,
-	})
-
-	// Society Agent start - Activity log: task completed
-	activityLogger.log({
-		projectId: project.id,
-		agentId: agentConfig.id,
-		agentName: agentConfig.name,
-		type: "task_completed",
-		summary: `Completed task (${fullResponse.length} chars response)`,
-		details: { responseLength: fullResponse.length },
-	})
-	// Society Agent end
-
-	await (agent as any).addMessage("assistant", fullResponse)
-	return { fullResponse }
-}
-// Society Agent end
-
 /**
  * Handle supervisor chat with an agentic tool-use loop.
  * The LLM decides when to delegate, list team, or propose agents via tool calls.
@@ -5642,21 +5256,14 @@ async function handleSupervisorChat(
 	project: Project,
 	apiKey: string,
 	io: SocketIOServer,
+	attachments?: any[],
 ): Promise<{
 	fullResponse: string
 	delegationResults: Array<{ agentId: string; agentName: string; filesCreated: number; responseLength: number }>
 	totalFilesCreated: number
 }> {
-	// Society Agent start - Progress indicator at start
-	io.emit("agent-message", {
-		agentId: supervisorConfig.id,
-		agentName: supervisorConfig.name,
-		projectId: project.id,
-		message: "🤔 **Analyzing your request...**\n",
-		timestamp: Date.now(),
-		isStreaming: true,
-		isProgress: true,
-	})
+	// Society Agent start - Progress indicator at start (suppressed - replaced by tool cards)
+	// io.emit("agent-message", { ... "🤔 **Analyzing your request...**" ... })
 	// Society Agent end
 
 	// Society Agent start - use provider config for model and API key
@@ -5762,15 +5369,49 @@ async function handleSupervisorChat(
 	// Access the agent's system prompt (private field, accessed via cast)
 	const systemPrompt = (agent as any).systemPrompt || supervisorConfig.systemPrompt
 
-	// Add user message to agent history
-	await (agent as any).addMessage("user", userMessage)
+	// Add user message to agent history (with attachments if present)
+	if (attachments && attachments.length > 0) {
+		await (agent as any).addMessageWithAttachments("user", userMessage, attachments)
+	} else {
+		await (agent as any).addMessage("user", userMessage)
+	}
 
 	// Build messages from agent history
 	const history = agent.getHistory()
-	const messages: Anthropic.MessageParam[] = history.map((msg: any) => ({
-		role: msg.role === "user" ? "user" as const : "assistant" as const,
-		content: msg.content,
-	}))
+	const messages: Anthropic.MessageParam[] = history.map((msg: any) => {
+		// If message has attachments (images/files), include them
+		if (msg.attachments && msg.attachments.length > 0 && msg.role === 'user') {
+			const content: any[] = []
+			// Add images first
+			for (const att of msg.attachments) {
+				if (att.type === 'image' && att.source?.data) {
+					content.push({
+						type: 'image',
+						source: {
+							type: 'base64',
+							media_type: att.source.media_type || 'image/jpeg',
+							data: att.source.data,
+						}
+					})
+				} else if (att.type === 'file' && att.text) {
+					// File attachments: include the text representation
+					content.push({ type: 'text', text: att.text })
+				}
+			}
+			// Add text if present
+			if (msg.content) {
+				content.push({ type: 'text', text: msg.content })
+			}
+			return {
+				role: 'user' as const,
+				content,
+			}
+		}
+		return {
+			role: msg.role === "user" ? "user" as const : "assistant" as const,
+			content: msg.content,
+		}
+	})
 
 	let fullResponse = ""
 	const delegationResults: Array<{ agentId: string; agentName: string; filesCreated: number; responseLength: number }> = []
@@ -5798,21 +5439,8 @@ async function handleSupervisorChat(
 		}
 		// Society Agent end
 
-		// Society Agent start - Progress indicators
-		if (iteration > 0) {
-			const progressMsg = lastActionDescription 
-				? `\n⏳ **Step ${iteration + 1}** - Continuing after: ${lastActionDescription}\n`
-				: `\n⏳ **Processing step ${iteration + 1}...**\n`
-			io.emit("agent-message", {
-				agentId: supervisorConfig.id,
-				agentName: supervisorConfig.name,
-				projectId: project.id,
-				message: progressMsg,
-				timestamp: Date.now(),
-				isStreaming: true,
-				isProgress: true,
-			})
-		}
+		// Society Agent start - Progress indicators (suppressed - replaced by tool cards)
+		// if (iteration > 0) { io.emit(...) }
 		// Society Agent end
 
 		// Society Agent start - OpenRouter path for supervisor
@@ -6002,15 +5630,10 @@ async function handleSupervisorChat(
 				}
 				// Society Agent end
 
-				io.emit("agent-message", {
-					agentId: supervisorConfig.id,
-					agentName: supervisorConfig.name,
-					projectId: project.id,
-					message: `\n${toolDisplay}\n`,
-					timestamp: Date.now(),
-					isStreaming: true,
-				})
+				// Society Agent - Suppress old streaming tool messages (replaced by tool cards)
+				// io.emit("agent-message", { ... toolDisplay ... })
 
+				const toolStartTime = Date.now()
 				const { result, filesCreated } = await executeSupervisorTool(
 					toolName,
 					toolInput,
@@ -6019,15 +5642,23 @@ async function handleSupervisorChat(
 					apiKey,
 					io,
 				)
+				const toolDuration = Date.now() - toolStartTime
 				totalFilesCreated += filesCreated
 
-				io.emit("agent-message", {
+				// Society Agent - Emit tool-execution completed event for UI tool cards
+				const { preview, lineCount } = extractCleanPreview(result)
+				io.emit("tool-execution", {
 					agentId: supervisorConfig.id,
 					agentName: supervisorConfig.name,
 					projectId: project.id,
-					message: `\n📤 **Result:**\n\`\`\`\n${result.substring(0, 2000)}\n\`\`\`\n`,
+					toolName,
+					toolInput,
+					result,
+					preview,
+					lineCount,
+					status: result.startsWith("❌") ? "error" : "completed",
+					durationMs: toolDuration,
 					timestamp: Date.now(),
-					isStreaming: true,
 				})
 
 				if (toolName === "delegate_task") {
@@ -6096,6 +5727,20 @@ async function handleSupervisorChat(
 
 		// Wait for complete message (needed for tool_use blocks)
 		const finalMessage = await stream.finalMessage()
+		// Society Agent end
+
+		// Society Agent start - Handle extended thinking blocks for supervisor
+		for (const block of finalMessage.content) {
+			if ((block as any).type === "thinking") {
+				io.emit("agent-thinking", {
+					agentId: supervisorConfig.id,
+					agentName: supervisorConfig.name,
+					projectId: project.id,
+					thinking: (block as any).thinking,
+					timestamp: Date.now(),
+				})
+			}
+		}
 		// Society Agent end
 
 		// Society Agent start - Track token usage for supervisor
@@ -6176,15 +5821,10 @@ async function handleSupervisorChat(
 			}
 			// Society Agent end
 
-			io.emit("agent-message", {
-				agentId: supervisorConfig.id,
-				agentName: supervisorConfig.name,
-				projectId: project.id,
-				message: `\n${toolDisplay}\n`,
-				timestamp: Date.now(),
-				isStreaming: true,
-			})
+			// Society Agent - Suppress old streaming tool messages (replaced by tool cards)
+			// io.emit("agent-message", { ... toolDisplay ... })
 
+			const toolStartTime = Date.now()
 			const { result, filesCreated } = await executeSupervisorTool(
 				toolBlock.name,
 				toolBlock.input,
@@ -6193,25 +5833,25 @@ async function handleSupervisorChat(
 				apiKey,
 				io,
 			)
+			const toolDuration = Date.now() - toolStartTime
 
 			totalFilesCreated += filesCreated
 
-			// Society Agent start - Emit tool result to UI so user can see command output
-			let resultDisplay = result
-			// Truncate very long results for display (full result still goes to LLM)
-			if (resultDisplay.length > 2000) {
-				resultDisplay = resultDisplay.substring(0, 2000) + "\n...(truncated for display)"
-			}
-			
-			io.emit("agent-message", {
+			// Society Agent - Emit tool-execution completed event for UI tool cards
+			const { preview, lineCount } = extractCleanPreview(result)
+			io.emit("tool-execution", {
 				agentId: supervisorConfig.id,
 				agentName: supervisorConfig.name,
 				projectId: project.id,
-				message: `\n📤 **Tool result:**\n\`\`\`\n${resultDisplay}\n\`\`\`\n`,
+				toolName: toolBlock.name,
+				toolInput: toolBlock.input,
+				result,
+				preview,
+				lineCount,
+				status: result.startsWith("❌") ? "error" : "completed",
+				durationMs: toolDuration,
 				timestamp: Date.now(),
-				isStreaming: true,
 			})
-			// Society Agent end
 
 			if (toolBlock.name === "delegate_task") {
 				const input = toolBlock.input as { agent_id: string; task: string }
@@ -6274,6 +5914,330 @@ async function handleSupervisorChat(
 	return { fullResponse, delegationResults, totalFilesCreated }
 }
 // Society Agent end
+
+/**
+ * Run an ephemeral worker agent that claims and executes a task.
+ * The worker will auto-destruct when done.
+ */
+async function runEphemeralWorker(
+	workerConfig: ProjectAgentConfig,
+	project: Project,
+	apiKey: string,
+	io: SocketIOServer,
+): Promise<void> {
+	const workerId = workerConfig.id
+	const workerName = workerConfig.name
+	
+	log.info(`[Worker ${workerName}] Starting execution loop`)
+	
+	// Emit worker started event
+	io.emit("worker-started", {
+		projectId: project.id,
+		workerId,
+		workerName,
+		timestamp: Date.now(),
+	})
+	
+	// Get provider configuration
+	let anthropic: Anthropic | null = null
+	let openRouterClient: OpenAI | null = null
+	let model: string
+	let useOpenRouter = false
+
+	if (standaloneSettings.isInitialized() && standaloneSettings.hasApiKey()) {
+		const providerConfig = standaloneSettings.getProvider()
+		if (providerConfig.type === "openrouter") {
+			openRouterClient = new OpenAI({
+				baseURL: "https://openrouter.ai/api/v1",
+				apiKey: providerConfig.apiKey,
+			})
+			model = providerConfig.model
+			useOpenRouter = true
+		} else {
+			anthropic = new Anthropic({ apiKey: providerConfig.apiKey })
+			model = providerConfig.model
+		}
+	} else if (apiKey) {
+		anthropic = new Anthropic({ apiKey })
+		model = "claude-sonnet-4-20250514"
+	} else {
+		throw new Error("No API key configured for worker")
+	}
+	
+	// Build worker system prompt
+	const systemPrompt = workerConfig.systemPrompt || `You are an ephemeral worker agent.
+Your job is to:
+1. First, call \`claim_task()\` to get a task from the pool
+2. Read the task details and execute it using available tools
+3. When done, call \`complete_task(files_created, files_modified, summary)\`
+4. If you can't complete it, call \`fail_task(reason)\`
+
+You will self-destruct after completing or failing. Focus on your task.`
+
+	const messages: Anthropic.MessageParam[] = [
+		{ role: "user", content: "You have been spawned as an ephemeral worker. Start by claiming a task from the pool." }
+	]
+	
+	let fullResponse = ""
+	const MAX_ITERATIONS = 20
+	let taskCompleted = false
+	
+	for (let iteration = 0; iteration < MAX_ITERATIONS && !taskCompleted; iteration++) {
+		log.info(`[Worker ${workerName}] Iteration ${iteration + 1}`)
+		
+		// Emit progress
+		io.emit("worker-progress", {
+			projectId: project.id,
+			workerId,
+			workerName,
+			iteration: iteration + 1,
+			timestamp: Date.now(),
+		})
+		
+		let response: Anthropic.Message
+		
+		try {
+		log.info(`[Worker ${workerName}] Making API call (useOpenRouter: ${useOpenRouter}, hasAnthropic: ${!!anthropic})`)
+		io.emit("worker-api-call", {
+			projectId: project.id,
+			workerId,
+			workerName,
+			iteration: iteration + 1,
+			useOpenRouter,
+			model,
+			timestamp: Date.now(),
+		})
+		
+		if (useOpenRouter && openRouterClient) {
+			// OpenRouter path
+			const orMessages = messages.map(m => ({
+				role: m.role as "user" | "assistant",
+				content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+			}))
+			
+			const orTools = EPHEMERAL_TOOLS.map(tool => ({
+				type: "function" as const,
+				function: {
+					name: tool.name,
+					description: tool.description,
+					parameters: tool.input_schema,
+				},
+			}))
+			
+			const completion = await openRouterClient.chat.completions.create({
+				model,
+				messages: [{ role: "system", content: systemPrompt }, ...orMessages],
+				tools: orTools,
+				max_tokens: 8192,
+			})
+			
+			log.info(`[Worker ${workerName}] OpenRouter API response received`)
+			
+			const choice = completion.choices[0]
+			const textContent = choice.message.content || ""
+			const toolCalls = choice.message.tool_calls || []
+			
+			log.info(`[Worker ${workerName}] Response: ${toolCalls.length} tool calls, text: ${textContent?.substring(0, 100)}...`)
+			
+			if (textContent) {
+				fullResponse += textContent
+				io.emit("agent-message", {
+					agentId: workerId,
+					agentName: workerName,
+					projectId: project.id,
+					message: textContent,
+					timestamp: Date.now(),
+					isStreaming: false,
+				})
+			}
+			
+			if (toolCalls.length === 0) {
+				messages.push({ role: "assistant", content: textContent })
+				break
+			}
+			
+			// Process tool calls
+			messages.push({ role: "assistant", content: textContent || "Using tools..." })
+			const toolResults: any[] = []
+			
+			for (const tc of toolCalls) {
+				const toolName = tc.function.name
+				const toolInput = safeParseToolArgs(tc.function.arguments)
+				
+				// Emit tool execution start
+				io.emit("tool-execution", {
+					agentId: workerId,
+					agentName: workerName,
+					projectId: project.id,
+					toolName,
+					toolInput,
+					status: "started",
+					timestamp: Date.now(),
+				})
+				
+				const { result, filesCreated } = await executeAgentTool(
+					toolName,
+					toolInput,
+					workerConfig,
+					project,
+					io,
+					apiKey,
+				)
+				
+				// Emit tool execution complete
+				const { preview, lineCount } = extractCleanPreview(result)
+				io.emit("tool-execution", {
+					agentId: workerId,
+					agentName: workerName,
+					projectId: project.id,
+					toolName,
+					toolInput,
+					result,
+					preview,
+					lineCount,
+					status: result.startsWith("❌") ? "error" : "completed",
+					timestamp: Date.now(),
+				})
+				
+				toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result })
+				
+				// Check if task is completed
+				if (toolName === "complete_task" || toolName === "fail_task") {
+					taskCompleted = true
+				}
+			}
+			
+			messages.push({ role: "user", content: toolResults.map(r => r.content).join("\n\n") })
+			
+		} else if (anthropic) {
+			// Anthropic path
+			log.info(`[Worker ${workerName}] Starting Anthropic stream...`)
+			const stream = await anthropic.messages.stream({
+				model,
+				max_tokens: 8192,
+				system: systemPrompt,
+				messages,
+				tools: EPHEMERAL_TOOLS,
+			})
+			
+			response = await stream.finalMessage()
+			log.info(`[Worker ${workerName}] Anthropic response received, stop_reason: ${response.stop_reason}`)
+			
+			// Extract text and emit
+			let textContent = ""
+			const toolBlocks: Anthropic.ToolUseBlock[] = []
+			
+			for (const block of response.content) {
+				if (block.type === "text") {
+					textContent += block.text
+					fullResponse += block.text
+					io.emit("agent-message", {
+						agentId: workerId,
+						agentName: workerName,
+						projectId: project.id,
+						message: block.text,
+						timestamp: Date.now(),
+						isStreaming: false,
+					})
+				} else if (block.type === "tool_use") {
+					toolBlocks.push(block)
+				}
+			}
+			
+			if (response.stop_reason === "end_turn" && toolBlocks.length === 0) {
+				messages.push({ role: "assistant", content: response.content })
+				break
+			}
+			
+			if (toolBlocks.length === 0) {
+				break
+			}
+			
+			// Process tool calls
+			messages.push({ role: "assistant", content: response.content })
+			const toolResults: Anthropic.ToolResultBlockParam[] = []
+			
+			for (const toolBlock of toolBlocks) {
+				const toolName = toolBlock.name
+				const toolInput = toolBlock.input as Record<string, any>
+				
+				// Emit tool execution start
+				io.emit("tool-execution", {
+					agentId: workerId,
+					agentName: workerName,
+					projectId: project.id,
+					toolName,
+					toolInput,
+					status: "started",
+					timestamp: Date.now(),
+				})
+				
+				const { result, filesCreated } = await executeAgentTool(
+					toolName,
+					toolInput,
+					workerConfig,
+					project,
+					io,
+					apiKey,
+				)
+				
+				// Emit tool execution complete
+				const { preview, lineCount } = extractCleanPreview(result)
+				io.emit("tool-execution", {
+					agentId: workerId,
+					agentName: workerName,
+					projectId: project.id,
+					toolName,
+					toolInput,
+					result,
+					preview,
+					lineCount,
+					status: result.startsWith("❌") ? "error" : "completed",
+					timestamp: Date.now(),
+				})
+				
+				toolResults.push({
+					type: "tool_result",
+					tool_use_id: toolBlock.id,
+					content: result,
+				})
+				
+				// Check if task is completed
+				if (toolName === "complete_task" || toolName === "fail_task") {
+					taskCompleted = true
+				}
+			}
+			
+			messages.push({ role: "user", content: toolResults })
+		}
+		} catch (iterErr: any) {
+			log.error(`[Worker ${workerName}] Error in iteration ${iteration + 1}:`, iterErr)
+			io.emit("worker-error", {
+				projectId: project.id,
+				workerId,
+				errorMessage: iterErr.message,
+				iteration: iteration + 1,
+				timestamp: Date.now(),
+			})
+			// Continue to next iteration or break if too many errors
+			if (iteration > 2) {
+				log.error(`[Worker ${workerName}] Too many errors, giving up`)
+				break
+			}
+		}
+	}
+	
+	// Emit worker finished
+	io.emit("worker-finished", {
+		projectId: project.id,
+		workerId,
+		workerName,
+		completed: taskCompleted,
+		timestamp: Date.now(),
+	})
+	
+	log.info(`[Worker ${workerName}] Finished (completed: ${taskCompleted})`)
+}
 
 /**
  * Helper: create a ConversationAgent from a ProjectAgentConfig + project context
@@ -6382,6 +6346,10 @@ use_mcp("playwright", "browser_navigate", { url: "https://example.com" })
 \`\`\`
 
 ⚠️ MCPs are registered by the user in /mcp-config.json (global) or projects/{project}/mcp.json (project).
+
+## Communication Style
+- **NEVER REPEAT TOOL RESULTS** - The user already sees tool outputs in the UI cards above your response. DO NOT echo back file contents, command outputs, or search results. Instead, briefly summarize insights, answer questions about the content, or state next steps. If the user just asked to "read a file" with no follow-up question, acknowledge briefly like "Here's the file" without repeating it.
+- **THINKING**: For complex tasks, wrap your internal reasoning in \`<thinking>...</thinking>\` tags. This helps the user understand your process. The UI will display it in a collapsible block.
 
 Your knowledge persists between conversations. Use it!`
 	// Society Agent end
@@ -6526,6 +6494,15 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 		// Try project store first
 		const found = projectStore.findAgentProject(agentId)
 		if (found) {
+			// Ephemeral workers don't accept direct messages - they only work on tasks
+			if (found.agent.ephemeral) {
+				res.status(403).json({ 
+					error: "Ephemeral workers cannot receive direct messages",
+					message: "This is an ephemeral worker agent that only processes tasks from the task pool. It will self-destruct when done."
+				})
+				return
+			}
+			
 			projectStore.recordActivity(found.project.id, agentId)
 			log.info(`[${found.agent.name}@${found.project.name}] chat: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
 
@@ -6536,6 +6513,7 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 				found.project,
 				apiKey,
 				io,
+				attachments,
 			)
 
 			const agent = getOrCreateProjectAgent(found.agent, found.project, apiKey)

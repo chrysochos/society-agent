@@ -947,6 +947,99 @@ When learning organically → add to KNOWLEDGE.md as playbook
 		if (!project?.tasks) return 0
 		return project.tasks.filter((t) => t.status === "available").length
 	}
+
+	/** Reset stale tasks - tasks claimed by agents that no longer exist, or claimed too long ago
+	 * @param projectId - Project ID
+	 * @param maxAgeMs - Max age in ms before a task is considered stale
+	 * @param spawnedBy - Only reset tasks claimed by workers spawned by this agent (also resets orphaned tasks)
+	 */
+	resetStaleTasks(projectId: string, maxAgeMs: number = 5 * 60 * 1000, spawnedBy?: string): number {
+		const project = this.get(projectId)
+		if (!project?.tasks) return 0
+
+		const now = Date.now()
+		let resetCount = 0
+
+		// Get worker IDs spawned by the specified agent (if filtering)
+		const myWorkerIds = spawnedBy
+			? new Set(project.agents.filter((a) => a.ephemeral && a.reportsTo === spawnedBy).map((a) => a.id))
+			: null
+
+		for (const task of project.tasks) {
+			if (!["claimed", "in-progress"].includes(task.status)) continue
+			if (!task.claimedBy) continue
+
+			// Check if the claiming agent still exists
+			const claimingAgent = project.agents.find((a) => a.id === task.claimedBy)
+			const isOrphan = !claimingAgent
+
+			// If filtering by spawnedBy: include if our worker OR if orphaned
+			if (myWorkerIds && !myWorkerIds.has(task.claimedBy) && !isOrphan) continue
+
+			// Check if the task has been claimed for too long
+			const claimedAt = task.claimedAt ? new Date(task.claimedAt).getTime() : 0
+			const isStale = claimedAt && (now - claimedAt) > maxAgeMs
+
+			if (isOrphan || isStale) {
+				task.status = "available"
+				task.claimedBy = undefined
+				task.claimedAt = undefined
+				task.error = isOrphan ? "Orphaned - claiming agent removed" : "Stale - exceeded time limit"
+				resetCount++
+				log.info(`Reset stale task "${task.title}" (orphan: ${isOrphan}, stale: ${isStale})`)
+			}
+		}
+
+		if (resetCount > 0) {
+			project.updatedAt = new Date().toISOString()
+			this.save()
+		}
+
+		return resetCount
+	}
+
+	/** Remove ephemeral workers from a project
+	 * @param projectId - Project ID
+	 * @param spawnedBy - Only remove workers spawned by this agent (if undefined, removes all)
+	 * @param includeOrphans - Also remove workers with no valid reportsTo (default: true when spawnedBy is provided)
+	 */
+	removeEphemeralWorkers(projectId: string, spawnedBy?: string, includeOrphans: boolean = true): number {
+		const project = this.get(projectId)
+		if (!project) return 0
+
+		// Get set of valid non-ephemeral agent IDs
+		const validParentIds = new Set(project.agents.filter((a) => !a.ephemeral).map((a) => a.id))
+
+		const toRemove = project.agents.filter((a) => {
+			if (!a.ephemeral) return false
+			
+			// If filtering by spawnedBy, check if this worker matches
+			if (spawnedBy) {
+				if (a.reportsTo === spawnedBy) return true
+				// Also remove orphaned workers (no reportsTo, or reportsTo doesn't exist)
+				if (includeOrphans && (!a.reportsTo || !validParentIds.has(a.reportsTo))) return true
+				return false
+			}
+			
+			// No filter - remove all ephemeral
+			return true
+		})
+		const count = toRemove.length
+
+		if (count > 0) {
+			const removeIds = new Set(toRemove.map((a) => a.id))
+			project.agents = project.agents.filter((a) => !removeIds.has(a.id))
+			project.updatedAt = new Date().toISOString()
+			this.save()
+			log.info(`Removed ${count} ephemeral workers from project ${project.name}${spawnedBy ? ` (spawned by ${spawnedBy})` : ''}`)
+		}
+		return count
+	}
+
+	/** @deprecated Use removeEphemeralWorkers instead */
+	removeAllEphemeralWorkers(projectId: string): number {
+		return this.removeEphemeralWorkers(projectId)
+	}
 	// Society Agent end
 
 	// Society Agent start - hierarchy methods

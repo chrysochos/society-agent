@@ -14,6 +14,11 @@
     --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
     --green: #3fb950; --red: #f85149; --yellow: #d29922;
   }
+  :root.light {
+    --bg: #ffffff; --surface: #f6f8fa; --border: #d0d7de;
+    --text: #1f2328; --muted: #656d76; --accent: #0969da;
+    --green: #1a7f37; --red: #cf222e; --yellow: #9a6700;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
     background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
@@ -107,19 +112,113 @@
 
   /* Chat */
   .messages { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
-  .message { max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 14px;
-    line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
-  .message.user { align-self: flex-end; background: #1f6feb; border-bottom-right-radius: 4px; }
-  .message.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border);
+  .message { max-width: 80%; min-width: 40px; padding: 10px 14px; border-radius: 12px; font-size: 14px;
+    line-height: 1.5; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; }
+  .message.user { background: #1f6feb; border-bottom-right-radius: 4px; }
+  .message.assistant { background: var(--surface); border: 1px solid var(--border);
     border-bottom-left-radius: 4px; }
   .message.system { align-self: center; color: var(--muted); font-size: 12px; font-style: italic; }
   .message.assistant .sender { font-size: 11px; color: var(--accent); margin-bottom: 4px; font-weight: 500; }
+  .message .content { display: block; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; }
   .message code { background: rgba(110,118,129,0.2); padding: 1px 5px; border-radius: 3px; font-size: 13px; }
-  .message pre { background: var(--bg); padding: 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; }
+  .message pre { background: var(--bg); padding: 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; position: relative; }
   .message pre code { background: none; padding: 0; }
+  .message pre .code-copy-btn { position: absolute; top: 6px; right: 6px; padding: 4px 8px; font-size: 11px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 4px; color: var(--muted);
+    cursor: pointer; opacity: 0; transition: opacity 0.2s; }
+  .message pre:hover .code-copy-btn { opacity: 1; }
+  .message pre .code-copy-btn:hover { color: var(--text); border-color: var(--accent); }
+  
+  /* Message actions */
+  .message-wrapper { position: relative; display: flex; flex-direction: column; }
+  .message-wrapper.user { align-self: flex-end; align-items: flex-end; }
+  .message-wrapper.assistant { align-self: flex-start; align-items: flex-start; }
+  .message-actions { display: none; gap: 4px; margin-top: 4px; }
+  .message-wrapper:hover .message-actions { display: flex; }
+  .message-actions button { padding: 3px 8px; font-size: 11px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; color: var(--muted); cursor: pointer; }
+  .message-actions button:hover { color: var(--text); border-color: var(--accent); }
+  
+  /* Chat search */
+  .chat-search { display: none; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .chat-search.visible { display: flex; gap: 8px; align-items: center; }
+  .chat-search input { flex: 1; padding: 6px 10px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; color: var(--text); font-size: 13px; }
+  .chat-search input:focus { outline: none; border-color: var(--accent); }
+  .chat-search .search-info { font-size: 11px; color: var(--muted); min-width: 60px; }
+  .chat-search button { padding: 4px 8px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; color: var(--muted); cursor: pointer; font-size: 12px; }
+  .chat-search button:hover { border-color: var(--accent); color: var(--text); }
+  .search-highlight { background: rgba(255,200,0,0.3); border-radius: 2px; }
+  .search-highlight.current { background: rgba(255,200,0,0.6); }
+  
   .typing { align-self: flex-start; color: var(--muted); font-size: 13px; }
   .typing::after { content: '...'; animation: dots 1.5s steps(3) infinite; }
   @keyframes dots { 0% { content: '.'; } 33% { content: '..'; } 66% { content: '...'; } }
+
+  /* Tool Cards */
+  .tool-card { align-self: flex-start; max-width: 85%; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; font-size: 13px; margin: 4px 0; transition: border-color 0.2s; }
+  .tool-card:hover { border-color: var(--accent); }
+  .tool-card.error { border-color: var(--red); }
+  .tool-card-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; 
+    background: rgba(88,166,255,0.05); border-bottom: 1px solid var(--border); cursor: pointer; }
+  .tool-card.error .tool-card-header { background: rgba(248,81,73,0.08); }
+  .tool-card-icon { font-size: 16px; flex-shrink: 0; }
+  .tool-card-title { font-weight: 600; color: var(--text); }
+  .tool-card-detail { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; flex: 1; }
+  .tool-card-meta { font-size: 10px; color: var(--muted); white-space: nowrap; }
+  .tool-card-chevron { color: var(--muted); font-size: 12px; transition: transform 0.2s; margin-left: 4px; }
+  .tool-card.expanded .tool-card-chevron { transform: rotate(90deg); }
+  .tool-card-preview { padding: 8px 12px; font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 12px;
+    color: var(--muted); white-space: pre-wrap; word-break: break-word; line-height: 1.4;
+    max-height: 52px; overflow: hidden; }
+  .tool-card-body { display: none; padding: 10px 12px; background: var(--bg); max-height: 300px; overflow: auto;
+    font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; line-height: 1.5;
+    border-top: 1px solid var(--border); }
+  .tool-card.expanded .tool-card-body { display: block; }
+  .tool-card-actions { display: flex; gap: 6px; padding: 8px 12px; background: rgba(88,166,255,0.08); border-top: 1px solid var(--border); }
+  .tool-card-actions button { padding: 5px 12px; font-size: 12px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 5px; color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+  .tool-card-actions button:hover { border-color: var(--accent); background: rgba(88,166,255,0.15); }
+
+  /* Thinking Blocks */
+  .thinking-block { margin: 8px 0; border: 1px solid var(--border); border-radius: 8px; background: rgba(139,92,246,0.05); overflow: hidden; }
+  .thinking-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; 
+    background: rgba(139,92,246,0.08); border-bottom: 1px solid transparent; user-select: none; }
+  .thinking-block.expanded .thinking-header { border-bottom-color: var(--border); }
+  .thinking-header:hover { background: rgba(139,92,246,0.12); }
+  .thinking-icon { color: #a78bfa; font-size: 14px; }
+  .thinking-label { color: #a78bfa; font-weight: 500; font-size: 12px; }
+  .thinking-preview { color: var(--muted); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thinking-chevron { color: var(--muted); font-size: 10px; transition: transform 0.2s; }
+  .thinking-block.expanded .thinking-chevron { transform: rotate(90deg); }
+  .thinking-content { display: none; padding: 10px 12px; font-size: 13px; color: var(--muted); line-height: 1.5; 
+    max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+  .thinking-block.expanded .thinking-content { display: block; }
+
+  /* Tool Output Modal */
+  .tool-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000;
+    display: flex; align-items: center; justify-content: center; animation: fadeIn 0.15s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .tool-modal-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    width: 90vw; max-width: 900px; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.5); animation: slideUp 0.2s ease-out; }
+  @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .tool-modal-header { display: flex; align-items: center; gap: 10px; padding: 14px 18px;
+    border-bottom: 1px solid var(--border); background: rgba(88,166,255,0.05); }
+  .tool-modal-header .icon { font-size: 20px; }
+  .tool-modal-header .title { font-weight: 600; font-size: 15px; flex: 1; }
+  .tool-modal-header .detail { color: var(--muted); font-size: 12px; }
+  .tool-modal-header .close-btn { background: none; border: none; color: var(--muted); font-size: 22px; cursor: pointer; padding: 0 4px; }
+  .tool-modal-header .close-btn:hover { color: var(--text); }
+  .tool-modal-body { flex: 1; overflow: auto; padding: 16px 18px; background: var(--bg);
+    font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 13px; white-space: pre-wrap; word-break: break-all; line-height: 1.6; }
+  .tool-modal-footer { display: flex; gap: 8px; padding: 10px 18px; border-top: 1px solid var(--border); }
+  .tool-modal-footer button { padding: 6px 14px; font-size: 12px; border-radius: 6px; cursor: pointer; }
+  .tool-modal-footer .copy-btn { background: var(--bg); border: 1px solid var(--border); color: var(--text); }
+  .tool-modal-footer .copy-btn:hover { border-color: var(--accent); }
+  .tool-modal-footer .close-btn { background: var(--accent); border: none; color: white; margin-left: auto; }
 
   /* Input area */
   .input-area { padding: 12px 20px; border-top: 1px solid var(--border); background: var(--surface); }
@@ -155,6 +254,28 @@
   .attach-chip .remove:hover { color: var(--red); }
   .msg-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .msg-attachments img { max-width: 200px; max-height: 150px; border-radius: 6px; cursor: pointer; }
+  .msg-attachments .file-attach { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-size: 11px;
+    color: var(--muted); cursor: pointer; }
+  .msg-attachments .file-attach:hover { border-color: var(--accent); color: var(--text); }
+
+  /* Workers Panel */
+  .workers-panel { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
+  .workers-header { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+  .workers-header .count { font-size: 11px; font-weight: normal; color: var(--muted); background: var(--surface); padding: 1px 6px; border-radius: 10px; }
+  .workers-header .chevron { color: var(--muted); transition: transform 0.2s; }
+  .workers-panel.collapsed .workers-list { display: none; }
+  .workers-panel.collapsed .chevron { transform: rotate(-90deg); }
+  .workers-list { display: flex; flex-direction: column; gap: 6px; }
+  .worker-card { padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; }
+  .worker-card.running { border-left: 3px solid var(--accent); }
+  .worker-card.completed { border-left: 3px solid #3fb950; opacity: 0.7; }
+  .worker-card.error { border-left: 3px solid #f85149; }
+  .worker-card-name { font-weight: 600; color: var(--text); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+  .worker-card-task { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .worker-card-status { display: flex; align-items: center; gap: 4px; margin-top: 4px; color: var(--muted); }
+  .worker-card-status .spinner { width: 10px; height: 10px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   /* Terminal */
   .terminal-container { flex: 1; background: #000; padding: 4px; overflow: hidden; }
@@ -271,7 +392,9 @@
   </style>
   <!-- Society Agent end -->
   <div class="agent-stats" id="agentStats"></div>
-  <!-- Society Agent start - Pause button and indicator -->
+  <!-- Society Agent start - Theme, Export and Pause buttons -->
+  <button class="btn btn-sm" id="themeBtn" onclick="toggleTheme()" style="margin-right:8px;padding:4px 10px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer" title="Toggle dark/light theme">🌙</button>
+  <button class="btn btn-sm" id="exportBtn" onclick="exportChat()" style="margin-right:8px;padding:4px 10px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer" title="Export chat as Markdown">📥 Export</button>
   <button class="btn btn-sm" id="pauseBtn" onclick="toggleSystemPause()" style="margin-right:8px;padding:4px 10px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer">🔧 Maintenance</button>
   <span class="pause-indicator" id="pauseIndicator">System Paused</span>
   <!-- Society Agent end -->
@@ -331,6 +454,17 @@
     <div id="fileTree" class="file-tree">
       <div style="padding:16px;color:var(--muted);font-size:12px">No files yet</div>
     </div>
+    
+    <!-- Society Agent start - Workers Panel -->
+    <div class="workers-panel" id="workersPanel" style="display:none">
+      <div class="workers-header" onclick="toggleWorkersPanel()">
+        <span class="chevron">▼</span>
+        <span>🧑‍🔧 Workers</span>
+        <span class="count" id="workersCount">0</span>
+      </div>
+      <div class="workers-list" id="workersList"></div>
+    </div>
+    <!-- Society Agent end -->
   </div>
 
   <!-- Content area -->
@@ -357,6 +491,14 @@
         </div>
       </div>
       <!-- Society Agent end -->
+      <!-- Chat search bar -->
+      <div class="chat-search" id="chatSearch">
+        <input type="text" id="searchInput" placeholder="Search in chat..." onkeyup="handleSearchKey(event)">
+        <span class="search-info" id="searchInfo"></span>
+        <button onclick="searchPrev()">↑</button>
+        <button onclick="searchNext()">↓</button>
+        <button onclick="closeSearch()">×</button>
+      </div>
       <div class="messages" id="messages">
         <div class="welcome" id="welcome">
           <h2 id="welcomeTitle">Agent</h2>
@@ -500,6 +642,18 @@ async function loadAgent() {
     // Join socket room for this agent
     socket.emit('subscribe-agent', AGENT_ID);
 
+    // Disable chat for ephemeral workers
+    if (agentProfile.ephemeral) {
+      const inputArea = document.querySelector('.input-area');
+      if (inputArea) {
+        inputArea.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:13px;background:rgba(248,81,73,0.1);border:1px dashed var(--red);border-radius:8px;">
+          <strong>⚡ Ephemeral Worker</strong><br>
+          This worker only processes tasks from the task pool.<br>
+          It will self-destruct when done.
+        </div>`;
+      }
+    }
+
     refreshFiles();
   } catch (e) {
     addLog('error', `Failed to load agent: ${e.message}`);
@@ -547,7 +701,11 @@ socket.on('agent-message', (data) => {
       streamText = '';
     }
     streamText += data.message;
-    currentStreamEl.querySelector('.content').textContent = streamText;
+    // During streaming, show thinking placeholder instead of raw tags
+    const displayText = streamText
+      .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '\n💭 [Thinking...]\n')
+      .replace(/<thinking>[\s\S]*/gi, '\n💭 [Thinking...]'); // Incomplete thinking block
+    currentStreamEl.querySelector('.content').textContent = displayText;
     scrollToBottom();
   } else if (data.isDone) {
     if (currentStreamEl && streamText) {
@@ -569,7 +727,7 @@ socket.on('agent-message', (data) => {
     divider.className = 'completion-divider';
     divider.innerHTML = '<span>✅ Task completed</span>';
     divider.style.cssText = 'text-align:center;margin:16px 0;color:var(--green);font-size:12px;opacity:0.8;border-top:1px dashed var(--border);padding-top:12px;';
-    document.getElementById('chatMessages').appendChild(divider);
+    document.getElementById('messages').appendChild(divider);
     scrollToBottom();
     // Society Agent end
   }
@@ -578,40 +736,325 @@ socket.on('agent-message', (data) => {
 socket.on('file-created', (data) => {
   if (data.agentId === AGENT_ID) {
     addLog('info', `File created: ${data.relativePath}`);
-    addMessage('system', `&#128196; Created: ${data.relativePath}`);
+    // Note: Not showing system message - covered by tool cards
     refreshFiles();
   }
 });
 
 // Society Agent start - Show tool executions in chat so user sees what agent is doing
+// Tool card configuration
+const TOOL_CONFIG = {
+  read_file: { icon: '📄', title: 'Read File', detailKey: 'path' },
+  read_project_file: { icon: '📂', title: 'Read Project File', detailKey: 'path' },
+  write_file: { icon: '📝', title: 'Write File', detailKey: 'path' },
+  patch_file: { icon: '✏️', title: 'Edit File', detailKey: 'path' },
+  list_files: { icon: '📁', title: 'List Files', detailKey: 'path' },
+  find_files: { icon: '🔍', title: 'Find Files', detailKey: 'pattern' },
+  search_files: { icon: '🔎', title: 'Search Files', detailKey: 'query' },
+  run_command: { icon: '💻', title: 'Terminal', detailKey: 'command' },
+  ask_agent: { icon: '💬', title: 'Ask Agent', detailKey: 'agent_id' },
+  send_message: { icon: '📨', title: 'Send Message', detailKey: 'agent_id' },
+  claim_task: { icon: '🎯', title: 'Claim Task', detailKey: null },
+  complete_task: { icon: '✅', title: 'Complete Task', detailKey: 'task_id' },
+  fail_task: { icon: '❌', title: 'Fail Task', detailKey: 'task_id' },
+};
+const INLINE_EXPAND_THRESHOLD = 8; // Lines - expand inline if <= this, else popup
+
+let pendingToolCards = new Map(); // Track tool cards by their ID for updates
+
+// Handle API-level thinking blocks (Claude extended thinking)
+socket.on('agent-thinking', (data) => {
+  if (data.agentId !== AGENT_ID) return;
+  
+  // Insert thinking block inline with conversation
+  const thinkingId = `thinking-api-${Date.now()}`;
+  const preview = (data.thinking || '').split('\n')[0].substring(0, 60);
+  
+  const thinkingEl = document.createElement('div');
+  thinkingEl.className = 'thinking-block';
+  thinkingEl.id = thinkingId;
+  thinkingEl.innerHTML = `
+    <div class="thinking-header" onclick="toggleThinking('${thinkingId}')">
+      <span class="thinking-icon">💭</span>
+      <span class="thinking-label">Thinking</span>
+      <span class="thinking-preview">${esc(preview)}...</span>
+      <span class="thinking-chevron">&gt;</span>
+    </div>
+    <div class="thinking-content">${esc(data.thinking)}</div>
+  `;
+  
+  const messagesEl = document.getElementById('messages');
+  if (currentStreamEl && currentStreamEl.parentNode === messagesEl) {
+    messagesEl.insertBefore(thinkingEl, currentStreamEl);
+  } else {
+    messagesEl.appendChild(thinkingEl);
+  }
+  scrollToBottom();
+  addLog('info', 'Thinking block received');
+});
+
 socket.on('tool-execution', (data) => {
   // Only show for THIS agent
   if (data.agentId !== AGENT_ID) {
-    addLog('info', `[${data.agentName || data.agentId}] ${data.details}`);
+    addLog('info', `[${data.agentName || data.agentId}] ${data.details || data.toolName}`);
     return;
   }
   
-  // Show tool execution as a progress message
   if (data.status === 'started') {
-    const toolMsg = `\n🔧 **${data.details}**\n`;
-    if (currentStreamEl) {
-      streamText += toolMsg;
-      const contentEl = currentStreamEl.querySelector('.content');
-      if (contentEl) contentEl.textContent = streamText;
-      scrollToBottom();
-    } else {
-      // No stream active - show as system message
-      addMessage('system', `🔧 ${esc(data.details)}`);
-    }
+    // Just log - don't pollute stream text, the card will show it
+    addLog('info', data.details);
+  } else if (data.status === 'completed' || data.status === 'error') {
+    // Render as tool card - insert before current streaming element so it appears inline
+    addToolCard(data, currentStreamEl);
+    addLog(data.status === 'error' ? 'error' : 'info', 
+      `${data.toolName}: ${data.result.substring(0, 60)}${data.result.length > 60 ? '...' : ''}`);
   }
 });
+
+function addToolCard(data, insertBeforeEl) {
+  const config = TOOL_CONFIG[data.toolName] || { icon: '🔧', title: data.toolName, detailKey: null };
+  const detail = data.toolInput && config.detailKey ? data.toolInput[config.detailKey] : '';
+  const isError = data.status === 'error';
+  const isLong = data.lineCount > INLINE_EXPAND_THRESHOLD;
+  
+  const cardId = `tool-card-${Date.now()}-${Math.random().toString(36).substr(2,9)}`;
+  
+  // Clean the result for display (remove markdown formatting)
+  const cleanedResult = cleanToolResult(data.result);
+  
+  const card = document.createElement('div');
+  card.className = `tool-card${isError ? ' error' : ''}`;
+  card.id = cardId;
+  card.dataset.result = cleanedResult; // Store cleaned version for copy
+  card.dataset.toolName = data.toolName;
+  card.dataset.detail = detail;
+  card.dataset.isLong = isLong;
+  
+  const durationText = data.durationMs ? `${data.durationMs}ms` : '';
+  const linesText = data.lineCount ? `${data.lineCount} lines` : '';
+  
+  card.innerHTML = `
+    <div class="tool-card-header" onclick="toggleToolCard('${cardId}')">
+      <span class="tool-card-icon">${config.icon}</span>
+      <span class="tool-card-title">${config.title}</span>
+      <span class="tool-card-detail" title="${esc(detail)}">${esc(truncate(detail, 40))}</span>
+      <span class="tool-card-meta">${linesText} ${durationText}</span>
+      <span class="tool-card-chevron">&gt;</span>
+    </div>
+    <div class="tool-card-preview">${esc(data.preview || cleanedResult.substring(0, 100))}</div>
+    ${!isLong ? `<div class="tool-card-body">${esc(cleanedResult)}</div>` : ''}
+    <div class="tool-card-actions">
+      <button onclick="copyToolResult('${cardId}')">Copy Result</button>
+      ${isLong ? `<button onclick="openToolModal('${cardId}')">View Full Output</button>` : ''}
+    </div>
+  `;
+  
+  // Insert before current streaming element (inline with conversation) or append at end
+  const messagesEl = document.getElementById('messages');
+  if (insertBeforeEl && insertBeforeEl.parentNode === messagesEl) {
+    messagesEl.insertBefore(card, insertBeforeEl);
+  } else {
+    messagesEl.appendChild(card);
+  }
+  scrollToBottom();
+}
+
+function toggleToolCard(cardId) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  
+  const isLong = card.dataset.isLong === 'true';
+  if (isLong) {
+    // Open modal for long results
+    openToolModal(cardId);
+  } else {
+    // Toggle inline expand
+    card.classList.toggle('expanded');
+  }
+}
+
+function copyToolResult(cardId) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  
+  navigator.clipboard.writeText(card.dataset.result).then(() => {
+    showToast('Copied to clipboard');
+  }).catch(() => {
+    showToast('Failed to copy', 'error');
+  });
+}
+
+function openToolModal(cardId) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  
+  const config = TOOL_CONFIG[card.dataset.toolName] || { icon: '🔧', title: card.dataset.toolName };
+  
+  // Remove existing modal
+  const existingModal = document.getElementById('toolModal');
+  if (existingModal) existingModal.remove();
+  
+  const modal = document.createElement('div');
+  modal.id = 'toolModal';
+  modal.className = 'tool-modal';
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  
+  modal.innerHTML = `
+    <div class="tool-modal-panel">
+      <div class="tool-modal-header">
+        <span class="icon">${config.icon}</span>
+        <span class="title">${config.title}</span>
+        <span class="detail">${esc(card.dataset.detail)}</span>
+        <button class="close-btn" onclick="document.getElementById('toolModal').remove()">&times;</button>
+      </div>
+      <div class="tool-modal-body">${esc(card.dataset.result)}</div>
+      <div class="tool-modal-footer">
+        <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('toolModal').querySelector('.tool-modal-body').textContent);showToast('Copied')">📋 Copy</button>
+        <button class="close-btn" onclick="document.getElementById('toolModal').remove()">Close</button>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(modal);
+}
+
+function truncate(str, len) {
+  if (!str) return '';
+  return str.length > len ? str.substring(0, len) + '...' : str;
+}
+
+// Clean tool result by removing markdown formatting (matches server-side extractCleanPreview)
+function cleanToolResult(result) {
+  if (!result) return '';
+  let content = result;
+  // Remove markdown headers like "📄 **filename**:"
+  content = content.replace(/^[📄📝✅❌🔍🔎📁💻📨💬🎯✏️📖][^\n]*\*\*[^*]+\*\*:?\s*\n?/gm, '');
+  // Remove code block markers
+  content = content.replace(/^```\w*\n?/gm, '').replace(/\n?```$/gm, '');
+  return content.trim();
+}
 // Society Agent end
 
 // Society Agent start - system-event for filesCreated from chat
 socket.on('system-event', (data) => {
   if (data.type === 'files-created' && data.agentId === AGENT_ID) {
-    addMessage('system', `&#128230; ${data.message}`);
+    // Note: Not showing system message - covered by tool cards
     refreshFiles();
+  }
+});
+// Society Agent end
+
+// Society Agent start - Workers management
+const workers = new Map(); // workerId -> { name, status, task, iterations, startTime }
+
+function updateWorkersUI() {
+  const panel = document.getElementById('workersPanel');
+  const list = document.getElementById('workersList');
+  const count = document.getElementById('workersCount');
+  
+  if (workers.size === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  
+  panel.style.display = 'block';
+  count.textContent = workers.size;
+  
+  list.innerHTML = '';
+  workers.forEach((w, id) => {
+    const card = document.createElement('div');
+    card.className = `worker-card ${w.status}`;
+    card.id = `worker-${id}`;
+    
+    let statusHtml = '';
+    if (w.status === 'running') {
+      statusHtml = `<div class="worker-card-status"><span class="spinner"></span> Iteration ${w.iterations || 1}</div>`;
+    } else if (w.status === 'completed') {
+      statusHtml = `<div class="worker-card-status">✅ Completed</div>`;
+    } else if (w.status === 'error') {
+      statusHtml = `<div class="worker-card-status">❌ ${w.error || 'Error'}</div>`;
+    }
+    
+    card.innerHTML = `
+      <div class="worker-card-name">
+        <span>${esc(w.name)}</span>
+        ${w.status === 'running' ? '<span style="color:var(--accent)">●</span>' : ''}
+      </div>
+      ${w.task ? `<div class="worker-card-task" title="${esc(w.task)}">${esc(w.task)}</div>` : ''}
+      ${statusHtml}
+    `;
+    list.appendChild(card);
+  });
+}
+
+function toggleWorkersPanel() {
+  const panel = document.getElementById('workersPanel');
+  panel.classList.toggle('collapsed');
+}
+
+socket.on('worker-spawned', (data) => {
+  if (data.projectId !== agentProfile?.projectId) return;
+  workers.set(data.workerId, {
+    name: data.workerName,
+    status: 'spawned',
+    spawnedBy: data.spawnedBy,
+    startTime: data.timestamp,
+  });
+  updateWorkersUI();
+  addLog('info', `Worker spawned: ${data.workerName}`);
+});
+
+socket.on('worker-started', (data) => {
+  if (data.projectId !== agentProfile?.projectId) return;
+  const w = workers.get(data.workerId);
+  if (w) {
+    w.status = 'running';
+    w.iterations = 0;
+    updateWorkersUI();
+  }
+});
+
+socket.on('worker-progress', (data) => {
+  if (data.projectId !== agentProfile?.projectId) return;
+  const w = workers.get(data.workerId);
+  if (w) {
+    w.iterations = data.iteration;
+    updateWorkersUI();
+  }
+});
+
+socket.on('worker-finished', (data) => {
+  if (data.projectId !== agentProfile?.projectId) return;
+  const w = workers.get(data.workerId);
+  if (w) {
+    w.status = data.completed ? 'completed' : 'error';
+    updateWorkersUI();
+    addLog('info', `Worker ${data.workerName} ${data.completed ? 'completed' : 'finished'}`);
+    // Remove after a delay
+    setTimeout(() => {
+      workers.delete(data.workerId);
+      updateWorkersUI();
+    }, 10000);
+  }
+});
+
+socket.on('worker-error', (data) => {
+  if (data.projectId !== agentProfile?.projectId) return;
+  const w = workers.get(data.workerId);
+  if (w) {
+    w.status = 'error';
+    w.error = data.error;
+    updateWorkersUI();
+    addLog('error', `Worker ${w.name} error: ${data.error}`);
+  }
+});
+
+socket.on('task-claimed', (data) => {
+  if (data.projectId !== agentProfile?.projectId) return;
+  const w = workers.get(data.agentId);
+  if (w) {
+    w.task = data.taskTitle;
+    updateWorkersUI();
   }
 });
 // Society Agent end
@@ -1220,7 +1663,7 @@ async function loadChatHistory() {
       for (const msg of data.messages) {
         // Skip internal 'Created file:' messages from file creation
         if (msg.role === 'assistant' && msg.content.startsWith('Created file:')) continue;
-        addMessage(msg.role === 'assistant' ? 'assistant' : 'user', msg.content, msg.role === 'assistant' ? (agentProfile?.name || 'Agent') : undefined);
+        addMessage(msg.role === 'assistant' ? 'assistant' : 'user', msg.content, msg.role === 'assistant' ? (agentProfile?.name || 'Agent') : undefined, msg.attachments);
       }
       addLog('info', `Loaded ${data.messages.length} messages from history`);
       scrollToBottom();
@@ -1277,8 +1720,8 @@ async function sendMessage() {
   let attachHtml = '';
   if (chatAttachments.length > 0) {
     attachHtml = '<div class="msg-attachments">' + chatAttachments.map(a => {
-      if (a.type.startsWith('image/')) return `<img src="${a.dataUrl}" title="${esc(a.name)}">`;
-      return `<span style="font-size:11px;color:var(--muted)">&#128196; ${esc(a.name)}</span>`;
+      if (a.type.startsWith('image/')) return `<img src="${a.dataUrl}" title="${esc(a.name)}" onclick="enlargeImage(this.src, '${escAttr(a.name)}')">`;
+      return `<span class="file-attach" onclick="showFileContent('${escAttr(a.name)}', '${a.base64}')" title="Click to view">&#128196; ${esc(a.name)}</span>`;
     }).join('') + '</div>';
   }
   const msgEl = addMessage('user', text);
@@ -1290,7 +1733,8 @@ async function sendMessage() {
     if (a.type.startsWith('image/')) {
       contentParts.push({ type: 'image', source: { type: 'base64', media_type: a.mediaType, data: a.base64 } });
     } else {
-      contentParts.push({ type: 'text', text: `[Attached file: ${a.name}]\n${atob(a.base64)}` });
+      // Store text file content with the attachment for persistence
+      contentParts.push({ type: 'file', name: a.name, data: a.base64, text: `[Attached file: ${a.name}]\n${atob(a.base64)}` });
     }
   }
   if (text) contentParts.push({ type: 'text', text });
@@ -1343,12 +1787,10 @@ async function sendMessage() {
     messageCount++;
     addLog('info', `Response (history: ${data.historyLength} messages)`);
 
-    // Society Agent start - show filesCreated notification in chat
+    // Society Agent - filesCreated notification now covered by tool cards
     if (data.filesCreated && data.filesCreated > 0) {
-      addMessage('system', `&#128230; Created ${data.filesCreated} file(s) in project folder`);
       refreshFiles();
     }
-    // Society Agent end
 
     // Society Agent start - show delegation results
     if (data.delegations && data.delegations.length > 0) {
@@ -1974,12 +2416,14 @@ function startRename(filePath, isDir) {
 }
 
 // Toast notification
-function showToast(message) {
+function showToast(message, type = 'info') {
   const existing = document.querySelector('.toast');
   if (existing) existing.remove();
   const toast = document.createElement('div');
   toast.className = 'toast';
   toast.textContent = message;
+  if (type === 'error') toast.style.borderColor = 'var(--red)';
+  if (type === 'success') toast.style.borderColor = 'var(--green)';
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 2000);
 }
@@ -2210,12 +2654,45 @@ socket.on('terminal-exit', data => { termConnected = false; if (term) term.write
 // ============================================================================
 // UI Helpers
 // ============================================================================
-function addMessage(role, content, sender) {
-  const el = document.createElement('div'); el.className = `message ${role}`;
+function addMessage(role, content, sender, attachments) {
+  const wrapper = document.createElement('div');
+  wrapper.className = `message-wrapper ${role}`;
+  const msgId = `msg-${Date.now()}-${Math.random().toString(36).substr(2,5)}`;
+  wrapper.id = msgId;
+  
+  const el = document.createElement('div');
+  el.className = `message ${role}`;
+  
+  // Build attachments HTML if present
+  let attachHtml = '';
+  if (attachments && attachments.length > 0) {
+    attachHtml = '<div class="msg-attachments">' + attachments.map(a => {
+      if (a.type === 'image' && a.source?.data) {
+        const dataUrl = `data:${a.source.media_type || 'image/jpeg'};base64,${a.source.data}`;
+        return `<img src="${dataUrl}" onclick="enlargeImage(this.src, 'Image')">`;
+      } else if (a.type === 'file' && a.data) {
+        return `<span class="file-attach" onclick="showFileContent('${escAttr(a.name || 'file')}', '${a.data}')" title="Click to view">&#128196; ${esc(a.name || 'file')}</span>`;
+      } else if (a.dataUrl) {
+        return `<img src="${a.dataUrl}" onclick="enlargeImage(this.src, 'Image')">`;
+      }
+      return '';
+    }).join('') + '</div>';
+  }
+  
   if (role === 'assistant') {
-    el.innerHTML = `<div class="sender">${sender || 'Agent'}</div><div class="content">${formatMarkdown(content)}</div>`;
-  } else { el.innerHTML = `<div class="content">${esc(content)}</div>`; }
-  document.getElementById('messages').appendChild(el);
+    el.innerHTML = `<div class="sender">${sender || 'Agent'}</div><div class="content">${formatMarkdown(content)}</div>${attachHtml}`;
+  } else {
+    el.innerHTML = `<div class="content">${esc(content)}</div>${attachHtml}`;
+  }
+  wrapper.appendChild(el);
+  
+  // Add message actions
+  const actions = document.createElement('div');
+  actions.className = 'message-actions';
+  actions.innerHTML = `<button onclick="copyMessage('${msgId}')">Copy</button>`;
+  wrapper.appendChild(actions);
+  
+  document.getElementById('messages').appendChild(wrapper);
   scrollToBottom();
   return el;
 }
@@ -2226,6 +2703,106 @@ function showTyping() {
 }
 function removeTyping() { const el = document.getElementById('typingIndicator'); if (el) el.remove(); }
 function scrollToBottom() { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; }
+
+// Message actions
+function copyMessage(msgId) {
+  const wrapper = document.getElementById(msgId);
+  if (!wrapper) return;
+  const content = wrapper.querySelector('.content');
+  if (content) {
+    navigator.clipboard.writeText(content.textContent || '').then(() => showToast('Copied'));
+  }
+}
+
+// Chat search
+let searchResults = [];
+let searchIndex = -1;
+
+function openSearch() {
+  document.getElementById('chatSearch').classList.add('visible');
+  document.getElementById('searchInput').focus();
+}
+
+function closeSearch() {
+  document.getElementById('chatSearch').classList.remove('visible');
+  document.getElementById('searchInput').value = '';
+  clearSearchHighlights();
+  searchResults = [];
+  searchIndex = -1;
+  document.getElementById('searchInfo').textContent = '';
+}
+
+function handleSearchKey(e) {
+  if (e.key === 'Enter') {
+    if (e.shiftKey) searchPrev(); else doSearch();
+  } else if (e.key === 'Escape') {
+    closeSearch();
+  }
+}
+
+function doSearch() {
+  clearSearchHighlights();
+  const query = document.getElementById('searchInput').value.trim().toLowerCase();
+  if (!query) { document.getElementById('searchInfo').textContent = ''; return; }
+  
+  searchResults = [];
+  const messages = document.querySelectorAll('#messages .message .content');
+  messages.forEach(msg => {
+    const text = msg.textContent || '';
+    const lowerText = text.toLowerCase();
+    let pos = 0;
+    while ((pos = lowerText.indexOf(query, pos)) !== -1) {
+      searchResults.push({ element: msg, pos, length: query.length });
+      pos += query.length;
+    }
+  });
+  
+  if (searchResults.length > 0) {
+    searchIndex = 0;
+    highlightSearchResults(query);
+    goToSearchResult(0);
+  }
+  document.getElementById('searchInfo').textContent = searchResults.length > 0 
+    ? `${searchIndex + 1}/${searchResults.length}` : 'No results';
+}
+
+function highlightSearchResults(query) {
+  const messages = document.querySelectorAll('#messages .message .content');
+  messages.forEach(msg => {
+    const text = msg.innerHTML;
+    const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    msg.innerHTML = text.replace(regex, '<span class="search-highlight">$1</span>');
+  });
+}
+
+function clearSearchHighlights() {
+  document.querySelectorAll('.search-highlight').forEach(el => {
+    el.outerHTML = el.textContent;
+  });
+}
+
+function searchNext() {
+  if (searchResults.length === 0) { doSearch(); return; }
+  searchIndex = (searchIndex + 1) % searchResults.length;
+  goToSearchResult(searchIndex);
+}
+
+function searchPrev() {
+  if (searchResults.length === 0) { doSearch(); return; }
+  searchIndex = (searchIndex - 1 + searchResults.length) % searchResults.length;
+  goToSearchResult(searchIndex);
+}
+
+function goToSearchResult(idx) {
+  document.querySelectorAll('.search-highlight.current').forEach(el => el.classList.remove('current'));
+  const highlights = document.querySelectorAll('.search-highlight');
+  if (highlights[idx]) {
+    highlights[idx].classList.add('current');
+    highlights[idx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  document.getElementById('searchInfo').textContent = `${idx + 1}/${searchResults.length}`;
+}
+
 function setStatus(online) {
   document.getElementById('statusDot').className = `dot ${online ? 'online' : 'offline'}`;
   document.getElementById('statusText').textContent = online ? 'Connected' : 'Disconnected';
@@ -2245,13 +2822,188 @@ function formatSize(bytes) {
 }
 function formatMarkdown(text) {
   if (!text) return '';
+  
+  // Extract and replace thinking blocks BEFORE escaping
+  const thinkingBlocks = [];
+  text = text.replace(/<thinking>([\s\S]*?)<\/thinking>/gi, (match, content) => {
+    const id = `thinking-${Date.now()}-${thinkingBlocks.length}`;
+    const preview = content.trim().split('\n')[0].substring(0, 60);
+    thinkingBlocks.push({ id, content: content.trim(), preview });
+    return `%%THINKING_${thinkingBlocks.length - 1}%%`;
+  });
+  
+  // Extract code blocks before escaping
+  const codeBlocks = [];
+  text = text.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+    codeBlocks.push({ lang: lang || 'text', code: code.trim() });
+    return `%%CODEBLOCK_${codeBlocks.length - 1}%%`;
+  });
+  
   let html = esc(text);
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
   html = html.replace(/\n/g, '<br>');
+  
+  // Restore code blocks with copy button
+  codeBlocks.forEach((block, i) => {
+    const codeId = `code-${Date.now()}-${i}`;
+    const codeHtml = `<pre id="${codeId}"><button class="code-copy-btn" onclick="copyCodeBlock('${codeId}')">Copy</button><code>${esc(block.code)}</code></pre>`;
+    html = html.replace(`%%CODEBLOCK_${i}%%`, codeHtml);
+  });
+  
+  // Restore thinking blocks as collapsible elements
+  thinkingBlocks.forEach((block, i) => {
+    const thinkingHtml = `<div class="thinking-block" id="${block.id}">
+      <div class="thinking-header" onclick="toggleThinking('${block.id}')">
+        <span class="thinking-icon">💭</span>
+        <span class="thinking-label">Thinking</span>
+        <span class="thinking-preview">${esc(block.preview)}...</span>
+        <span class="thinking-chevron">&gt;</span>
+      </div>
+      <div class="thinking-content">${esc(block.content)}</div>
+    </div>`;
+    html = html.replace(`%%THINKING_${i}%%`, thinkingHtml);
+  });
+  
   return html;
+}
+
+function copyCodeBlock(preId) {
+  const pre = document.getElementById(preId);
+  if (!pre) return;
+  const code = pre.querySelector('code');
+  if (code) {
+    navigator.clipboard.writeText(code.textContent || '').then(() => showToast('Code copied'));
+  }
+}
+
+// Toggle dark/light theme
+function toggleTheme() {
+  const root = document.documentElement;
+  const btn = document.getElementById('themeBtn');
+  
+  if (root.classList.contains('light')) {
+    root.classList.remove('light');
+    btn.textContent = '🌙';
+    localStorage.setItem('theme', 'dark');
+  } else {
+    root.classList.add('light');
+    btn.textContent = '☀️';
+    localStorage.setItem('theme', 'light');
+  }
+}
+
+// Initialize theme from localStorage
+(function initTheme() {
+  const saved = localStorage.getItem('theme');
+  if (saved === 'light') {
+    document.documentElement.classList.add('light');
+    const btn = document.getElementById('themeBtn');
+    if (btn) btn.textContent = '☀️';
+  }
+})();
+
+// Export chat as Markdown
+function exportChat() {
+  const messages = document.getElementById('messages');
+  const agentName = agentProfile?.name || 'Agent';
+  const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  
+  let markdown = `# Chat Export: ${agentName}\n`;
+  markdown += `*Exported: ${timestamp}*\n\n---\n\n`;
+  
+  // Get all messages and tool cards
+  messages.querySelectorAll('.message-wrapper, .tool-card').forEach(el => {
+    if (el.classList.contains('tool-card')) {
+      // Tool card
+      const toolName = el.dataset.toolName || 'Tool';
+      const result = el.dataset.result || '';
+      markdown += `### 🔧 ${toolName}\n\n`;
+      markdown += '```\n' + result + '\n```\n\n';
+    } else if (el.classList.contains('message-wrapper')) {
+      // Regular message
+      const isUser = el.classList.contains('user');
+      const content = el.querySelector('.content')?.textContent || '';
+      
+      if (isUser) {
+        markdown += `## 👤 User\n\n${content}\n\n`;
+      } else {
+        markdown += `## 🤖 ${agentName}\n\n${content}\n\n`;
+      }
+    }
+  });
+  
+  // Create and download file
+  const blob = new Blob([markdown], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `chat-${agentProfile?.id || 'agent'}-${new Date().toISOString().slice(0,10)}.md`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  
+  showToast('Chat exported');
+}
+
+// Enlarge image thumbnail in modal
+function enlargeImage(src, title) {
+  let viewer = document.getElementById('imageViewer');
+  if (!viewer) {
+    viewer = document.createElement('div');
+    viewer.id = 'imageViewer';
+    viewer.className = 'file-viewer';
+    viewer.onclick = (e) => { if (e.target === viewer) viewer.style.display = 'none'; };
+    document.body.appendChild(viewer);
+  }
+  
+  viewer.innerHTML = `<div class="file-viewer-panel" style="max-width:90vw;max-height:90vh;">
+    <div class="file-viewer-header">
+      <span class="title">🖼️ ${esc(title || 'Image')}</span>
+      <button class="close-btn" onclick="document.getElementById('imageViewer').style.display='none'">&times;</button>
+    </div>
+    <div class="file-viewer-body" style="text-align:center;padding:16px;">
+      <img src="${src}" style="max-width:100%;max-height:75vh;border-radius:8px;" alt="${esc(title || 'Image')}">
+    </div>
+  </div>`;
+  viewer.style.display = 'flex';
+}
+
+// Show text file content in modal
+function showFileContent(name, base64) {
+  let content;
+  try {
+    content = atob(base64);
+  } catch (e) {
+    content = '[Unable to decode file content]';
+  }
+  
+  let viewer = document.getElementById('fileContentViewer');
+  if (!viewer) {
+    viewer = document.createElement('div');
+    viewer.id = 'fileContentViewer';
+    viewer.className = 'file-viewer';
+    viewer.onclick = (e) => { if (e.target === viewer) viewer.style.display = 'none'; };
+    document.body.appendChild(viewer);
+  }
+  
+  viewer.innerHTML = `<div class="file-viewer-panel" style="max-width:80vw;max-height:80vh;width:600px;">
+    <div class="file-viewer-header">
+      <span class="title">📄 ${esc(name)}</span>
+      <button class="close-btn" onclick="document.getElementById('fileContentViewer').style.display='none'">&times;</button>
+    </div>
+    <div class="file-viewer-body" style="padding:16px;overflow:auto;white-space:pre-wrap;font-family:'SF Mono',monospace;font-size:13px;">
+${esc(content)}
+    </div>
+  </div>`;
+  viewer.style.display = 'flex';
+}
+
+function toggleThinking(id) {
+  const block = document.getElementById(id);
+  if (block) block.classList.toggle('expanded');
 }
 
 // Keyboard
@@ -2259,7 +3011,13 @@ document.getElementById('input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeFileViewer(); hideContextMenu(); }
+  // Ctrl/Cmd+F to open search
+  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+    e.preventDefault();
+    openSearch();
+    return;
+  }
+  if (e.key === 'Escape') { closeFileViewer(); hideContextMenu(); closeSearch(); }
   if (e.key === 'F2' && selectedPath) { e.preventDefault(); startRename(selectedPath, fileData.some(f => f.path === selectedPath && f.isDir)); }
   if (e.key === 'Delete' && selectedPath && !document.querySelector('.rename-input')) {
     e.preventDefault(); deleteFile(selectedPath, fileData.some(f => f.path === selectedPath && f.isDir));

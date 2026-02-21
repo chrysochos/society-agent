@@ -6,12 +6,45 @@ Standalone multi-agent orchestration system for managing AI agents.
 
 - **Project-based organization**: Each project has its own workspace and agents
 - **Agent management**: Create, configure, and monitor AI agents
+- **Hierarchical agent teams**: Agents can have subordinates with nested folder structures
 - **Real-time chat**: Interactive conversations with agents via web UI
 - **File explorer**: Browse and view files in agent workspaces
 - **Knowledge management**: Persistent memory and context for agents
 - **Skills system**: Reusable procedural knowledge (global and project-specific)
 - **MCP integration**: Connect to external services via Model Context Protocol
 - **Git management**: Agents can manage project repos with approval for push operations
+
+## Agent Naming and IDs
+
+When creating agents, you provide a **Name** and the system auto-generates an **ID**:
+
+| Field | Name | ID |
+|-------|------|-----|
+| **Purpose** | Display label for humans | Technical identifier |
+| **Example** | "Documentation Specialist" | `documentation-specialist` |
+| **Format** | Any text | Lowercase, alphanumeric + hyphens |
+| **Unique?** | No (recommended) | **Yes** - must be unique in project |
+
+**Important**: Agent IDs must be unique across the entire project. If you have teams with similar roles at different levels:
+
+```
+❌ Conflict:
+├── Coder → Documentation Specialist (id: documentation-specialist)
+└── Coder → Viewer → Documentation Specialist (id: documentation-specialist)
+
+✅ Solution - use distinct names:
+├── Coder → Documentation Specialist (id: documentation-specialist)  
+└── Coder → Viewer → Viewer Docs (id: viewer-docs)
+```
+
+The folder structure follows the reporting hierarchy:
+```
+projects/my-project/
+├── coder/                          # Lead agent
+│   ├── documentation-specialist/   # Reports to coder
+│   └── viewer/                     # Reports to coder
+│       └── viewer-docs/            # Reports to viewer
+```
 
 ## Documentation
 
