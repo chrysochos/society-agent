@@ -259,6 +259,25 @@
     color: var(--muted); cursor: pointer; }
   .msg-attachments .file-attach:hover { border-color: var(--accent); color: var(--text); }
 
+  /* Problems Panel */
+  .problems-panel { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+  .problems-header { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+  .problems-header .count { font-size: 10px; font-weight: normal; padding: 1px 6px; border-radius: 10px; }
+  .problems-header .count.ok { color: var(--green); background: rgba(63,185,80,0.1); }
+  .problems-header .count.errors { color: var(--red); background: rgba(248,81,73,0.15); }
+  .problems-header .count.warnings { color: var(--yellow); background: rgba(210,153,34,0.15); }
+  .problems-header .chevron { color: var(--muted); transition: transform 0.2s; font-size: 10px; }
+  .problems-panel.collapsed .problems-list { display: none; }
+  .problems-panel.collapsed .chevron { transform: rotate(-90deg); }
+  .problems-list { max-height: 200px; overflow-y: auto; font-size: 11px; }
+  .problem-item { padding: 4px 6px; border-radius: 4px; margin-bottom: 3px; cursor: pointer; display: flex; gap: 6px; }
+  .problem-item:hover { background: rgba(255,255,255,0.05); }
+  .problem-item .icon { flex-shrink: 0; }
+  .problem-item .icon.error { color: var(--red); }
+  .problem-item .icon.warning { color: var(--yellow); }
+  .problem-item .msg { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  .problem-item .loc { color: var(--muted); font-family: monospace; font-size: 10px; }
+
   /* Workers Panel */
   .workers-panel { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
   .workers-header { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
@@ -337,6 +356,19 @@
   .file-viewer-body .markdown-body a { color: var(--accent); text-decoration: none; }
   .file-viewer-body .markdown-body a:hover { text-decoration: underline; }
   .file-viewer-body .markdown-body img { max-width: 100%; height: auto; border-radius: 8px; }
+
+  /* Find bar */
+  .find-bar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--bg); }
+  .find-bar input { flex: 1; background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 4px; font-size: 13px; outline: none; max-width: 300px; }
+  .find-bar input:focus { border-color: var(--accent); }
+  .find-bar .find-nav { display: flex; gap: 4px; }
+  .find-bar .find-nav button { background: var(--surface); border: 1px solid var(--border); color: var(--muted); width: 28px; height: 28px; border-radius: 4px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+  .find-bar .find-nav button:hover { background: var(--border); color: var(--text); }
+  .find-bar .find-count { font-size: 12px; color: var(--muted); min-width: 70px; }
+  .find-bar .find-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; padding: 0 4px; }
+  .find-bar .find-close:hover { color: var(--text); }
+  .find-highlight { background: rgba(255, 215, 0, 0.4); border-radius: 2px; }
+  .find-highlight.current { background: rgba(255, 165, 0, 0.7); outline: 2px solid var(--accent); }
 
   /* Welcome state */
   .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -451,6 +483,32 @@
       <button onclick="openSummaryExaminer()" style="width:100%;margin-top:4px;padding:4px 8px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer" title="Ask questions about the summary to verify quality">🔍 Examine Summary</button>
     </div>
     <!-- Society Agent end -->
+    
+    <!-- Society Agent start - Approval Queue Panel -->
+    <div id="approvalPanel" style="display:none;margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+        <span style="font-size:12px;font-weight:600;color:var(--yellow)">📋 Pending Approvals</span>
+        <span id="approvalBadge" style="background:var(--yellow);color:#000;padding:1px 6px;border-radius:10px;font-size:10px;font-weight:600">0</span>
+      </div>
+      <div id="approvalList" style="font-size:11px;max-height:200px;overflow-y:auto"></div>
+    </div>
+    <!-- Society Agent end - Approval Queue Panel -->
+    
+    <!-- Society Agent start - Problems Panel -->
+    <div class="problems-panel" id="problemsPanel">
+      <div class="problems-header" onclick="toggleProblemsPanel()">
+        <span class="chevron">▼</span>
+        <span>⚠️ Problems</span>
+        <span class="count ok" id="problemsCount">✓ OK</span>
+        <span style="flex:1"></span>
+        <button onclick="event.stopPropagation(); refreshProblems()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px" title="Refresh">&#8635;</button>
+      </div>
+      <div class="problems-list" id="problemsList">
+        <div style="color:var(--green);padding:4px 0;">✓ No problems</div>
+      </div>
+    </div>
+    <!-- Society Agent end - Problems Panel -->
+    
     <div id="fileTree" class="file-tree">
       <div style="padding:16px;color:var(--muted);font-size:12px">No files yet</div>
     </div>
@@ -655,6 +713,8 @@ async function loadAgent() {
     }
 
     refreshFiles();
+    refreshApprovals();
+    refreshProblems();
   } catch (e) {
     addLog('error', `Failed to load agent: ${e.message}`);
   }
@@ -992,6 +1052,81 @@ function toggleWorkersPanel() {
   panel.classList.toggle('collapsed');
 }
 
+// ============================================================================
+// Problems Panel - TypeScript/ESLint errors
+// ============================================================================
+
+function toggleProblemsPanel() {
+  const panel = document.getElementById('problemsPanel');
+  panel.classList.toggle('collapsed');
+}
+
+async function refreshProblems() {
+  const countEl = document.getElementById('problemsCount');
+  const listEl = document.getElementById('problemsList');
+  
+  if (!agentProfile?.projectId) return;
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${agentProfile.projectId}/diagnostics`);
+    if (!res.ok) {
+      listEl.innerHTML = '<div style="color:var(--muted);padding:4px 0;">Unable to check</div>';
+      return;
+    }
+    const data = await res.json();
+    renderProblems(data.diagnostics || [], data.counts || {});
+  } catch (e) {
+    console.error('Failed to load diagnostics:', e);
+    listEl.innerHTML = '<div style="color:var(--muted);padding:4px 0;">Error checking</div>';
+  }
+}
+
+function renderProblems(diagnostics, counts) {
+  const countEl = document.getElementById('problemsCount');
+  const listEl = document.getElementById('problemsList');
+  
+  const errors = counts.errors || 0;
+  const warnings = counts.warnings || 0;
+  const total = counts.total || 0;
+  
+  if (total === 0) {
+    countEl.textContent = '✓ OK';
+    countEl.className = 'count ok';
+    listEl.innerHTML = '<div style="color:var(--green);padding:4px 0;">✓ No problems</div>';
+    return;
+  }
+  
+  if (errors > 0) {
+    countEl.textContent = `${errors} error${errors > 1 ? 's' : ''}`;
+    countEl.className = 'count errors';
+  } else {
+    countEl.textContent = `${warnings} warning${warnings > 1 ? 's' : ''}`;
+    countEl.className = 'count warnings';
+  }
+  
+  // Sort: errors first
+  diagnostics.sort((a, b) => {
+    if (a.severity !== b.severity) return a.severity === 'error' ? -1 : 1;
+    return a.file.localeCompare(b.file);
+  });
+  
+  listEl.innerHTML = diagnostics.slice(0, 20).map(d => {
+    const icon = d.severity === 'error' ? '❌' : '⚠️';
+    const iconClass = d.severity === 'error' ? 'error' : 'warning';
+    const shortFile = d.file.split('/').pop();
+    const code = d.code ? ` [${d.code}]` : '';
+    return `<div class="problem-item" onclick="viewFile('${escapeAttr(d.file)}')" title="${escapeAttr(d.file)}:${d.line}:${d.column}\n${escapeAttr(d.message)}">
+      <span class="icon ${iconClass}">${icon}</span>
+      <span class="msg">${escapeHtml(d.message)}${code}</span>
+      <span class="loc">${shortFile}:${d.line}</span>
+    </div>`;
+  }).join('');
+  
+  if (diagnostics.length > 20) {
+    listEl.innerHTML += `<div style="color:var(--muted);padding:4px 6px;font-size:10px;">...and ${diagnostics.length - 20} more</div>`;
+  }
+}
+
 socket.on('worker-spawned', (data) => {
   if (data.projectId !== agentProfile?.projectId) return;
   workers.set(data.workerId, {
@@ -1059,8 +1194,26 @@ socket.on('task-claimed', (data) => {
 });
 // Society Agent end
 
-socket.on('file-deleted', () => refreshFiles());
-socket.on('file-moved', () => refreshFiles());
+socket.on('file-deleted', () => { refreshFiles(); refreshProblems(); });
+socket.on('file-moved', () => { refreshFiles(); refreshProblems(); });
+
+// Auto-refresh problems when files are created/modified by agent
+socket.on('system-event', (data) => {
+  if (data.type === 'file-created' && data.projectId === agentProfile?.projectId) {
+    // Debounce - wait a bit in case more files are being created
+    clearTimeout(window._problemsRefreshTimeout);
+    window._problemsRefreshTimeout = setTimeout(refreshProblems, 2000);
+  }
+});
+
+// Society Agent start - approval events
+socket.on('approval-requested', (data) => {
+  if (data.projectId === PROJECT_ID) {
+    refreshApprovals();
+  }
+});
+socket.on('approval-resolved', () => refreshApprovals());
+// Society Agent end
 
 // Society Agent start - summarization indicator
 let lastSummarizationData = null;
@@ -1240,6 +1393,10 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+function escapeAttr(text) {
+  return String(text || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // Society Agent start - Summary Examiner
@@ -1885,6 +2042,77 @@ async function refreshFiles() {
   }
 }
 
+// Society Agent start - Approval Queue for sidebar
+async function refreshApprovals() {
+  const panel = document.getElementById('approvalPanel');
+  const badge = document.getElementById('approvalBadge');
+  const list = document.getElementById('approvalList');
+  if (!panel || !PROJECT_ID) return;
+  
+  try {
+    // Get approvals for this agent OR for human (show all pending)
+    const res = await fetch(`${API}/api/projects/${PROJECT_ID}/approvals`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const approvals = data.approvals || [];
+    
+    // Filter to approvals this agent or human needs to review
+    const myApprovals = approvals.filter(a => 
+      a.approverAgentId === AGENT_ID || a.approverAgentId === 'human'
+    );
+    
+    if (myApprovals.length === 0) {
+      panel.style.display = 'none';
+      return;
+    }
+    
+    panel.style.display = 'block';
+    badge.textContent = myApprovals.length;
+    
+    list.innerHTML = myApprovals.map(a => {
+      const requester = a.requestingAgentId;
+      const target = a.targetAgentId;
+      return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:6px">
+        <div style="font-weight:600;color:var(--yellow);margin-bottom:4px">⚠️ ${escapeHtml(a.operation)}</div>
+        <div style="color:var(--muted);margin-bottom:4px">${escapeHtml(a.summary)}</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:6px">
+          From: ${escapeHtml(requester)} → ${escapeHtml(target)}
+        </div>
+        <div style="display:flex;gap:4px;align-items:center">
+          <label style="display:flex;align-items:center;gap:3px;font-size:10px;color:var(--muted)">
+            <input type="checkbox" id="perm-${a.id}" style="margin:0"> Permanent
+          </label>
+          <button onclick="resolveApproval('${a.id}', 'approved')" style="flex:1;padding:3px 6px;font-size:10px;background:rgba(63,185,80,0.15);color:var(--green);border:1px solid var(--green);border-radius:4px;cursor:pointer">✓ Approve</button>
+          <button onclick="resolveApproval('${a.id}', 'denied')" style="flex:1;padding:3px 6px;font-size:10px;background:rgba(248,81,73,0.15);color:var(--red);border:1px solid var(--red);border-radius:4px;cursor:pointer">✗ Deny</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    console.error('Failed to refresh approvals:', e);
+  }
+}
+
+async function resolveApproval(requestId, resolution) {
+  const permanent = document.getElementById(`perm-${requestId}`)?.checked || false;
+  try {
+    const res = await fetch(`${API}/api/approvals/${requestId}/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resolution, permanent })
+    });
+    if (res.ok) {
+      addLog('success', `Approval ${resolution}`);
+      refreshApprovals();
+    } else {
+      const data = await res.json();
+      addLog('error', `Failed: ${data.error}`);
+    }
+  } catch (e) {
+    addLog('error', 'Failed to resolve approval');
+  }
+}
+// Society Agent end - Approval Queue
+
 // Society Agent start - Git status display
 async function refreshGitStatus() {
   const el = document.getElementById('gitStatus');
@@ -2110,9 +2338,19 @@ async function editFile(filePath) {
       <div class="file-viewer-header">
         <span class="title">&#9998; Editing: ${esc(filePath)}</span>
         <span class="meta">${formatSize(data.size)}</span>
+        <button onclick="toggleFindBarEditor()" style="background:var(--bg);border:1px solid var(--border);color:var(--muted);padding:4px 8px;border-radius:4px;font-size:11px;cursor:pointer;margin-right:8px;" title="Find (Ctrl+F)">&#128269; Find</button>
         <button onclick="saveFileEdit()" id="saveBtn" style="margin-right:8px;background:var(--accent);border:none;color:#fff;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">&#128190; Save</button>
         <button onclick="closeFileViewer()" style="margin-right:8px;background:var(--surface);border:1px solid var(--border);color:var(--fg);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">Cancel</button>
         <button class="close-btn" onclick="closeFileViewer()">&times;</button>
+      </div>
+      <div class="find-bar" id="findBarEditor" style="display:none;">
+        <input type="text" id="findInputEditor" placeholder="Find in file..." oninput="doFindInEditor()" onkeydown="handleFindKeyEditor(event)">
+        <span class="find-count" id="findCountEditor"></span>
+        <div class="find-nav">
+          <button onclick="findPrevEditor()" title="Previous (Shift+Enter)">&#9650;</button>
+          <button onclick="findNextEditor()" title="Next (Enter)">&#9660;</button>
+        </div>
+        <button class="find-close" onclick="closeFindBarEditor()">&times;</button>
       </div>
       <div class="file-viewer-body" style="padding:0;">
         <textarea id="editTextarea" style="width:100%;height:100%;box-sizing:border-box;resize:none;border:none;font-family:'Monaco','Menlo','Consolas',monospace;font-size:13px;line-height:1.5;background:var(--surface);color:var(--fg);padding:16px;outline:none;">${esc(data.content)}</textarea>
@@ -2234,10 +2472,20 @@ async function viewFile(filePath) {
             <button id="btnRendered" class="active" onclick="toggleMdView('rendered')">Rendered</button>
             <button id="btnRaw" onclick="toggleMdView('raw')">Raw</button>
           </div>
+          <button onclick="toggleFindBar()" style="background:var(--bg);border:1px solid var(--border);color:var(--muted);padding:4px 8px;border-radius:4px;font-size:11px;cursor:pointer;margin-left:4px;" title="Find (Ctrl+F)">&#128269; Find</button>
           <button class="close-btn" onclick="closeFileViewer()">&times;</button>
         </div>
+        <div class="find-bar" id="findBar" style="display:none;">
+          <input type="text" id="findInput" placeholder="Find in file..." oninput="doFind()" onkeydown="handleFindKey(event)">
+          <span class="find-count" id="findCount"></span>
+          <div class="find-nav">
+            <button onclick="findPrev()" title="Previous (Shift+Enter)">&#9650;</button>
+            <button onclick="findNext()" title="Next (Enter)">&#9660;</button>
+          </div>
+          <button class="find-close" onclick="closeFindBar()">&times;</button>
+        </div>
         <div class="file-viewer-body" id="fileViewerBody">
-          <div class="markdown-body">${rendered}</div>
+          <div class="markdown-body" id="fileContent">${rendered}</div>
         </div>
       </div>`;
       viewer.style.display = 'flex';
@@ -2249,9 +2497,19 @@ async function viewFile(filePath) {
       <div class="file-viewer-header">
         <span class="title">&#128196; ${esc(filePath)}</span>
         <span class="meta">${formatSize(data.size)}</span>
+        <button onclick="toggleFindBar()" style="background:var(--bg);border:1px solid var(--border);color:var(--muted);padding:4px 8px;border-radius:4px;font-size:11px;cursor:pointer;margin-right:4px;" title="Find (Ctrl+F)">&#128269; Find</button>
         <button class="close-btn" onclick="closeFileViewer()">&times;</button>
       </div>
-      <div class="file-viewer-body"><pre>${esc(data.content)}</pre></div>
+      <div class="find-bar" id="findBar" style="display:none;">
+        <input type="text" id="findInput" placeholder="Find in file..." oninput="doFind()" onkeydown="handleFindKey(event)">
+        <span class="find-count" id="findCount"></span>
+        <div class="find-nav">
+          <button onclick="findPrev()" title="Previous (Shift+Enter)">&#9650;</button>
+          <button onclick="findNext()" title="Next (Enter)">&#9660;</button>
+        </div>
+        <button class="find-close" onclick="closeFindBar()">&times;</button>
+      </div>
+      <div class="file-viewer-body" id="fileViewerBody"><pre id="fileContent">${esc(data.content)}</pre></div>
     </div>`;
     viewer.style.display = 'flex';
   } catch (e) { addLog('error', 'Failed to read file: ' + e.message); }
@@ -2310,7 +2568,201 @@ function renderMarkdown(text) {
 }
 // Society Agent end
 
-function closeFileViewer() { const v = document.getElementById('fileViewer'); if (v) v.style.display = 'none'; }
+function closeFileViewer() { const v = document.getElementById('fileViewer'); if (v) v.style.display = 'none'; findMatches = []; currentFindIndex = -1; findMatchesEditor = []; currentFindIndexEditor = -1; }
+
+// Find in file viewer
+let findMatches = [];
+let currentFindIndex = -1;
+let originalContent = '';
+
+function toggleFindBar() {
+  const bar = document.getElementById('findBar');
+  if (!bar) return;
+  bar.style.display = bar.style.display === 'none' ? 'flex' : 'none';
+  if (bar.style.display === 'flex') {
+    const inp = document.getElementById('findInput');
+    if (inp) { inp.focus(); inp.select(); }
+    const fc = document.getElementById('fileContent');
+    if (fc) originalContent = fc.textContent || fc.innerText;
+  } else { closeFindBar(); }
+}
+
+function closeFindBar() {
+  const bar = document.getElementById('findBar');
+  if (bar) bar.style.display = 'none';
+  // Restore original content
+  const fc = document.getElementById('fileContent');
+  if (fc && originalContent) {
+    if (fc.tagName === 'PRE') fc.textContent = originalContent;
+    else fc.innerHTML = renderMarkdown(originalContent);
+  }
+  findMatches = [];
+  currentFindIndex = -1;
+  document.getElementById('findCount').textContent = '';
+}
+
+function doFind() {
+  const inp = document.getElementById('findInput');
+  const fc = document.getElementById('fileContent');
+  if (!inp || !fc) return;
+  const query = inp.value.toLowerCase();
+  if (!query) { 
+    findMatches = []; 
+    currentFindIndex = -1; 
+    document.getElementById('findCount').textContent = '';
+    if (originalContent && fc.tagName === 'PRE') fc.textContent = originalContent;
+    return; 
+  }
+  const text = originalContent || fc.textContent || fc.innerText;
+  if (!originalContent) originalContent = text;
+  findMatches = [];
+  let pos = 0, lc = text.toLowerCase();
+  while ((pos = lc.indexOf(query, pos)) !== -1) { findMatches.push(pos); pos += query.length; }
+  currentFindIndex = findMatches.length > 0 ? 0 : -1;
+  updateFindCount();
+  highlightMatches(fc, text, query);
+  // Restore focus to input after DOM update
+  setTimeout(() => inp.focus(), 0);
+}
+
+function highlightMatches(el, text, query) {
+  if (!query || findMatches.length === 0) { el.innerHTML = esc(text); return; }
+  const qLen = query.length;
+  let html = '', last = 0;
+  findMatches.forEach((pos, i) => {
+    html += esc(text.slice(last, pos));
+    const cls = i === currentFindIndex ? 'find-highlight current' : 'find-highlight';
+    html += `<span class="${cls}">${esc(text.slice(pos, pos + qLen))}</span>`;
+    last = pos + qLen;
+  });
+  html += esc(text.slice(last));
+  el.innerHTML = `<pre style="margin:0;white-space:pre-wrap;word-wrap:break-word;">${html}</pre>`;
+  // Scroll to current
+  const cur = el.querySelector('.find-highlight.current');
+  if (cur) cur.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+function updateFindCount() {
+  const cnt = document.getElementById('findCount');
+  if (cnt) cnt.textContent = findMatches.length > 0 ? `${currentFindIndex + 1} of ${findMatches.length}` : 'No results';
+}
+
+function findNext() {
+  if (findMatches.length === 0) return;
+  currentFindIndex = (currentFindIndex + 1) % findMatches.length;
+  updateFindCount();
+  const fc = document.getElementById('fileContent');
+  const inp = document.getElementById('findInput');
+  if (fc && inp) highlightMatches(fc, originalContent, inp.value.toLowerCase());
+}
+
+function findPrev() {
+  if (findMatches.length === 0) return;
+  currentFindIndex = (currentFindIndex - 1 + findMatches.length) % findMatches.length;
+  updateFindCount();
+  const fc = document.getElementById('fileContent');
+  const inp = document.getElementById('findInput');
+  if (fc && inp) highlightMatches(fc, originalContent, inp.value.toLowerCase());
+}
+
+function handleFindKey(e) {
+  if (e.key === 'Enter') { e.shiftKey ? findPrev() : findNext(); e.preventDefault(); }
+  if (e.key === 'Escape') closeFindBar();
+}
+
+// Find in editor (textarea)
+let findMatchesEditor = [];
+let currentFindIndexEditor = -1;
+
+function toggleFindBarEditor() {
+  const bar = document.getElementById('findBarEditor');
+  if (!bar) return;
+  bar.style.display = bar.style.display === 'none' ? 'flex' : 'none';
+  if (bar.style.display === 'flex') {
+    const inp = document.getElementById('findInputEditor');
+    if (inp) { inp.focus(); inp.select(); }
+  }
+}
+
+function closeFindBarEditor() {
+  const bar = document.getElementById('findBarEditor');
+  if (bar) bar.style.display = 'none';
+  findMatchesEditor = [];
+  currentFindIndexEditor = -1;
+  document.getElementById('findCountEditor').textContent = '';
+}
+
+function doFindInEditor() {
+  const inp = document.getElementById('findInputEditor');
+  const ta = document.getElementById('editTextarea');
+  if (!inp || !ta) return;
+  const query = inp.value.toLowerCase();
+  if (!query) { findMatchesEditor = []; currentFindIndexEditor = -1; document.getElementById('findCountEditor').textContent = ''; return; }
+  const text = ta.value.toLowerCase();
+  findMatchesEditor = [];
+  let pos = 0;
+  while ((pos = text.indexOf(query, pos)) !== -1) { findMatchesEditor.push(pos); pos += query.length; }
+  currentFindIndexEditor = findMatchesEditor.length > 0 ? 0 : -1;
+  updateFindCountEditor();
+  if (findMatchesEditor.length > 0) selectEditorMatch(false);
+  // Keep focus on find input, not textarea
+  setTimeout(() => inp.focus(), 0);
+}
+
+function updateFindCountEditor() {
+  const cnt = document.getElementById('findCountEditor');
+  if (cnt) cnt.textContent = findMatchesEditor.length > 0 ? `${currentFindIndexEditor + 1} of ${findMatchesEditor.length}` : 'No results';
+}
+
+function selectEditorMatch(focusTextarea = true) {
+  if (findMatchesEditor.length === 0 || currentFindIndexEditor < 0) return;
+  const ta = document.getElementById('editTextarea');
+  const inp = document.getElementById('findInputEditor');
+  if (!ta || !inp) return;
+  const pos = findMatchesEditor[currentFindIndexEditor];
+  const len = inp.value.length;
+  if (focusTextarea) {
+    ta.focus();
+    ta.setSelectionRange(pos, pos + len);
+    // Scroll to selection
+    const lines = ta.value.slice(0, pos).split('\n');
+    const lineNum = lines.length;
+    ta.scrollTop = (lineNum - 5) * 20;
+  }
+}
+
+function findNextEditor() {
+  if (findMatchesEditor.length === 0) return;
+  currentFindIndexEditor = (currentFindIndexEditor + 1) % findMatchesEditor.length;
+  updateFindCountEditor();
+  selectEditorMatch();
+}
+
+function findPrevEditor() {
+  if (findMatchesEditor.length === 0) return;
+  currentFindIndexEditor = (currentFindIndexEditor - 1 + findMatchesEditor.length) % findMatchesEditor.length;
+  updateFindCountEditor();
+  selectEditorMatch();
+}
+
+function handleFindKeyEditor(e) {
+  if (e.key === 'Enter') { e.shiftKey ? findPrevEditor() : findNextEditor(); e.preventDefault(); }
+  if (e.key === 'Escape') closeFindBarEditor();
+}
+
+// Global Ctrl+F handler for file viewer
+document.addEventListener('keydown', function(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+    const viewer = document.getElementById('fileViewer');
+    if (viewer && viewer.style.display === 'flex') {
+      e.preventDefault();
+      const editorBar = document.getElementById('findBarEditor');
+      const viewerBar = document.getElementById('findBar');
+      if (editorBar) toggleFindBarEditor();
+      else if (viewerBar) toggleFindBar();
+    }
+  }
+});
 
 async function moveFile(from, to) {
   if (from === to) return;

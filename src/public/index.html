@@ -336,6 +336,11 @@
   .project-card .project-stats { display: flex; gap: 12px; font-size: 11px; color: var(--muted); }
   .project-card .project-actions { display: flex; gap: 6px; margin-top: 4px; }
   .project-card .project-actions .btn { font-size: 11px; padding: 4px 10px; }
+  /* Society Agent start - Git badge styling */
+  .project-card .git-badge { font-size: 10px; padding: 2px 6px; border-radius: 8px;
+    background: rgba(63,185,80,0.15); color: var(--green); cursor: pointer; margin-left: 6px; }
+  .project-card .git-badge:hover { background: rgba(63,185,80,0.25); }
+  /* Society Agent end */
   .project-add-card { background: var(--surface); border: 2px dashed var(--border); border-radius: 10px;
     padding: 30px 16px; display: flex; align-items: center; justify-content: center;
     font-size: 14px; color: var(--muted); cursor: pointer; transition: border-color 0.2s, color 0.2s; }
@@ -400,12 +405,15 @@
     <div class="stat-row"><span class="label">Output</span><span class="value expandable" id="outputDir" title="" onclick="this.classList.toggle('expanded')">projects/</span></div>
     <div class="stat-row"><span class="label">Files</span><span class="value" id="fileCount">0</span></div>
     <!-- Society Agent start - usage tracking display -->
-    <div class="stat-row" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
-      <span class="label">💰 Tokens</span>
+    <div class="stat-row"><span class="label">💰 Tokens</span>
       <span class="value" id="tokenCount" title="Click to see details" style="cursor:pointer" onclick="showUsageDetails()">0</span>
     </div>
     <div class="stat-row"><span class="label">💵 Est. Cost</span><span class="value" id="costDisplay" style="color:var(--green)">$0.00</span></div>
     <div class="stat-row"><span class="label">📊 API Calls</span><span class="value" id="callCount">0</span></div>
+    <div class="stat-row" title="Click to configure limits" style="cursor:pointer" onclick="showLimitsDialog()">
+      <span class="label">⚠️ Limit</span>
+      <span class="value" id="limitDisplay" style="color:var(--green)">$100</span>
+    </div>
     <!-- Society Agent end -->
 
     <!-- File Explorer -->
@@ -537,15 +545,54 @@
   </div>
 </div>
 
-<!-- API Key Modal -->
+<!-- Settings Modal (replaces old apiKeyModal) -->
 <div class="modal-overlay" id="apiKeyModal" style="display:none">
-  <div class="modal">
-    <h2>API Configuration</h2>
-    <p>Enter your Anthropic API key. It will be saved to the server's .env file.</p>
-    <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-...">
+  <div class="modal wide">
+    <h2>⚙️ Server Settings</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:16px">Configure LLM provider and model. These are the defaults - individual agents can override.</p>
+    
+    <div class="form-group">
+      <label>Provider</label>
+      <select id="settingsProvider" onchange="onProviderChange()">
+        <option value="anthropic">Anthropic (Claude direct)</option>
+        <option value="openrouter">OpenRouter (multi-model)</option>
+        <option value="openai">OpenAI</option>
+        <option value="gemini">Google Gemini</option>
+        <option value="deepseek">DeepSeek</option>
+        <option value="groq">Groq</option>
+        <option value="mistral">Mistral</option>
+      </select>
+    </div>
+    
+    <div class="form-group">
+      <label>Model</label>
+      <select id="settingsModel"></select>
+      <span style="font-size:11px;color:var(--muted)" id="settingsModelCost"></span>
+    </div>
+    
+    <div class="form-group">
+      <label id="settingsApiKeyLabel">API Key</label>
+      <input type="password" id="settingsApiKey" placeholder="sk-...">
+      <span style="font-size:11px;color:var(--muted)" id="settingsApiKeyStatus"></span>
+    </div>
+    
+    <details style="margin-top:16px">
+      <summary style="cursor:pointer;font-size:12px;color:var(--muted)">Advanced Settings</summary>
+      <div style="margin-top:12px">
+        <div class="form-group">
+          <label>Max Tokens</label>
+          <input type="number" id="settingsMaxTokens" value="16384" min="1000" max="200000">
+        </div>
+        <div class="form-group">
+          <label>Temperature</label>
+          <input type="number" id="settingsTemperature" value="0.7" min="0" max="2" step="0.1">
+        </div>
+      </div>
+    </details>
+    
     <div class="actions">
       <button class="btn btn-secondary" onclick="hideApiKeyModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveApiKey()">Save</button>
+      <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
     </div>
   </div>
 </div>
@@ -572,6 +619,156 @@
     </div>
   </div>
 </div>
+
+<!-- Society Agent start - Git Integration Modals -->
+<!-- Load from Git Modal -->
+<div class="modal-overlay" id="gitModal" style="display:none">
+  <div class="modal wide">
+    <h2>&#128268; Load Project from Git</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Clone a repository from GitLab or GitHub. Agents will work in the cloned workspace.</p>
+    
+    <div class="form-group">
+      <label>Project Name</label>
+      <input type="text" id="gitFormName" placeholder="my-project" oninput="updateGitFolderPreview()">
+      <span style="font-size:11px;color:var(--muted)">Will clone to: <code id="gitFolderPreview">projects/</code></span>
+    </div>
+    
+    <div class="form-group">
+      <label>Repository URL</label>
+      <input type="text" id="gitFormUrl" placeholder="git@gitlab.com:user/repo.git or https://...">
+    </div>
+    
+    <div class="form-group">
+      <label>Branch / Ref</label>
+      <input type="text" id="gitFormRef" placeholder="main" value="main">
+    </div>
+    
+    <div class="form-group">
+      <label>Credential (for private repos)</label>
+      <select id="gitFormCredential" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
+        <option value="">None (public repo)</option>
+      </select>
+      <button onclick="showCredentialsModal()" style="margin-top:8px;font-size:11px;background:none;border:1px solid var(--border);color:var(--muted);padding:4px 8px;border-radius:4px;cursor:pointer">
+        &#128273; Manage Credentials
+      </button>
+    </div>
+    
+    <div class="form-group">
+      <label>Description (optional)</label>
+      <input type="text" id="gitFormDesc" placeholder="What is this project about?">
+    </div>
+    
+    <div id="gitFormStatus" style="display:none;margin-bottom:12px;padding:8px;border-radius:4px;font-size:12px"></div>
+    
+    <div class="actions">
+      <button class="btn btn-secondary" onclick="hideGitModal()">Cancel</button>
+      <button class="btn btn-primary" id="gitFormSubmit" onclick="submitGitForm()">&#128268; Clone & Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Credentials Management Modal -->
+<div class="modal-overlay" id="credentialsModal" style="display:none">
+  <div class="modal wide">
+    <h2>&#128273; Git Credentials</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Manage SSH keys and access tokens for private repositories.</p>
+    
+    <div id="credentialsList" style="margin-bottom:16px;max-height:200px;overflow-y:auto">
+      <div style="color:var(--muted);font-size:12px;padding:8px">Loading...</div>
+    </div>
+    
+    <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
+    <h3 style="font-size:14px;margin-bottom:12px">Add New Credential</h3>
+    
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" id="credFormName" placeholder="GitLab Deploy Key - myproject">
+    </div>
+    
+    <div class="form-group">
+      <label>Type</label>
+      <select id="credFormType" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)" onchange="updateCredFormPlaceholder()">
+        <option value="ssh-key">SSH Key (private key)</option>
+        <option value="token">Personal Access Token</option>
+      </select>
+    </div>
+    
+    <div class="form-group">
+      <label>Host (e.g., gitlab.com, github.com, or * for any)</label>
+      <input type="text" id="credFormHost" placeholder="gitlab.com">
+    </div>
+    
+    <div class="form-group">
+      <label id="credFormSecretLabel">Private Key</label>
+      <textarea id="credFormSecret" rows="4" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;..." style="width:100%;font-family:monospace;font-size:11px;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);resize:vertical"></textarea>
+    </div>
+    
+    <div class="actions">
+      <button class="btn btn-secondary" onclick="hideCredentialsModal()">Close</button>
+      <button class="btn btn-primary" onclick="addCredential()">&#10003; Add Credential</button>
+    </div>
+  </div>
+</div>
+
+<!-- Git Project Actions Modal (pull, push, branches) -->
+<div class="modal-overlay" id="gitActionsModal" style="display:none">
+  <div class="modal wide">
+    <h2 id="gitActionsTitle">&#128268; Git Operations</h2>
+    <div id="gitActionsContent">Loading...</div>
+    <div class="actions" style="margin-top:16px">
+      <button class="btn btn-secondary" onclick="hideGitActionsModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Push to GitLab Modal -->
+<div class="modal-overlay" id="pushToGitLabModal" style="display:none">
+  <div class="modal">
+    <h2>&#128268; Push to GitLab</h2>
+    <p style="color:var(--text-muted);margin-bottom:16px">Create a new GitLab repository and push this local project</p>
+    
+    <input type="hidden" id="pushGitLabProjectId" />
+    
+    <div class="form-group">
+      <label>Credential (GitLab Token)</label>
+      <select id="pushGitLabCredential" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
+        <option value="">Loading...</option>
+      </select>
+      <small style="color:var(--text-muted);display:block;margin-top:4px">Must be a Personal Access Token with api scope</small>
+    </div>
+    
+    <div class="form-group">
+      <label>Repository Name</label>
+      <input type="text" id="pushGitLabRepoName" placeholder="my-project" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)" />
+    </div>
+    
+    <div class="form-group">
+      <label>Namespace (optional)</label>
+      <select id="pushGitLabNamespace" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
+        <option value="">Select credential first...</option>
+      </select>
+      <small style="color:var(--text-muted);display:block;margin-top:4px">Leave empty for personal namespace</small>
+    </div>
+    
+    <div class="form-group">
+      <label>Visibility</label>
+      <select id="pushGitLabVisibility" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
+        <option value="private" selected>Private</option>
+        <option value="internal">Internal</option>
+        <option value="public">Public</option>
+      </select>
+    </div>
+    
+    <div id="pushGitLabError" style="display:none;padding:8px;background:var(--red);color:white;border-radius:4px;margin-bottom:12px"></div>
+    <div id="pushGitLabSuccess" style="display:none;padding:8px;background:var(--green);color:white;border-radius:4px;margin-bottom:12px"></div>
+    
+    <div class="actions">
+      <button class="btn btn-secondary" onclick="hidePushToGitLabModal()">Cancel</button>
+      <button class="btn btn-primary" id="pushGitLabBtn" onclick="pushToGitLab()">&#128268; Create & Push</button>
+    </div>
+  </div>
+</div>
+<!-- Society Agent end - Git Integration Modals -->
 
 <script>
 const API = window.location.origin;
@@ -732,6 +929,162 @@ function showUsageDetails() {
 
 // Fetch initial usage on connect
 setTimeout(fetchUsageSummary, 1000);
+
+// Society Agent start - Token limits tracking
+let currentLimits = { maxCostGlobal: 100 };
+
+socket.on('token-limits', (limits) => {
+  currentLimits = limits;
+  updateLimitDisplay();
+});
+
+socket.on('token-usage', (data) => {
+  currentLimits = data.limits;
+  updateLimitDisplay(data.globalUsage?.cost);
+});
+
+socket.on('token-limit-exceeded', (data) => {
+  addLog('warn', `⚠️ Token limit exceeded: ${data.message}`);
+  // Show alert
+  const limitEl = document.getElementById('limitDisplay');
+  if (limitEl) {
+    limitEl.style.color = 'var(--red)';
+    limitEl.textContent = '⛔ LIMIT';
+  }
+});
+
+socket.on('token-usage-reset', (data) => {
+  addLog('info', `Token usage reset (${data.scope})`);
+  fetchLimits();
+});
+
+function updateLimitDisplay(currentCost) {
+  const limitEl = document.getElementById('limitDisplay');
+  if (!limitEl) return;
+  
+  const limit = currentLimits.maxCostGlobal || 100;
+  const cost = currentCost || 0;
+  const percent = (cost / limit) * 100;
+  
+  if (percent >= 100) {
+    limitEl.style.color = 'var(--red)';
+    limitEl.textContent = '⛔ LIMIT';
+  } else if (percent >= 75) {
+    limitEl.style.color = 'var(--yellow)';
+    limitEl.textContent = `$${limit} (${percent.toFixed(0)}%)`;
+  } else {
+    limitEl.style.color = 'var(--muted)';
+    limitEl.textContent = `$${limit}`;
+  }
+}
+
+async function fetchLimits() {
+  try {
+    const res = await fetch('/api/limits');
+    if (res.ok) {
+      currentLimits = await res.json();
+      updateLimitDisplay();
+    }
+  } catch (e) {
+    console.warn('Failed to fetch limits:', e);
+  }
+}
+
+async function showLimitsDialog() {
+  try {
+    const [limitsRes, usageRes] = await Promise.all([
+      fetch('/api/limits'),
+      fetch('/api/limits/usage')
+    ]);
+    const limits = await limitsRes.json();
+    const usage = await usageRes.json();
+    
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML = `<div class="modal" style="max-width:500px">
+      <h3>Token Limits & Usage</h3>
+      
+      <h4 style="margin:12px 0 8px">Current Usage</h4>
+      <div style="font-size:13px;margin-bottom:12px">
+        <div>Global: ${formatNumber(usage.global?.tokens || 0)} tokens / $${(usage.global?.cost || 0).toFixed(4)}</div>
+      </div>
+      
+      <h4 style="margin:12px 0 8px">Limits (per session)</h4>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
+        <label>Max $ per Agent:</label>
+        <input type="number" id="limitAgentCost" value="${limits.maxCostPerAgent}" step="1" min="0" style="width:80px">
+        
+        <label>Max $ per Project:</label>
+        <input type="number" id="limitProjectCost" value="${limits.maxCostPerProject}" step="5" min="0" style="width:80px">
+        
+        <label>Max $ Global:</label>
+        <input type="number" id="limitGlobalCost" value="${limits.maxCostGlobal}" step="10" min="0" style="width:80px">
+        
+        <label>Max Tokens/Agent:</label>
+        <input type="number" id="limitAgentTokens" value="${limits.maxTokensPerAgent}" step="100000" min="0" style="width:100px">
+      </div>
+      
+      <div class="actions" style="margin-top:16px;display:flex;gap:8px">
+        <button class="btn" onclick="resetUsage()">Reset Usage</button>
+        <span style="flex:1"></span>
+        <button class="btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveLimits()">Save</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+  } catch (e) {
+    alert('Failed to load limits: ' + e.message);
+  }
+}
+
+async function saveLimits() {
+  const newLimits = {
+    maxCostPerAgent: parseFloat(document.getElementById('limitAgentCost').value) || 5,
+    maxCostPerProject: parseFloat(document.getElementById('limitProjectCost').value) || 25,
+    maxCostGlobal: parseFloat(document.getElementById('limitGlobalCost').value) || 100,
+    maxTokensPerAgent: parseInt(document.getElementById('limitAgentTokens').value) || 1000000,
+  };
+  
+  try {
+    const res = await fetch('/api/limits', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newLimits)
+    });
+    if (res.ok) {
+      currentLimits = (await res.json()).limits;
+      updateLimitDisplay();
+      document.querySelector('.modal-overlay')?.remove();
+      addLog('info', 'Token limits updated');
+    } else {
+      throw new Error('Failed to save');
+    }
+  } catch (e) {
+    alert('Failed to save limits: ' + e.message);
+  }
+}
+
+async function resetUsage() {
+  if (!confirm('Reset all token usage counters? This will allow agents to run again if they hit limits.')) return;
+  
+  try {
+    const res = await fetch('/api/limits/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: 'all' })
+    });
+    if (res.ok) {
+      document.querySelector('.modal-overlay')?.remove();
+      addLog('info', 'Token usage reset');
+      fetchLimits();
+    }
+  } catch (e) {
+    alert('Failed to reset: ' + e.message);
+  }
+}
+
+setTimeout(fetchLimits, 1500);
 // Society Agent end
 
 // Streaming agent messages
@@ -2184,8 +2537,271 @@ function addLog(level, text) {
   panel.scrollTop = panel.scrollHeight;
 }
 
-function showApiKeyModal() { document.getElementById('apiKeyModal').style.display = 'flex'; }
-function hideApiKeyModal() { document.getElementById('apiKeyModal').style.display = 'none'; }
+// ============================================================================
+// Settings Modal (Provider/Model Configuration)
+// ============================================================================
+
+// Models available per provider with cost info ($/1M tokens)
+const MODELS_BY_PROVIDER = {
+  anthropic: [
+    { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4 (Latest)', input: 3, output: 15 },
+    { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', input: 3, output: 15 },
+    { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', input: 15, output: 75 },
+    { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku (Fast)', input: 0.25, output: 1.25 },
+  ],
+  openrouter: [
+    { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', input: 3, output: 15 },
+    { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', input: 3, output: 15 },
+    { id: 'anthropic/claude-3-opus', name: 'Claude 3 Opus', input: 15, output: 75 },
+    { id: 'anthropic/claude-3-haiku', name: 'Claude 3 Haiku', input: 0.25, output: 1.25 },
+    { id: 'openai/gpt-4o', name: 'GPT-4o', input: 2.5, output: 10 },
+    { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini (Fast)', input: 0.15, output: 0.60 },
+    { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash', input: 0.10, output: 0.40 },
+    { id: 'google/gemini-pro', name: 'Gemini Pro', input: 0.125, output: 0.375 },
+    { id: 'meta-llama/llama-3.1-70b-instruct', name: 'Llama 3.1 70B', input: 0.52, output: 0.75 },
+    { id: 'meta-llama/llama-3.1-8b-instruct', name: 'Llama 3.1 8B (Fast)', input: 0.055, output: 0.055 },
+    { id: 'deepseek/deepseek-chat', name: 'DeepSeek Chat', input: 0.14, output: 0.28 },
+    { id: 'mistralai/mistral-large', name: 'Mistral Large', input: 2, output: 6 },
+    { id: 'qwen/qwen-2.5-72b-instruct', name: 'Qwen 2.5 72B', input: 0.35, output: 0.40 },
+    { id: 'minimax/minimax-m2.5', name: 'MiniMax M2.5', input: 0.30, output: 1.10 },
+  ],
+  openai: [
+    { id: 'gpt-4o', name: 'GPT-4o', input: 2.5, output: 10 },
+    { id: 'gpt-4o-mini', name: 'GPT-4o Mini (Fast)', input: 0.15, output: 0.60 },
+    { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', input: 10, output: 30 },
+    { id: 'o1-preview', name: 'o1 Preview (Reasoning)', input: 15, output: 60 },
+    { id: 'o1-mini', name: 'o1 Mini', input: 3, output: 12 },
+  ],
+  gemini: [
+    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', input: 1.25, output: 5 },
+    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (Fast)', input: 0.075, output: 0.30 },
+    { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', input: 0.10, output: 0.40 },
+  ],
+  deepseek: [
+    { id: 'deepseek-chat', name: 'DeepSeek Chat', input: 0.14, output: 0.28 },
+    { id: 'deepseek-coder', name: 'DeepSeek Coder', input: 0.14, output: 0.28 },
+  ],
+  groq: [
+    { id: 'llama-3.1-70b-versatile', name: 'Llama 3.1 70B', input: 0.59, output: 0.79 },
+    { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B (Fast)', input: 0.05, output: 0.08 },
+    { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B', input: 0.24, output: 0.24 },
+  ],
+  mistral: [
+    { id: 'mistral-large-latest', name: 'Mistral Large', input: 2, output: 6 },
+    { id: 'mistral-medium-latest', name: 'Mistral Medium', input: 2.7, output: 8.1 },
+    { id: 'mistral-small-latest', name: 'Mistral Small', input: 0.2, output: 0.6 },
+  ],
+};
+
+const API_KEY_LABELS = {
+  anthropic: 'Anthropic API Key',
+  openrouter: 'OpenRouter API Key',
+  openai: 'OpenAI API Key',
+  gemini: 'Google AI API Key',
+  deepseek: 'DeepSeek API Key',
+  groq: 'Groq API Key',
+  mistral: 'Mistral API Key',
+};
+
+const API_KEY_PLACEHOLDERS = {
+  anthropic: 'sk-ant-api03-...',
+  openrouter: 'sk-or-v1-...',
+  openai: 'sk-...',
+  gemini: 'AIza...',
+  deepseek: 'sk-...',
+  groq: 'gsk_...',
+  mistral: '...',
+};
+
+let currentSettings = null;
+
+async function showApiKeyModal() {
+  // Load current settings from server
+  try {
+    const res = await fetch(`${API}/api/config/provider`);
+    const data = await res.json();
+    currentSettings = data;
+    
+    // Set provider dropdown
+    const providerSelect = document.getElementById('settingsProvider');
+    providerSelect.value = data.provider || 'anthropic';
+    
+    // Populate model dropdown
+    onProviderChange();
+    
+    // Set current model
+    if (data.model) {
+      document.getElementById('settingsModel').value = data.model;
+      updateModelCost();
+    }
+    
+    // Show API key status
+    const statusEl = document.getElementById('settingsApiKeyStatus');
+    if (data.apiKeyConfigured) {
+      statusEl.textContent = '✓ API key configured';
+      statusEl.style.color = 'var(--success)';
+      document.getElementById('settingsApiKey').placeholder = '••••••••••••••••';
+    } else {
+      statusEl.textContent = '✗ No API key configured';
+      statusEl.style.color = 'var(--error)';
+    }
+    
+    // Load advanced settings
+    const fullSettings = await fetch(`${API}/api/settings`).then(r => r.json()).catch(() => ({}));
+    if (fullSettings.defaultMaxTokens) {
+      document.getElementById('settingsMaxTokens').value = fullSettings.defaultMaxTokens;
+    }
+    if (fullSettings.defaultTemperature !== undefined) {
+      document.getElementById('settingsTemperature').value = fullSettings.defaultTemperature;
+    }
+  } catch (e) {
+    console.error('Failed to load settings:', e);
+  }
+  
+  document.getElementById('apiKeyModal').style.display = 'flex';
+}
+
+function hideApiKeyModal() { 
+  document.getElementById('apiKeyModal').style.display = 'none'; 
+}
+
+function onProviderChange() {
+  const provider = document.getElementById('settingsProvider').value;
+  const modelSelect = document.getElementById('settingsModel');
+  const models = MODELS_BY_PROVIDER[provider] || [];
+  
+  modelSelect.innerHTML = models.map(m => 
+    `<option value="${m.id}">${m.name}</option>`
+  ).join('');
+  
+  // Update API key label and placeholder
+  document.getElementById('settingsApiKeyLabel').textContent = API_KEY_LABELS[provider] || 'API Key';
+  document.getElementById('settingsApiKey').placeholder = API_KEY_PLACEHOLDERS[provider] || 'sk-...';
+  
+  // Clear API key field (different provider needs different key)
+  document.getElementById('settingsApiKey').value = '';
+  document.getElementById('settingsApiKeyStatus').textContent = 'Enter API key for ' + provider;
+  document.getElementById('settingsApiKeyStatus').style.color = 'var(--muted)';
+  
+  updateModelCost();
+}
+
+function updateModelCost() {
+  const provider = document.getElementById('settingsProvider').value;
+  const modelId = document.getElementById('settingsModel').value;
+  const models = MODELS_BY_PROVIDER[provider] || [];
+  const model = models.find(m => m.id === modelId);
+  
+  const costEl = document.getElementById('settingsModelCost');
+  if (model) {
+    costEl.textContent = `Cost: $${model.input}/1M input, $${model.output}/1M output`;
+  } else {
+    costEl.textContent = '';
+  }
+}
+
+// Add change handler for model dropdown
+document.addEventListener('DOMContentLoaded', () => {
+  const modelSelect = document.getElementById('settingsModel');
+  if (modelSelect) {
+    modelSelect.addEventListener('change', updateModelCost);
+  }
+});
+
+async function saveSettings() {
+  const provider = document.getElementById('settingsProvider').value;
+  const model = document.getElementById('settingsModel').value;
+  const apiKey = document.getElementById('settingsApiKey').value.trim();
+  const maxTokens = parseInt(document.getElementById('settingsMaxTokens').value) || 16384;
+  const temperature = parseFloat(document.getElementById('settingsTemperature').value) || 0.7;
+  
+  // Validate
+  if (!apiKey && !currentSettings?.apiKeyConfigured) {
+    alert('Please enter an API key');
+    return;
+  }
+  
+  try {
+    // Save provider config (with or without new API key)
+    const providerPayload = {
+      apiProvider: provider,
+      apiModelId: model,
+      maxTokens,
+      temperature,
+    };
+    
+    // Add appropriate API key field based on provider
+    if (apiKey) {
+      if (provider === 'anthropic') providerPayload.anthropicApiKey = apiKey;
+      else if (provider === 'openrouter') providerPayload.openRouterApiKey = apiKey;
+      else if (provider === 'openai') providerPayload.openAiApiKey = apiKey;
+      else if (provider === 'gemini') providerPayload.geminiApiKey = apiKey;
+      else providerPayload.apiKey = apiKey;
+    }
+    
+    const res = await fetch(`${API}/api/config/provider`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(providerPayload),
+    });
+    
+    const data = await res.json();
+    
+    if (data.success) {
+      hideApiKeyModal();
+      addLog('info', `Settings saved: ${provider} / ${model}`);
+      
+      // Update status bar to show new provider/model
+      updateProviderStatus(provider, model);
+      
+      // Reload to pick up new settings
+      checkApiKey();
+    } else {
+      alert(data.error || 'Failed to save settings');
+    }
+  } catch (e) {
+    console.error('Save settings error:', e);
+    alert('Network error saving settings');
+  }
+}
+
+// Update the status bar to show current provider/model
+function updateProviderStatus(provider, model) {
+  // Add or update provider badge in header
+  let badge = document.getElementById('providerBadge');
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.id = 'providerBadge';
+    badge.style.cssText = 'font-size:11px;color:var(--muted);margin-left:8px;background:var(--bg-lighter);padding:2px 6px;border-radius:4px;';
+    const settingsBtn = document.querySelector('button[onclick="showApiKeyModal()"]');
+    if (settingsBtn) settingsBtn.parentNode.insertBefore(badge, settingsBtn);
+  }
+  
+  // Format model name nicely
+  const shortModel = model.split('/').pop().replace(/-\d{8}$/, '');
+  badge.textContent = `${provider}: ${shortModel}`;
+}
+
+// Load initial provider status
+async function loadProviderStatus() {
+  try {
+    const res = await fetch(`${API}/api/config/provider`);
+    const data = await res.json();
+    if (data.provider && data.model) {
+      updateProviderStatus(data.provider, data.model);
+    }
+  } catch (e) {
+    console.error('Failed to load provider status:', e);
+  }
+}
+
+// Call on page load
+document.addEventListener('DOMContentLoaded', loadProviderStatus);
+
+// Legacy saveApiKey function (for backward compatibility)
+async function saveApiKey() {
+  return saveSettings();
+}
 
 function escapeHtml(text) {
   const d = document.createElement('div');
@@ -2542,12 +3158,19 @@ function renderProjectsGrid() {
 
     const totalMsgs = (p.agents || []).reduce((sum, a) => sum + (a.totalMessages || 0), 0);
     const totalTasks = (p.agents || []).reduce((sum, a) => sum + (a.tasksCompleted || 0), 0);
+    
+    // Society Agent start - Git integration display
+    const gitConfig = p.gitConfig;
+    const isGitProject = !!gitConfig;
+    const gitIcon = isGitProject ? '&#128268;' : '&#128193;';
+    const gitBadge = isGitProject ? `<span class="git-badge" title="Branch: ${escapeAttr(gitConfig.currentRef || gitConfig.defaultRef)}" onclick="event.stopPropagation();showGitActions('${escapeAttr(p.id)}')">&#127796; ${escapeHtml(gitConfig.currentRef || gitConfig.defaultRef)}</span>` : '';
+    // Society Agent end
 
     return `<div class="project-card">
       <div class="project-header">
-        <div class="project-icon">&#128193;</div>
+        <div class="project-icon">${gitIcon}</div>
         <div class="project-meta">
-          <div class="project-name">${escapeHtml(p.name)}</div>
+          <div class="project-name">${escapeHtml(p.name)} ${gitBadge}</div>
           <div class="project-desc">${escapeHtml(p.description || '')}</div>
         </div>
         <span class="status-badge ${p.status === 'active' ? 'active' : 'idle'}">${p.status || 'active'}</span>
@@ -2561,13 +3184,17 @@ function renderProjectsGrid() {
       </div>
       <div class="project-actions">
         <button class="btn btn-primary" onclick="window.open('/project/${escapeAttr(p.id)}','_blank')" style="font-size:12px">&#128279; Open</button>
+        ${!isGitProject ? `<button class="btn btn-secondary" onclick="showPushToGitLabModal('${escapeAttr(p.id)}', '${escapeAttr(p.name)}')" style="font-size:11px;color:var(--green)">&#128268; Push to GitLab</button>` : ''}
         <button class="btn btn-secondary" onclick="editProject('${escapeAttr(p.id)}')">&#9998; Edit</button>
         <button class="btn btn-secondary" style="color:var(--red)" onclick="deleteProject('${escapeAttr(p.id)}', '${escapeAttr(p.name)}')">&#128465;</button>
       </div>
     </div>`;
   }).join('');
 
+  // Society Agent start - Add both Create and Git buttons
   html += `<div class="project-add-card" onclick="showCreateProjectModal()">+ Create New Project</div>`;
+  html += `<div class="project-add-card" onclick="showGitModal()" style="border-color:var(--accent);color:var(--accent)">&#128268; Load from Git</div>`;
+  // Society Agent end
   grid.innerHTML = html;
 }
 
@@ -2696,6 +3323,509 @@ async function deleteProject(id, name) {
     addLog('error', `Delete error: ${e.message}`);
   }
 }
+
+// ===========================================================================
+// Society Agent start - Git Integration Functions
+// ===========================================================================
+
+let gitCredentials = [];
+
+// Git modal helpers
+function updateGitFolderPreview() {
+  const name = document.getElementById('gitFormName').value;
+  const slug = slugify(name);
+  document.getElementById('gitFolderPreview').textContent = slug ? 'projects/' + slug + '/' : 'projects/';
+}
+
+function showGitModal() {
+  // Reset form
+  document.getElementById('gitFormName').value = '';
+  document.getElementById('gitFormUrl').value = '';
+  document.getElementById('gitFormRef').value = 'main';
+  document.getElementById('gitFormDesc').value = '';
+  document.getElementById('gitFormStatus').style.display = 'none';
+  document.getElementById('gitFormSubmit').disabled = false;
+  document.getElementById('gitFormSubmit').textContent = '🔗 Clone & Create';
+  document.getElementById('gitFolderPreview').textContent = 'projects/';
+  
+  // Load credentials for dropdown
+  loadCredentials();
+  
+  document.getElementById('gitModal').style.display = 'flex';
+}
+
+function hideGitModal() {
+  document.getElementById('gitModal').style.display = 'none';
+}
+
+async function submitGitForm() {
+  const name = document.getElementById('gitFormName').value.trim();
+  const id = slugify(name);
+  const repoUrl = document.getElementById('gitFormUrl').value.trim();
+  const ref = document.getElementById('gitFormRef').value.trim() || 'main';
+  const credentialId = document.getElementById('gitFormCredential').value || undefined;
+  const description = document.getElementById('gitFormDesc').value.trim();
+  
+  if (!name || !repoUrl) {
+    showGitStatus('error', 'Project name and repository URL are required');
+    return;
+  }
+  
+  // Show loading state
+  const submitBtn = document.getElementById('gitFormSubmit');
+  submitBtn.disabled = true;
+  submitBtn.textContent = '⏳ Cloning...';
+  showGitStatus('info', 'Cloning repository... This may take a moment.');
+  
+  try {
+    const res = await fetch(`${API}/api/projects/from-git`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, name, description, repoUrl, ref, credentialId }),
+    });
+    const data = await res.json();
+    
+    if (data.success) {
+      showGitStatus('success', `✓ ${data.message}`);
+      addLog('info', `Project "${name}" loaded from Git`);
+      loadProjects();
+      setTimeout(() => hideGitModal(), 1500);
+    } else {
+      showGitStatus('error', `✗ ${data.error || 'Clone failed'}`);
+      submitBtn.disabled = false;
+      submitBtn.textContent = '🔗 Clone & Create';
+    }
+  } catch (e) {
+    showGitStatus('error', `✗ Error: ${e.message}`);
+    submitBtn.disabled = false;
+    submitBtn.textContent = '🔗 Clone & Create';
+  }
+}
+
+function showGitStatus(type, message) {
+  const el = document.getElementById('gitFormStatus');
+  el.style.display = 'block';
+  el.style.background = type === 'error' ? 'rgba(248,81,73,0.15)' : 
+                        type === 'success' ? 'rgba(63,185,80,0.15)' : 'rgba(88,166,255,0.15)';
+  el.style.color = type === 'error' ? 'var(--red)' : 
+                   type === 'success' ? 'var(--green)' : 'var(--accent)';
+  el.textContent = message;
+}
+
+// Credentials management
+async function loadCredentials() {
+  try {
+    const res = await fetch(`${API}/api/credentials`);
+    const data = await res.json();
+    gitCredentials = data.credentials || [];
+    
+    // Update dropdown in git modal
+    const select = document.getElementById('gitFormCredential');
+    select.innerHTML = '<option value="">None (public repo)</option>' +
+      gitCredentials.map(c => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name)} (${c.type} @ ${c.host})</option>`).join('');
+    
+    // Update credentials list in credentials modal
+    renderCredentialsList();
+  } catch (e) {
+    console.error('Failed to load credentials:', e);
+  }
+}
+
+function renderCredentialsList() {
+  const el = document.getElementById('credentialsList');
+  if (gitCredentials.length === 0) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px">No credentials stored</div>';
+    return;
+  }
+  
+  el.innerHTML = gitCredentials.map(c => `
+    <div style="display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--border)">
+      <span style="font-size:16px">${c.type === 'ssh-key' ? '🔑' : '🎟️'}</span>
+      <div style="flex:1">
+        <div style="font-size:13px">${escapeHtml(c.name)}</div>
+        <div style="font-size:11px;color:var(--muted)">${c.type} • ${c.host} • Added ${new Date(c.createdAt).toLocaleDateString()}</div>
+      </div>
+      <button onclick="deleteCredential('${escapeAttr(c.id)}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px">🗑</button>
+    </div>
+  `).join('');
+}
+
+function showCredentialsModal() {
+  loadCredentials();
+  document.getElementById('credFormName').value = '';
+  document.getElementById('credFormType').value = 'ssh-key';
+  document.getElementById('credFormHost').value = '';
+  document.getElementById('credFormSecret').value = '';
+  updateCredFormPlaceholder();
+  document.getElementById('credentialsModal').style.display = 'flex';
+}
+
+function hideCredentialsModal() {
+  document.getElementById('credentialsModal').style.display = 'none';
+}
+
+function updateCredFormPlaceholder() {
+  const type = document.getElementById('credFormType').value;
+  const label = document.getElementById('credFormSecretLabel');
+  const textarea = document.getElementById('credFormSecret');
+  
+  if (type === 'ssh-key') {
+    label.textContent = 'Private Key';
+    textarea.placeholder = '-----BEGIN OPENSSH PRIVATE KEY-----\n...';
+    textarea.rows = 4;
+  } else {
+    label.textContent = 'Access Token';
+    textarea.placeholder = 'glpat-xxxxxxxxxxxxxxxxxxxx';
+    textarea.rows = 1;
+  }
+}
+
+async function addCredential() {
+  const name = document.getElementById('credFormName').value.trim();
+  const type = document.getElementById('credFormType').value;
+  const host = document.getElementById('credFormHost').value.trim();
+  const secret = document.getElementById('credFormSecret').value.trim();
+  
+  if (!name || !host || !secret) {
+    alert('Please fill in all fields');
+    return;
+  }
+  
+  try {
+    const res = await fetch(`${API}/api/credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, type, host, secret }),
+    });
+    
+    if (res.ok) {
+      addLog('info', `Credential "${name}" added`);
+      loadCredentials();
+      // Clear form
+      document.getElementById('credFormName').value = '';
+      document.getElementById('credFormSecret').value = '';
+    } else {
+      const data = await res.json();
+      alert(`Error: ${data.error}`);
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+async function deleteCredential(id) {
+  if (!confirm('Delete this credential?')) return;
+  
+  try {
+    const res = await fetch(`${API}/api/credentials/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      addLog('info', 'Credential deleted');
+      loadCredentials();
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+// Git actions for existing projects
+async function showGitActions(projectId) {
+  const project = projects.find(p => p.id === projectId);
+  if (!project || !project.gitConfig) return;
+  
+  document.getElementById('gitActionsTitle').textContent = `🔗 Git: ${project.name}`;
+  document.getElementById('gitActionsContent').innerHTML = '<div style="color:var(--muted)">Loading...</div>';
+  document.getElementById('gitActionsModal').style.display = 'flex';
+  
+  try {
+    // Get status and branches
+    const [statusRes, branchesRes] = await Promise.all([
+      fetch(`${API}/api/projects/${projectId}/git/status`),
+      fetch(`${API}/api/projects/${projectId}/git/branches`),
+    ]);
+    
+    const status = await statusRes.json();
+    const branches = await branchesRes.json();
+    
+    const hasChanges = status.hasLocalChanges;
+    const changedFiles = status.changedFiles || [];
+    
+    let html = `
+      <div style="margin-bottom:16px">
+        <div style="font-size:13px;margin-bottom:8px"><strong>Repository:</strong> ${escapeHtml(project.gitConfig.url)}</div>
+        <div style="font-size:13px;margin-bottom:8px"><strong>Current Branch:</strong> 🌿 ${escapeHtml(status.currentRef || 'unknown')}</div>
+        ${status.ahead || status.behind ? `<div style="font-size:12px;color:var(--muted)">↑ ${status.ahead || 0} ahead, ↓ ${status.behind || 0} behind</div>` : ''}
+      </div>
+      
+      <div style="margin-bottom:16px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px">Local Changes</div>
+        ${hasChanges ? `
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px;font-family:monospace;font-size:11px;max-height:120px;overflow-y:auto">
+            ${changedFiles.map(f => `<div>${escapeHtml(f)}</div>`).join('')}
+          </div>
+        ` : '<div style="color:var(--green);font-size:12px">✓ No local changes</div>'}
+      </div>
+      
+      <div style="margin-bottom:16px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px">Switch Branch</div>
+        <select id="gitBranchSelect" style="width:100%;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:12px">
+          ${branches.local?.map(b => `<option value="${escapeAttr(b)}" ${b === status.currentRef ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('')}
+          <optgroup label="Remote">
+            ${branches.remote?.filter(b => !branches.local?.includes(b)).map(b => `<option value="${escapeAttr(b)}">${escapeHtml(b)}</option>`).join('')}
+          </optgroup>
+        </select>
+        <button onclick="checkoutBranch('${escapeAttr(projectId)}')" class="btn btn-secondary" style="margin-top:8px;font-size:11px">Checkout</button>
+      </div>
+      
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button onclick="pullProject('${escapeAttr(projectId)}')" class="btn btn-secondary" style="font-size:11px">⬇️ Pull</button>
+        ${hasChanges ? `
+          <button onclick="showPushForm('${escapeAttr(projectId)}')" class="btn btn-primary" style="font-size:11px">⬆️ Push Changes</button>
+          <button onclick="viewDiff('${escapeAttr(projectId)}')" class="btn btn-secondary" style="font-size:11px">📄 View Diff</button>
+        ` : ''}
+      </div>
+      
+      <div id="gitPushForm" style="display:none;margin-top:16px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:4px">
+        <div class="form-group">
+          <label>New Branch Name</label>
+          <input type="text" id="gitPushBranch" placeholder="feature/my-changes" style="width:100%">
+        </div>
+        <div class="form-group">
+          <label>Commit Message</label>
+          <input type="text" id="gitPushMessage" placeholder="Agent changes: ..." style="width:100%">
+        </div>
+        <button onclick="pushChanges('${escapeAttr(projectId)}')" class="btn btn-primary" style="font-size:12px">Create Branch & Push</button>
+      </div>
+    `;
+    
+    document.getElementById('gitActionsContent').innerHTML = html;
+  } catch (e) {
+    document.getElementById('gitActionsContent').innerHTML = `<div style="color:var(--red)">Error: ${e.message}</div>`;
+  }
+}
+
+function hideGitActionsModal() {
+  document.getElementById('gitActionsModal').style.display = 'none';
+}
+
+function showPushForm(projectId) {
+  document.getElementById('gitPushForm').style.display = 'block';
+}
+
+async function pullProject(projectId) {
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/git/pull`, { method: 'POST' });
+    const data = await res.json();
+    
+    if (data.success) {
+      addLog('info', `Pulled latest changes for project`);
+      showGitActions(projectId); // Refresh modal
+    } else {
+      alert(`Pull failed: ${data.message}`);
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+async function checkoutBranch(projectId) {
+  const ref = document.getElementById('gitBranchSelect').value;
+  if (!ref) return;
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/git/checkout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref }),
+    });
+    const data = await res.json();
+    
+    if (data.success) {
+      addLog('info', `Checked out ${ref}`);
+      loadProjects();
+      showGitActions(projectId);
+    } else {
+      alert(`Checkout failed: ${data.message}`);
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+async function pushChanges(projectId) {
+  const branchName = document.getElementById('gitPushBranch').value.trim();
+  const commitMessage = document.getElementById('gitPushMessage').value.trim();
+  
+  if (!branchName || !commitMessage) {
+    alert('Branch name and commit message are required');
+    return;
+  }
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/git/push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branchName, commitMessage }),
+    });
+    const data = await res.json();
+    
+    if (data.success) {
+      addLog('info', `Pushed changes to ${branchName}`);
+      loadProjects();
+      showGitActions(projectId);
+    } else {
+      alert(`Push failed: ${data.message}`);
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+async function viewDiff(projectId) {
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/git/diff`);
+    const data = await res.json();
+    
+    if (data.diff) {
+      // Show in a simple alert for now (could be a modal with syntax highlighting)
+      const diffWindow = window.open('', '_blank', 'width=800,height=600');
+      diffWindow.document.write(`<html><head><title>Git Diff</title><style>body{background:#0d1117;color:#e6edf3;font-family:monospace;padding:20px;white-space:pre-wrap;}</style></head><body>${escapeHtml(data.diff)}</body></html>`);
+    } else {
+      alert('No changes to show');
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+// Push local project to GitLab
+function showPushToGitLabModal(projectId, projectName) {
+  document.getElementById('pushGitLabProjectId').value = projectId;
+  document.getElementById('pushGitLabRepoName').value = projectName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  document.getElementById('pushGitLabError').style.display = 'none';
+  document.getElementById('pushGitLabSuccess').style.display = 'none';
+  document.getElementById('pushGitLabBtn').disabled = false;
+  document.getElementById('pushGitLabBtn').textContent = '🔗 Create & Push';
+  document.getElementById('pushGitLabNamespace').innerHTML = '<option value="">Select credential first...</option>';
+  
+  // Load credentials (GitLab tokens only)
+  loadPushGitLabCredentials();
+  
+  document.getElementById('pushToGitLabModal').style.display = 'flex';
+}
+
+function hidePushToGitLabModal() {
+  document.getElementById('pushToGitLabModal').style.display = 'none';
+}
+
+async function loadPushGitLabCredentials() {
+  try {
+    const res = await fetch(`${API}/api/credentials`);
+    const data = await res.json();
+    const tokenCreds = (data.credentials || []).filter(c => c.type === 'token');
+    
+    const select = document.getElementById('pushGitLabCredential');
+    if (tokenCreds.length === 0) {
+      select.innerHTML = '<option value="">No GitLab tokens - add one in Credentials</option>';
+    } else if (tokenCreds.length === 1) {
+      // Auto-select and load namespaces when only one credential
+      select.innerHTML = `<option value="${escapeAttr(tokenCreds[0].id)}">${escapeHtml(tokenCreds[0].name)} (${tokenCreds[0].host})</option>`;
+      loadPushGitLabNamespaces(tokenCreds[0].id);
+    } else {
+      select.innerHTML = '<option value="">Select a credential...</option>' +
+        tokenCreds.map(c => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name)} (${c.host})</option>`).join('');
+    }
+    
+    // Add change listener to load namespaces
+    select.onchange = () => loadPushGitLabNamespaces(select.value);
+  } catch (e) {
+    console.error('Failed to load credentials:', e);
+  }
+}
+
+async function loadPushGitLabNamespaces(credentialId) {
+  const nsSelect = document.getElementById('pushGitLabNamespace');
+  if (!credentialId) {
+    nsSelect.innerHTML = '<option value="">Select credential first...</option>';
+    return;
+  }
+  
+  nsSelect.innerHTML = '<option value="">Loading...</option>';
+  
+  try {
+    const res = await fetch(`${API}/api/credentials/${credentialId}/namespaces`);
+    const data = await res.json();
+    
+    if (data.namespaces && data.namespaces.length > 0) {
+      nsSelect.innerHTML = '<option value="">(Personal namespace)</option>' +
+        data.namespaces.map(ns => `<option value="${escapeAttr(ns.id)}">${escapeHtml(ns.full_path)} (${ns.kind})</option>`).join('');
+    } else {
+      nsSelect.innerHTML = '<option value="">(Personal namespace)</option>';
+    }
+  } catch (e) {
+    nsSelect.innerHTML = '<option value="">(Personal namespace - could not load groups)</option>';
+  }
+}
+
+async function pushToGitLab() {
+  const projectId = document.getElementById('pushGitLabProjectId').value;
+  const credentialId = document.getElementById('pushGitLabCredential').value;
+  const repoName = document.getElementById('pushGitLabRepoName').value.trim();
+  const namespaceId = document.getElementById('pushGitLabNamespace').value || undefined;
+  const visibility = document.getElementById('pushGitLabVisibility').value;
+  
+  const errorEl = document.getElementById('pushGitLabError');
+  const successEl = document.getElementById('pushGitLabSuccess');
+  const btn = document.getElementById('pushGitLabBtn');
+  
+  errorEl.style.display = 'none';
+  successEl.style.display = 'none';
+  
+  if (!credentialId) {
+    errorEl.textContent = 'Please select a GitLab credential';
+    errorEl.style.display = 'block';
+    return;
+  }
+  
+  if (!repoName) {
+    errorEl.textContent = 'Please enter a repository name';
+    errorEl.style.display = 'block';
+    return;
+  }
+  
+  btn.disabled = true;
+  btn.textContent = '⏳ Creating repository...';
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/git/push-to-gitlab`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credentialId, repoName, namespaceId, visibility }),
+    });
+    const data = await res.json();
+    
+    if (data.success) {
+      successEl.innerHTML = `✓ Repository created and pushed!<br><a href="${escapeHtml(data.repoUrl)}" target="_blank" style="color:white">${escapeHtml(data.repoUrl)}</a>`;
+      successEl.style.display = 'block';
+      btn.textContent = '✓ Done!';
+      addLog('info', `Pushed project "${projectId}" to GitLab`);
+      loadProjects();
+      setTimeout(() => hidePushToGitLabModal(), 3000);
+    } else {
+      errorEl.textContent = data.error || 'Failed to push to GitLab';
+      errorEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = '🔗 Create & Push';
+    }
+  } catch (e) {
+    errorEl.textContent = `Error: ${e.message}`;
+    errorEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = '🔗 Create & Push';
+  }
+}
+
+// Society Agent end - Git Integration Functions
+// ===========================================================================
 
 // Load projects on startup
 socket.on('connect', () => { 

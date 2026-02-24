@@ -77,7 +77,20 @@ export function loadProviderSettings(workspacePath: string): ProviderSettings {
 		try {
 			const content = fs.readFileSync(settingsPath, "utf-8")
 			const settings = JSON.parse(content) as ProviderSettings
-			if (settings.anthropicApiKey || process.env.ANTHROPIC_API_KEY) {
+			// Accept settings if any API key is configured (for any provider)
+			const hasApiKey = !!(
+				settings.anthropicApiKey ||
+				settings.openRouterApiKey ||
+				settings.openAiApiKey ||
+				settings.geminiApiKey ||
+				settings.minimaxApiKey ||
+				settings.deepseekApiKey ||
+				settings.apiKey ||
+				process.env.ANTHROPIC_API_KEY ||
+				process.env.OPENROUTER_API_KEY ||
+				process.env.OPENAI_API_KEY
+			)
+			if (hasApiKey) {
 				log.info(`Loaded ProviderSettings from ${settingsPath}`)
 				return settings
 			}

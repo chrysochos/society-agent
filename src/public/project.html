@@ -167,6 +167,63 @@
   .task-priority.high { background: rgba(248,81,73,0.15); color: var(--red); }
   .task-priority.medium { background: rgba(210,153,34,0.15); color: var(--yellow); }
 
+  /* Approval Queue */
+  .approval-list { display: flex; flex-direction: column; gap: 10px; }
+  .approval-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .approval-card:hover { border-color: var(--yellow); }
+  .approval-card .approval-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .approval-card .approval-icon { font-size: 18px; }
+  .approval-card .approval-info { flex: 1; }
+  .approval-card .approval-operation { font-weight: 600; font-size: 13px; }
+  .approval-card .approval-summary { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .approval-card .approval-meta { display: flex; gap: 12px; font-size: 11px; color: var(--muted); margin-bottom: 10px; }
+  .approval-card .approval-meta .label { color: var(--muted); }
+  .approval-card .approval-meta .value { color: var(--text); }
+  .approval-card .approval-actions { display: flex; gap: 8px; }
+  .approval-card .btn-approve { background: rgba(63,185,80,0.15); color: var(--green); border-color: var(--green); }
+  .approval-card .btn-approve:hover { background: rgba(63,185,80,0.25); }
+  .approval-card .btn-deny { background: rgba(248,81,73,0.15); color: var(--red); border-color: var(--red); }
+  .approval-card .btn-deny:hover { background: rgba(248,81,73,0.25); }
+  .approval-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 20px; }
+
+  /* Git Log / History */
+  .git-log-list { max-height: 300px; overflow-y: auto; }
+  .commit-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid rgba(48,54,61,0.5); }
+  .commit-row:last-child { border-bottom: none; }
+  .commit-graph { display: flex; flex-direction: column; align-items: center; width: 20px; }
+  .commit-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent);
+    border: 2px solid var(--surface); }
+  .commit-line { width: 2px; flex: 1; background: var(--border); min-height: 10px; }
+  .commit-content { flex: 1; min-width: 0; }
+  .commit-message { font-size: 13px; font-weight: 500; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  .commit-meta { display: flex; gap: 12px; margin-top: 2px; font-size: 11px; color: var(--muted); }
+  .commit-hash { font-family: monospace; color: var(--accent); }
+  .commit-author { }
+  .commit-date { }
+  .commit-refs { display: inline-flex; gap: 4px; margin-left: 8px; }
+  .commit-ref { font-size: 10px; padding: 1px 6px; border-radius: 4px;
+    background: rgba(88,166,255,0.15); color: var(--accent); }
+  .commit-ref.head { background: rgba(63,185,80,0.15); color: var(--green); }
+  .commit-ref.origin { background: rgba(210,153,34,0.15); color: var(--yellow); }
+
+  /* Problems / Diagnostics */
+  .problems-stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .problems-list { max-height: 300px; overflow-y: auto; }
+  .problem-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid rgba(48,54,61,0.5); cursor: pointer; }
+  .problem-row:hover { background: rgba(255,255,255,0.02); }
+  .problem-row:last-child { border-bottom: none; }
+  .problem-icon { font-size: 14px; padding-top: 1px; }
+  .problem-icon.error { color: var(--red); }
+  .problem-icon.warning { color: var(--yellow); }
+  .problem-content { flex: 1; min-width: 0; }
+  .problem-message { font-size: 13px; }
+  .problem-location { font-size: 11px; color: var(--muted); margin-top: 2px; font-family: monospace; }
+  .problem-code { font-size: 10px; color: var(--accent); margin-left: 8px; }
+  .problems-empty { color: var(--green); font-size: 13px; text-align: center; padding: 20px; }
+
   /* Status badge */
   .status-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; text-transform: uppercase;
     letter-spacing: 0.5px; font-weight: 600; }
@@ -194,6 +251,7 @@
     z-index: 200; animation: fadeIn 0.2s; }
   .toast.success { border-color: var(--green); }
   .toast.error { border-color: var(--red); }
+  .toast.info { border-color: var(--yellow); }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
   /* Scheduled Tasks */
@@ -342,6 +400,7 @@
   <button class="btn btn-sm" id="pauseBtn" onclick="toggleSystemPause()" style="margin-right:8px">🔧 Maintenance</button>
   <span class="pause-indicator" id="pauseIndicator">⏸ System Paused</span>
   <div class="header-actions">
+    <button class="btn btn-sm" id="pushToGitLabBtn" onclick="showPushToGitLabModal()" style="color:var(--green)">&#128268; Push to GitLab</button>
     <button class="btn btn-sm" onclick="editProjectSettings()">&#9881; Settings</button>
   </div>
 </header>
@@ -406,6 +465,43 @@
     <div class="resize-handle" onmousedown="startResize(event, this)"></div>
   </div>
 
+  <!-- Problems section -->
+  <div class="section" id="problemsSection" data-section="problems">
+    <div class="section-header" onclick="toggleSection(this, event)">
+      <span class="collapse-icon">▼</span>
+      <h3>⚠️ Problems</h3>
+      <span class="count" id="problemsCount">-</span>
+      <button class="btn btn-sm" onclick="refreshProblems()">&#8635; Refresh</button>
+    </div>
+    <div class="section-body">
+      <div class="problems-stats" id="problemsStats">
+        <span class="stat-pill" style="border-color: var(--red);">❌ Errors: <strong id="errorCount">0</strong></span>
+        <span class="stat-pill" style="border-color: var(--yellow);">⚠️ Warnings: <strong id="warningCount">0</strong></span>
+      </div>
+      <div class="problems-list" id="problemsList">
+        <div class="problems-empty">✓ No problems detected</div>
+      </div>
+    </div>
+    <div class="resize-handle" onmousedown="startResize(event, this)"></div>
+  </div>
+
+  <!-- Society Agent start - Approval Queue section -->
+  <div class="section" id="approvalSection" data-section="approvals" style="display:none">
+    <div class="section-header" onclick="toggleSection(this, event)">
+      <span class="collapse-icon">▼</span>
+      <h3>📋 Approval Queue</h3>
+      <span class="count" id="approvalCount">0 pending</span>
+      <button class="btn btn-sm" onclick="refreshApprovals()">&#8635; Refresh</button>
+    </div>
+    <div class="section-body">
+      <div class="approval-list" id="approvalList">
+        <div style="color:var(--muted);font-size:13px">No pending approvals.</div>
+      </div>
+    </div>
+    <div class="resize-handle" onmousedown="startResize(event, this)"></div>
+  </div>
+  <!-- Society Agent end - Approval Queue section -->
+
   <!-- Files section -->
   <div class="section" data-section="files">
     <div class="section-header" onclick="toggleSection(this, event)">
@@ -416,6 +512,22 @@
     </div>
     <div class="section-body">
       <div class="file-list" id="fileList">
+        <div style="color:var(--muted);font-size:13px">Loading...</div>
+      </div>
+    </div>
+    <div class="resize-handle" onmousedown="startResize(event, this)"></div>
+  </div>
+
+  <!-- Git History section -->
+  <div class="section" id="gitHistorySection" data-section="git-history" style="display:none">
+    <div class="section-header" onclick="toggleSection(this, event)">
+      <span class="collapse-icon">▼</span>
+      <h3>📜 Git History</h3>
+      <span class="count" id="gitHistoryCount">-</span>
+      <button class="btn btn-sm" onclick="refreshGitHistory()">&#8635; Refresh</button>
+    </div>
+    <div class="section-body">
+      <div class="git-log-list" id="gitLogList">
         <div style="color:var(--muted);font-size:13px">Loading...</div>
       </div>
     </div>
@@ -483,6 +595,26 @@
       <input type="text" id="agentFormRole" placeholder="e.g. Full-Stack Developer">
     </div>
     <div class="form-group">
+      <label>LLM Provider</label>
+      <select id="agentFormProvider" onchange="onAgentProviderChange()">
+        <option value="">(Use server default)</option>
+        <option value="anthropic">Anthropic (Direct)</option>
+        <option value="openrouter">OpenRouter</option>
+        <option value="openai">OpenAI</option>
+        <option value="gemini">Google Gemini</option>
+        <option value="deepseek">DeepSeek</option>
+        <option value="groq">Groq</option>
+        <option value="mistral">Mistral</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>LLM Model</label>
+      <select id="agentFormModel">
+        <option value="">(Use server default)</option>
+      </select>
+      <span style="font-size:11px;color:var(--muted)" id="agentModelCost"></span>
+    </div>
+    <div class="form-group">
       <label>Reports To (Boss)</label>
       <select id="agentFormReportsTo">
         <option value="">(None - Top Level)</option>
@@ -500,6 +632,27 @@
       <div class="checkbox-row">
         <input type="checkbox" id="agentFormSpawn" checked>
         <label for="agentFormSpawn" style="margin-bottom:0">Persistent agent (uncheck for ephemeral worker)</label>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Permissions</label>
+      <div style="display:flex;flex-direction:column;gap:4px;font-size:12px;padding:8px;background:var(--bg-lighter);border-radius:4px;">
+        <div class="checkbox-row">
+          <input type="checkbox" id="agentPermOverwrite" checked>
+          <label for="agentPermOverwrite" style="margin-bottom:0">Can overwrite existing files</label>
+        </div>
+        <div class="checkbox-row">
+          <input type="checkbox" id="agentPermRunCmd">
+          <label for="agentPermRunCmd" style="margin-bottom:0">Can run shell commands</label>
+        </div>
+        <div class="checkbox-row">
+          <input type="checkbox" id="agentPermDelete">
+          <label for="agentPermDelete" style="margin-bottom:0">Can delete files</label>
+        </div>
+        <div class="checkbox-row">
+          <input type="checkbox" id="agentPermMessage" checked>
+          <label for="agentPermMessage" style="margin-bottom:0">Can message other agents</label>
+        </div>
       </div>
     </div>
     <div class="actions">
@@ -632,6 +785,96 @@
   </div>
 </div>
 
+<!-- Push to GitLab Modal -->
+<div class="modal-overlay" id="pushToGitLabModal" style="display:none">
+  <div class="modal">
+    <h2>&#128268; Push to GitLab</h2>
+    <p style="color:var(--muted);margin-bottom:16px">Create a new GitLab repository and push this project</p>
+    
+    <div class="form-group">
+      <label>Credential (GitLab Token)</label>
+      <select id="pushGitLabCredential" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
+        <option value="">Loading...</option>
+      </select>
+      <button onclick="showCredentialsModal()" style="margin-top:8px;font-size:11px;background:none;border:1px solid var(--border);color:var(--muted);padding:4px 8px;border-radius:4px;cursor:pointer">
+        &#128273; Add/Manage Credentials
+      </button>
+    </div>
+    
+    <div class="form-group">
+      <label>Repository Name</label>
+      <input type="text" id="pushGitLabRepoName" placeholder="my-project" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)" />
+    </div>
+    
+    <div class="form-group">
+      <label>Namespace (optional)</label>
+      <select id="pushGitLabNamespace" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
+        <option value="">Select credential first...</option>
+      </select>
+      <small style="color:var(--muted);display:block;margin-top:4px">Leave empty for personal namespace</small>
+    </div>
+    
+    <div class="form-group">
+      <label>Visibility</label>
+      <select id="pushGitLabVisibility" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
+        <option value="private" selected>Private</option>
+        <option value="internal">Internal</option>
+        <option value="public">Public</option>
+      </select>
+    </div>
+    
+    <div id="pushGitLabError" style="display:none;padding:8px;background:var(--red);color:white;border-radius:4px;margin-bottom:12px"></div>
+    <div id="pushGitLabSuccess" style="display:none;padding:8px;background:var(--green);color:white;border-radius:4px;margin-bottom:12px"></div>
+    
+    <div class="modal-actions">
+      <button class="btn" onclick="hidePushToGitLabModal()">Cancel</button>
+      <button class="btn btn-primary" id="pushGitLabBtn" onclick="pushToGitLab()">&#128268; Create & Push</button>
+    </div>
+  </div>
+</div>
+
+<!-- Credentials Management Modal -->
+<div class="modal-overlay" id="credentialsModal" style="display:none">
+  <div class="modal">
+    <h2>&#128273; Git Credentials</h2>
+    <p style="color:var(--muted);margin-bottom:12px">Store credentials to access private repos or push to GitLab</p>
+    
+    <div id="credentialsList" style="margin-bottom:16px;max-height:200px;overflow-y:auto">
+      <div style="color:var(--muted);font-size:12px">Loading...</div>
+    </div>
+    
+    <h3 style="font-size:14px;margin-bottom:8px">Add New Credential</h3>
+    
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" id="credFormName" placeholder="My GitLab Token" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
+    </div>
+    
+    <div class="form-group">
+      <label>Type</label>
+      <select id="credFormType" onchange="updateCredFormPlaceholder()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
+        <option value="token">Personal Access Token</option>
+        <option value="ssh-key">SSH Key</option>
+      </select>
+    </div>
+    
+    <div class="form-group">
+      <label>Host</label>
+      <input type="text" id="credFormHost" placeholder="gitlab.com" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
+    </div>
+    
+    <div class="form-group">
+      <label id="credFormSecretLabel">Access Token</label>
+      <textarea id="credFormSecret" rows="1" placeholder="glpat-xxxxxxxxxxxxxxxxxxxx" style="width:100%;font-family:monospace;font-size:11px;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);resize:vertical"></textarea>
+    </div>
+    
+    <div class="modal-actions">
+      <button class="btn" onclick="hideCredentialsModal()">Close</button>
+      <button class="btn btn-primary" onclick="addCredential()">&#10003; Add Credential</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const API = window.location.origin;
 const socket = io(API);
@@ -643,6 +886,129 @@ const projectId = pathParts[2];
 let project = null;
 let editingAgentId = null;
 let heartbeats = {};  // agentId -> heartbeat entry
+let serverProvider = 'anthropic';  // Current server provider
+let serverModel = null;  // Current server model
+
+// ============================================================================
+// Model Configuration (same as index.html)
+// ============================================================================
+
+const MODELS_BY_PROVIDER = {
+  anthropic: [
+    { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4 (Latest)', input: 3, output: 15 },
+    { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', input: 3, output: 15 },
+    { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', input: 15, output: 75 },
+    { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku (Fast)', input: 0.25, output: 1.25 },
+  ],
+  openrouter: [
+    { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', input: 3, output: 15 },
+    { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', input: 3, output: 15 },
+    { id: 'anthropic/claude-3-opus', name: 'Claude 3 Opus', input: 15, output: 75 },
+    { id: 'anthropic/claude-3-haiku', name: 'Claude 3 Haiku', input: 0.25, output: 1.25 },
+    { id: 'openai/gpt-4o', name: 'GPT-4o', input: 2.5, output: 10 },
+    { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini (Fast)', input: 0.15, output: 0.60 },
+    { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash', input: 0.10, output: 0.40 },
+    { id: 'meta-llama/llama-3.1-70b-instruct', name: 'Llama 3.1 70B', input: 0.52, output: 0.75 },
+    { id: 'deepseek/deepseek-chat', name: 'DeepSeek Chat', input: 0.14, output: 0.28 },
+    { id: 'mistralai/mistral-large', name: 'Mistral Large', input: 2, output: 6 },
+    { id: 'minimax/minimax-m2.5', name: 'MiniMax M2.5', input: 0.30, output: 1.10 },
+  ],
+  openai: [
+    { id: 'gpt-4o', name: 'GPT-4o', input: 2.5, output: 10 },
+    { id: 'gpt-4o-mini', name: 'GPT-4o Mini (Fast)', input: 0.15, output: 0.60 },
+    { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', input: 10, output: 30 },
+    { id: 'o1-preview', name: 'o1 Preview (Reasoning)', input: 15, output: 60 },
+  ],
+  gemini: [
+    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', input: 1.25, output: 5 },
+    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (Fast)', input: 0.075, output: 0.30 },
+  ],
+  deepseek: [
+    { id: 'deepseek-chat', name: 'DeepSeek Chat', input: 0.14, output: 0.28 },
+  ],
+  groq: [
+    { id: 'llama-3.1-70b-versatile', name: 'Llama 3.1 70B', input: 0.59, output: 0.79 },
+    { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B (Fast)', input: 0.05, output: 0.08 },
+  ],
+  mistral: [
+    { id: 'mistral-large-latest', name: 'Mistral Large', input: 2, output: 6 },
+    { id: 'mistral-small-latest', name: 'Mistral Small', input: 0.2, output: 0.6 },
+  ],
+};
+
+// Load server provider config on startup
+async function loadServerProviderConfig() {
+  try {
+    const res = await fetch(`${API}/api/config/provider`);
+    const data = await res.json();
+    serverProvider = data.provider || 'anthropic';
+    serverModel = data.model || null;
+  } catch (e) {
+    console.error('Failed to load server provider config:', e);
+  }
+}
+
+function populateModelDropdown(currentModel = null, currentProvider = null) {
+  const select = document.getElementById('agentFormModel');
+  if (!select) return;
+  
+  // Use agent's selected provider, or fall back to server default
+  const agentProvider = currentProvider || document.getElementById('agentFormProvider')?.value || '';
+  const effectiveProvider = agentProvider || serverProvider || 'anthropic';
+  const models = MODELS_BY_PROVIDER[effectiveProvider] || MODELS_BY_PROVIDER.anthropic;
+  
+  // Build options with server default at top
+  const defaultLabel = agentProvider ? '(Select model)' : `(Use server default${serverModel ? ': ' + serverModel.split('/').pop() : ''})`;
+  let html = `<option value="">${defaultLabel}</option>`;
+  html += models.map(m => 
+    `<option value="${m.id}">${m.name} ($${m.input}/$${m.output})</option>`
+  ).join('');
+  
+  select.innerHTML = html;
+  
+  if (currentModel) {
+    select.value = currentModel;
+  }
+  
+  updateAgentModelCost();
+}
+
+function onAgentProviderChange() {
+  // When provider changes, repopulate the model list
+  populateModelDropdown(null);
+}
+
+function updateAgentModelCost() {
+  const select = document.getElementById('agentFormModel');
+  const costEl = document.getElementById('agentModelCost');
+  if (!select || !costEl) return;
+  
+  const modelId = select.value;
+  const agentProvider = document.getElementById('agentFormProvider')?.value || '';
+  
+  if (!modelId) {
+    costEl.textContent = agentProvider ? 'Select a model above' : 'Will use server default';
+    return;
+  }
+  
+  const effectiveProvider = agentProvider || serverProvider || 'anthropic';
+  const models = MODELS_BY_PROVIDER[effectiveProvider] || [];
+  const model = models.find(m => m.id === modelId);
+  if (model) {
+    costEl.textContent = `Cost: $${model.input}/1M input, $${model.output}/1M output`;
+  } else {
+    costEl.textContent = '';
+  }
+}
+
+// Add change handler for model dropdown
+document.addEventListener('DOMContentLoaded', () => {
+  loadServerProviderConfig();
+  const modelSelect = document.getElementById('agentFormModel');
+  if (modelSelect) {
+    modelSelect.addEventListener('change', updateAgentModelCost);
+  }
+});
 
 // ============================================================================
 // Section collapse/expand and resize
@@ -748,12 +1114,21 @@ function renderProject() {
   document.getElementById('projectName').textContent = project.name;
   document.getElementById('projectDesc').textContent = project.description || '';
   document.getElementById('projectFolder').textContent = project.folder || '/';
+  
+  // Show/hide Push to GitLab button based on gitConfig
+  const pushGitLabBtn = document.getElementById('pushToGitLabBtn');
+  if (pushGitLabBtn) {
+    pushGitLabBtn.style.display = project.gitConfig ? 'none' : 'inline-block';
+  }
 
   fetchHeartbeats();
   renderAgents();
   renderEphemeralWorkers();
   refreshTasks();
+  refreshProblems();
+  refreshApprovals();
   refreshFiles();
+  refreshGitHistory();
   refreshProjectSkills();
   refreshProjectMcps();
 }
@@ -834,7 +1209,15 @@ function renderAgentNode(agent, agentMap, allAgents) {
   html += `<div class="node-header">`;
   html += `<div class="node-avatar">${avatar}</div>`;
   html += `<div><div class="node-name">${escapeHtml(agent.name)}</div>`;
-  html += `<div class="node-role">${escapeHtml(agent.role)}</div></div>`;
+  html += `<div class="node-role">${escapeHtml(agent.role)}</div>`;
+  // Show provider/model if different from server default
+  if (agent.provider || agent.model) {
+    const providerLabel = agent.provider ? agent.provider.charAt(0).toUpperCase() + agent.provider.slice(1) : '';
+    const shortModel = agent.model ? agent.model.split('/').pop().replace(/-\d{8}$/, '') : '';
+    const modelInfo = [providerLabel, shortModel].filter(Boolean).join(' / ');
+    html += `<div class="node-model" style="font-size:10px;color:var(--muted);opacity:0.8">🤖 ${escapeHtml(modelInfo)}</div>`;
+  }
+  html += `</div>`;
   html += `</div>`;
   if (statusHtml) html += `<div class="node-status">${statusHtml}</div>`;
   html += `<div class="node-actions" onclick="event.stopPropagation()">`;
@@ -940,6 +1323,16 @@ function showAddAgentModal(parentAgentId = null) {
   document.getElementById('agentIdPreview').style.display = 'block';
   document.getElementById('agentIdValue').textContent = '-';
   
+  // Reset provider and model dropdowns (use server default)
+  document.getElementById('agentFormProvider').value = '';
+  populateModelDropdown(null);
+  
+  // Reset permissions to defaults
+  document.getElementById('agentPermOverwrite').checked = true;
+  document.getElementById('agentPermRunCmd').checked = false;
+  document.getElementById('agentPermDelete').checked = false;
+  document.getElementById('agentPermMessage').checked = true;
+  
   populateReportsToDropdown();
   const reportsToSelect = document.getElementById('agentFormReportsTo');
   
@@ -974,6 +1367,18 @@ function editAgentInProject(agentId) {
   document.getElementById('agentFormSpawn').checked = !agent.ephemeral;
   document.getElementById('agentFormSubmit').textContent = 'Save';
   document.getElementById('agentIdPreview').style.display = 'none'; // Hide ID preview when editing
+  
+  // Set provider dropdown and populate model dropdown
+  document.getElementById('agentFormProvider').value = agent.provider || '';
+  populateModelDropdown(agent.model || null, agent.provider || null);
+  
+  // Load permissions
+  const perms = agent.permissions || {};
+  document.getElementById('agentPermOverwrite').checked = perms.canOverwriteFiles !== false;
+  document.getElementById('agentPermRunCmd').checked = perms.canRunCommands === true;
+  document.getElementById('agentPermDelete').checked = perms.canDeleteFiles === true;
+  document.getElementById('agentPermMessage').checked = perms.canMessageAgents !== false;
+  
   populateReportsToDropdown(agentId);
   document.getElementById('agentFormReportsTo').value = agent.reportsTo || '';
   document.getElementById('addAgentModal').style.display = 'flex';
@@ -1008,6 +1413,17 @@ async function submitAgentForm() {
   const isSupervisor = document.getElementById('agentFormSpawn').checked;
   const ephemeral = !isSupervisor;
   const reportsTo = document.getElementById('agentFormReportsTo').value || undefined;
+  // Get provider and model (empty string means use server default)
+  const provider = document.getElementById('agentFormProvider').value || undefined;
+  const model = document.getElementById('agentFormModel').value || undefined;
+  
+  // Get permissions
+  const permissions = {
+    canOverwriteFiles: document.getElementById('agentPermOverwrite').checked,
+    canRunCommands: document.getElementById('agentPermRunCmd').checked,
+    canDeleteFiles: document.getElementById('agentPermDelete').checked,
+    canMessageAgents: document.getElementById('agentPermMessage').checked,
+  };
 
   if (!name || !role) {
     alert('Please fill in Name and Role');
@@ -1025,13 +1441,13 @@ async function submitAgentForm() {
       res = await fetch(`${API}/api/projects/${projectId}/agents/${editingAgentId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, role, capabilities, homeFolder, ephemeral, reportsTo }),
+        body: JSON.stringify({ name, role, capabilities, homeFolder, ephemeral, reportsTo, provider, model, permissions }),
       });
     } else {
       res = await fetch(`${API}/api/projects/${projectId}/agents`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, name, role, capabilities, homeFolder, ephemeral, reportsTo }),
+        body: JSON.stringify({ id, name, role, capabilities, homeFolder, ephemeral, reportsTo, provider, model, permissions }),
       });
     }
     const data = await res.json();
@@ -1140,6 +1556,88 @@ function getTaskIcon(status) {
     case 'completed': return '&#9989;';  // check
     case 'failed': return '&#10060;';    // x
     default: return '&#8226;';
+  }
+}
+
+// ============================================================================
+// Approval Queue
+// ============================================================================
+
+async function refreshApprovals() {
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/approvals`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderApprovals(data.approvals || []);
+  } catch (e) {
+    console.error('Failed to load approvals:', e);
+  }
+}
+
+function renderApprovals(approvals) {
+  const section = document.getElementById('approvalSection');
+  const countEl = document.getElementById('approvalCount');
+  const listEl = document.getElementById('approvalList');
+
+  // Show/hide section based on pending approvals
+  if (approvals.length > 0) {
+    section.style.display = 'block';
+    countEl.textContent = `${approvals.length} pending`;
+  } else {
+    section.style.display = 'none';
+    return;
+  }
+
+  listEl.innerHTML = approvals.map(a => {
+    const targetAgent = project.agents?.find(ag => ag.id === a.targetAgentId) || { name: a.targetAgentId };
+    const requester = project.agents?.find(ag => ag.id === a.requestingAgentId) || { name: a.requestingAgentId };
+    const approver = a.approverAgentId === 'human' ? 'You (Human)' : 
+      (project.agents?.find(ag => ag.id === a.approverAgentId)?.name || a.approverAgentId);
+    const created = new Date(a.createdAt).toLocaleString();
+
+    return `<div class="approval-card" data-id="${a.id}">
+      <div class="approval-header">
+        <div class="approval-icon">⏳</div>
+        <div class="approval-info">
+          <div class="approval-operation">${escapeHtml(a.operation)}</div>
+          <div class="approval-summary">${escapeHtml(a.summary)}</div>
+        </div>
+      </div>
+      <div class="approval-meta">
+        <span><span class="label">Agent:</span> <span class="value">${escapeHtml(targetAgent.name)}</span></span>
+        <span><span class="label">Requester:</span> <span class="value">${escapeHtml(requester.name)}</span></span>
+        <span><span class="label">Approver:</span> <span class="value">${escapeHtml(approver)}</span></span>
+        <span><span class="label">Created:</span> <span class="value">${created}</span></span>
+      </div>
+      <div class="approval-actions">
+        <label class="checkbox-row" style="margin-right:12px;">
+          <input type="checkbox" id="permanent-${a.id}">
+          <span style="font-size:11px;color:var(--muted);">Permanent</span>
+        </label>
+        <button class="btn btn-sm btn-approve" onclick="resolveApproval('${a.id}', 'approved')">✓ Approve</button>
+        <button class="btn btn-sm btn-deny" onclick="resolveApproval('${a.id}', 'denied')">✗ Deny</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function resolveApproval(requestId, resolution) {
+  const permanent = document.getElementById(`permanent-${requestId}`)?.checked || false;
+  try {
+    const res = await fetch(`${API}/api/approvals/${requestId}/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resolution, permanent })
+    });
+    if (res.ok) {
+      showToast(`Approval ${resolution}`, 'success');
+      refreshApprovals();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to resolve approval', 'error');
   }
 }
 
@@ -1336,6 +1834,141 @@ async function toggleProjectMcp(name) {
   } catch (e) {
     console.error('Failed to toggle MCP:', e);
   }
+}
+
+// ============================================================================
+// Problems / Diagnostics
+// ============================================================================
+
+async function refreshProblems() {
+  const countEl = document.getElementById('problemsCount');
+  const listEl = document.getElementById('problemsList');
+  const errorCountEl = document.getElementById('errorCount');
+  const warningCountEl = document.getElementById('warningCount');
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/diagnostics`);
+    if (!res.ok) {
+      listEl.innerHTML = '<div style="color:var(--muted);font-size:13px">Unable to check problems</div>';
+      return;
+    }
+    const data = await res.json();
+    renderProblems(data.diagnostics || [], data.counts || {});
+  } catch (e) {
+    console.error('Failed to load diagnostics:', e);
+    listEl.innerHTML = '<div style="color:var(--muted);font-size:13px">Error checking problems</div>';
+  }
+}
+
+function renderProblems(diagnostics, counts) {
+  const countEl = document.getElementById('problemsCount');
+  const listEl = document.getElementById('problemsList');
+  const errorCountEl = document.getElementById('errorCount');
+  const warningCountEl = document.getElementById('warningCount');
+  
+  errorCountEl.textContent = counts.errors || 0;
+  warningCountEl.textContent = counts.warnings || 0;
+  countEl.textContent = (counts.total || 0) === 0 
+    ? '✓ OK' 
+    : `${counts.errors || 0} errors, ${counts.warnings || 0} warnings`;
+  
+  if (!diagnostics || diagnostics.length === 0) {
+    listEl.innerHTML = '<div class="problems-empty">✓ No problems detected</div>';
+    return;
+  }
+  
+  // Sort: errors first, then warnings
+  diagnostics.sort((a, b) => {
+    if (a.severity !== b.severity) return a.severity === 'error' ? -1 : 1;
+    return a.file.localeCompare(b.file);
+  });
+  
+  listEl.innerHTML = diagnostics.map(d => {
+    const icon = d.severity === 'error' ? '❌' : '⚠️';
+    const iconClass = d.severity === 'error' ? 'error' : 'warning';
+    const codeStr = d.code ? `<span class="problem-code">[${d.code}]</span>` : '';
+    return `<div class="problem-row" onclick="openFileViewer('${escapeAttr(d.file)}', '${escapeAttr(d.file.split('/').pop())}')">
+      <div class="problem-icon ${iconClass}">${icon}</div>
+      <div class="problem-content">
+        <div class="problem-message">${escapeHtml(d.message)}${codeStr}</div>
+        <div class="problem-location">${escapeHtml(d.file)}:${d.line}:${d.column}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ============================================================================
+// Git History
+// ============================================================================
+
+async function refreshGitHistory() {
+  const section = document.getElementById('gitHistorySection');
+  const countEl = document.getElementById('gitHistoryCount');
+  const listEl = document.getElementById('gitLogList');
+  
+  // Only show if project has git
+  if (!project.gitConfig) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = 'block';
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/git/log?limit=30`);
+    if (!res.ok) {
+      listEl.innerHTML = '<div style="color:var(--muted);font-size:13px">Unable to load git history</div>';
+      return;
+    }
+    const data = await res.json();
+    renderGitHistory(data.commits || [], data.currentBranch);
+  } catch (e) {
+    console.error('Failed to load git history:', e);
+    listEl.innerHTML = '<div style="color:var(--muted);font-size:13px">Error loading git history</div>';
+  }
+}
+
+function renderGitHistory(commits, currentBranch) {
+  const countEl = document.getElementById('gitHistoryCount');
+  const listEl = document.getElementById('gitLogList');
+  
+  countEl.textContent = commits.length > 0 
+    ? `${commits.length} commits${currentBranch ? ` (${currentBranch})` : ''}`
+    : 'No commits';
+  
+  if (!commits || commits.length === 0) {
+    listEl.innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;padding:20px;">No commits yet</div>';
+    return;
+  }
+  
+  listEl.innerHTML = commits.map((c, i) => {
+    const isLast = i === commits.length - 1;
+    const date = new Date(c.date).toLocaleDateString() + ' ' + new Date(c.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    
+    // Parse refs (HEAD, origin/main, etc)
+    let refsHtml = '';
+    if (c.refs) {
+      const refs = c.refs.split(', ').filter(r => r);
+      refsHtml = refs.map(r => {
+        const cls = r.includes('HEAD') ? 'head' : (r.includes('origin') ? 'origin' : '');
+        return `<span class="commit-ref ${cls}">${escapeHtml(r)}</span>`;
+      }).join('');
+    }
+    
+    return `<div class="commit-row">
+      <div class="commit-graph">
+        <div class="commit-dot"></div>
+        ${!isLast ? '<div class="commit-line"></div>' : ''}
+      </div>
+      <div class="commit-content">
+        <div class="commit-message">${escapeHtml(c.subject || c.message)}${refsHtml ? `<span class="commit-refs">${refsHtml}</span>` : ''}</div>
+        <div class="commit-meta">
+          <span class="commit-hash">${c.shortHash}</span>
+          <span class="commit-author">${escapeHtml(c.author)}</span>
+          <span class="commit-date">${date}</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 // ============================================================================
@@ -1801,6 +2434,15 @@ socket.on('task-claimed', () => refreshTasks());
 socket.on('task-completed', () => refreshTasks());
 socket.on('task-failed', () => refreshTasks());
 
+// Approval events
+socket.on('approval-requested', (data) => {
+  if (data.projectId === projectId) {
+    refreshApprovals();
+    showToast(`New approval request: ${data.summary}`, 'info');
+  }
+});
+socket.on('approval-resolved', () => refreshApprovals());
+
 // Agent events - refresh when agents are created/deleted
 socket.on('agent-created', (data) => {
   if (data.projectId === projectId) {
@@ -2118,6 +2760,253 @@ async function deleteSchedTask(taskId) {
     if (agent) renderSchedTaskList(agent);
   } catch (e) {
     showToast('Failed to delete task', 'error');
+  }
+}
+
+// ============================================================================
+// Credentials Management Functions
+// ============================================================================
+
+let gitCredentials = [];
+
+function showCredentialsModal() {
+  loadCredentials();
+  document.getElementById('credFormName').value = '';
+  document.getElementById('credFormType').value = 'token';
+  document.getElementById('credFormHost').value = '';
+  document.getElementById('credFormSecret').value = '';
+  updateCredFormPlaceholder();
+  document.getElementById('credentialsModal').style.display = 'flex';
+}
+
+function hideCredentialsModal() {
+  document.getElementById('credentialsModal').style.display = 'none';
+  // Refresh the credentials dropdown in push modal
+  loadPushGitLabCredentials();
+}
+
+function updateCredFormPlaceholder() {
+  const type = document.getElementById('credFormType').value;
+  const label = document.getElementById('credFormSecretLabel');
+  const textarea = document.getElementById('credFormSecret');
+  
+  if (type === 'ssh-key') {
+    label.textContent = 'Private Key';
+    textarea.placeholder = '-----BEGIN OPENSSH PRIVATE KEY-----\n...';
+    textarea.rows = 4;
+  } else {
+    label.textContent = 'Access Token';
+    textarea.placeholder = 'glpat-xxxxxxxxxxxxxxxxxxxx';
+    textarea.rows = 1;
+  }
+}
+
+async function loadCredentials() {
+  try {
+    const res = await fetch(`${API}/api/credentials`);
+    const data = await res.json();
+    gitCredentials = data.credentials || [];
+    renderCredentialsList();
+  } catch (e) {
+    console.error('Failed to load credentials:', e);
+  }
+}
+
+function renderCredentialsList() {
+  const el = document.getElementById('credentialsList');
+  if (gitCredentials.length === 0) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px">No credentials stored. Add one below.</div>';
+    return;
+  }
+  
+  el.innerHTML = gitCredentials.map(c => `
+    <div style="display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--border)">
+      <span style="font-size:16px">${c.type === 'ssh-key' ? '🔑' : '🎟️'}</span>
+      <div style="flex:1">
+        <div style="font-size:13px">${c.name}</div>
+        <div style="font-size:11px;color:var(--muted)">${c.type} • ${c.host}</div>
+      </div>
+      <button onclick="deleteCredential('${c.id}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px">🗑</button>
+    </div>
+  `).join('');
+}
+
+async function addCredential() {
+  const name = document.getElementById('credFormName').value.trim();
+  const type = document.getElementById('credFormType').value;
+  const host = document.getElementById('credFormHost').value.trim();
+  const secret = document.getElementById('credFormSecret').value.trim();
+  
+  if (!name || !host || !secret) {
+    showToast('Please fill in all fields', 'error');
+    return;
+  }
+  
+  try {
+    const res = await fetch(`${API}/api/credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, type, host, secret }),
+    });
+    
+    if (res.ok) {
+      showToast(`Credential "${name}" added`);
+      loadCredentials();
+      // Clear form
+      document.getElementById('credFormName').value = '';
+      document.getElementById('credFormSecret').value = '';
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast(`Error: ${e.message}`, 'error');
+  }
+}
+
+async function deleteCredential(id) {
+  if (!confirm('Delete this credential?')) return;
+  
+  try {
+    const res = await fetch(`${API}/api/credentials/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      showToast('Credential deleted');
+      loadCredentials();
+    }
+  } catch (e) {
+    showToast(`Error: ${e.message}`, 'error');
+  }
+}
+
+// ============================================================================
+// Push to GitLab Functions
+// ============================================================================
+
+function showPushToGitLabModal() {
+  document.getElementById('pushGitLabRepoName').value = project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  document.getElementById('pushGitLabError').style.display = 'none';
+  document.getElementById('pushGitLabSuccess').style.display = 'none';
+  document.getElementById('pushGitLabBtn').disabled = false;
+  document.getElementById('pushGitLabBtn').textContent = '🔗 Create & Push';
+  document.getElementById('pushGitLabNamespace').innerHTML = '<option value="">Select credential first...</option>';
+  
+  loadPushGitLabCredentials();
+  document.getElementById('pushToGitLabModal').style.display = 'flex';
+}
+
+function hidePushToGitLabModal() {
+  document.getElementById('pushToGitLabModal').style.display = 'none';
+}
+
+async function loadPushGitLabCredentials() {
+  try {
+    const res = await fetch(`${API}/api/credentials`);
+    const data = await res.json();
+    console.log('Credentials loaded:', data);
+    const tokenCreds = (data.credentials || []).filter(c => c.type === 'token');
+    console.log('Token credentials:', tokenCreds.length, tokenCreds);
+    
+    const select = document.getElementById('pushGitLabCredential');
+    if (tokenCreds.length === 0) {
+      select.innerHTML = '<option value="">No GitLab tokens found</option>';
+    } else if (tokenCreds.length === 1) {
+      // Auto-select and load namespaces when only one credential
+      console.log('Auto-selecting credential:', tokenCreds[0].id);
+      select.innerHTML = `<option value="${tokenCreds[0].id}">${tokenCreds[0].name} (${tokenCreds[0].host})</option>`;
+      loadPushGitLabNamespaces(tokenCreds[0].id);
+    } else {
+      select.innerHTML = '<option value="">Select a credential...</option>' +
+        tokenCreds.map(c => `<option value="${c.id}">${c.name} (${c.host})</option>`).join('');
+    }
+    
+    select.onchange = () => loadPushGitLabNamespaces(select.value);
+  } catch (e) {
+    console.error('Failed to load credentials:', e);
+  }
+}
+
+async function loadPushGitLabNamespaces(credentialId) {
+  console.log('loadPushGitLabNamespaces called with:', credentialId);
+  const nsSelect = document.getElementById('pushGitLabNamespace');
+  if (!credentialId) {
+    nsSelect.innerHTML = '<option value="">Select credential first...</option>';
+    return;
+  }
+  
+  nsSelect.innerHTML = '<option value="">Loading...</option>';
+  
+  try {
+    console.log('Fetching namespaces from:', `${API}/api/credentials/${credentialId}/namespaces`);
+    const res = await fetch(`${API}/api/credentials/${credentialId}/namespaces`);
+    const data = await res.json();
+    console.log('Namespaces response:', data);
+    
+    if (data.namespaces && data.namespaces.length > 0) {
+      nsSelect.innerHTML = '<option value="">(Personal namespace)</option>' +
+        data.namespaces.map(ns => `<option value="${ns.id}">${ns.full_path || ns.path} (${ns.kind})</option>`).join('');
+    } else {
+      nsSelect.innerHTML = '<option value="">(Personal namespace)</option>';
+    }
+  } catch (e) {
+    console.error('Failed to load namespaces:', e);
+    nsSelect.innerHTML = '<option value="">(Personal namespace)</option>';
+  }
+}
+
+async function pushToGitLab() {
+  const credentialId = document.getElementById('pushGitLabCredential').value;
+  const repoName = document.getElementById('pushGitLabRepoName').value.trim();
+  const namespaceId = document.getElementById('pushGitLabNamespace').value || undefined;
+  const visibility = document.getElementById('pushGitLabVisibility').value;
+  
+  const errorEl = document.getElementById('pushGitLabError');
+  const successEl = document.getElementById('pushGitLabSuccess');
+  const btn = document.getElementById('pushGitLabBtn');
+  
+  errorEl.style.display = 'none';
+  successEl.style.display = 'none';
+  
+  if (!credentialId) {
+    errorEl.textContent = 'Please select a GitLab credential';
+    errorEl.style.display = 'block';
+    return;
+  }
+  
+  if (!repoName) {
+    errorEl.textContent = 'Please enter a repository name';
+    errorEl.style.display = 'block';
+    return;
+  }
+  
+  btn.disabled = true;
+  btn.textContent = '⏳ Creating repository...';
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/git/push-to-gitlab`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credentialId, repoName, namespaceId, visibility }),
+    });
+    const data = await res.json();
+    
+    if (data.success) {
+      successEl.innerHTML = `✓ Repository created and pushed!<br><a href="${data.repoUrl}" target="_blank" style="color:white">${data.repoUrl}</a>`;
+      successEl.style.display = 'block';
+      btn.textContent = '✓ Done!';
+      showToast('Project pushed to GitLab');
+      loadProject();
+      setTimeout(() => hidePushToGitLabModal(), 3000);
+    } else {
+      errorEl.textContent = data.error || 'Failed to push to GitLab';
+      errorEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = '🔗 Create & Push';
+    }
+  } catch (e) {
+    errorEl.textContent = `Error: ${e.message}`;
+    errorEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = '🔗 Create & Push';
   }
 }
 </script>

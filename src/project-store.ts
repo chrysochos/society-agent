@@ -32,6 +32,8 @@ export interface ProjectAgentConfig {
 	systemPrompt?: string
 	/** Home folder within the project (relative to project root, e.g. "/" or "frontend/") */
 	homeFolder: string
+	/** LLM provider override (defaults to server default) */
+	provider?: string
 	/** LLM model override (defaults to server default) */
 	model?: string
 	/** When last active */
@@ -72,7 +74,76 @@ export interface ProjectAgentConfig {
 	/** Agent's memory summary from past conversations */
 	memorySummary?: string
 	// Society Agent end
+	// Society Agent start - agent permissions
+	/** Agent's permissions - controls what operations are allowed */
+	permissions?: {
+		/** Can delete files (default: false) */
+		canDeleteFiles?: boolean
+		/** Can run shell commands (default: false) */
+		canRunCommands?: boolean
+		/** Can overwrite existing files (default: true) */
+		canOverwriteFiles?: boolean
+		/** Can spawn worker agents (default: true for supervisors) */
+		canSpawnWorkers?: boolean
+		/** Can message other agents (default: true) */
+		canMessageAgents?: boolean
+		/** Can create new agents (default: false) */
+		canCreateAgents?: boolean
+	}
+	// Society Agent end
+	// Society Agent start - granted permissions from supervisors
+	/** Permissions granted by supervisors - who can ask this agent to do what */
+	grantedPermissions?: Array<{
+		/** Agent ID who is allowed to make requests */
+		fromAgentId: string
+		/** What operations they can request (e.g., "delete_file", "run_command", "*" for all) */
+		operations: string[]
+		/** Is this a permanent grant or one-time */
+		permanent: boolean
+		/** When this was granted */
+		grantedAt: string
+		/** Who granted it (supervisor agent or "human") */
+		grantedBy: string
+		/** Optional: specific scope/path this applies to */
+		scope?: string
+	}>
+	// Society Agent end
 }
+
+// Society Agent start - Approval queue for permission requests
+/**
+ * A pending permission request that needs supervisor/human approval
+ */
+export interface ApprovalRequest {
+	/** Unique request ID */
+	id: string
+	/** Project ID */
+	projectId: string
+	/** Agent who needs to perform the action */
+	targetAgentId: string
+	/** Agent who made the original request (external agent) */
+	requestingAgentId: string
+	/** Agent who needs to approve (supervisor of target, or "human" for top-level) */
+	approverAgentId: string | "human"
+	/** The operation being requested (e.g., "delete_file", "run_command") */
+	operation: string
+	/** Details about the operation */
+	operationDetails: {
+		/** Original message/task that triggered this */
+		originalRequest: string
+		/** Specific parameters (e.g., file path to delete) */
+		parameters?: Record<string, any>
+	}
+	/** Request status */
+	status: "pending" | "approved" | "denied" | "escalated"
+	/** When this was created */
+	createdAt: string
+	/** When this was resolved (if resolved) */
+	resolvedAt?: string
+	/** Human-readable summary of the request */
+	summary: string
+}
+// Society Agent end
 
 // Society Agent start - Task pool system
 /**
@@ -131,6 +202,8 @@ export interface Task {
 	}
 	/** Error info if failed */
 	error?: string
+	/** Task IDs that must be completed before this task can be claimed */
+	dependencies?: string[]
 	/** Timestamps */
 	createdAt: string
 	completedAt?: string
@@ -193,6 +266,25 @@ export interface Project {
 	/** Maximum concurrent ephemeral workers (default: 3) */
 	maxConcurrentWorkers: number
 	// Society Agent end
+	// Society Agent start - Git integration
+	/** Git repository configuration (for projects loaded from GitLab/GitHub) */
+	gitConfig?: {
+		/** Repository URL (SSH or HTTPS) */
+		url: string
+		/** Default branch/ref to use */
+		defaultRef: string
+		/** Currently checked out ref */
+		currentRef?: string
+		/** ID of credential to use for authentication */
+		credentialId?: string
+		/** When last synced from remote */
+		lastSyncedAt?: string
+		/** Clone status */
+		cloneStatus?: "pending" | "cloning" | "ready" | "error"
+		/** Error message if clone failed */
+		cloneError?: string
+	}
+	// Society Agent end
 	/** Project status */
 	status: "active" | "archived" | "paused"
 	/** Timestamps */
@@ -234,6 +326,51 @@ function createDefaultProjects(): Project[] {
 					// Society Agent start - Updated system prompt to use AGENTS.md
 					systemPrompt: `You are Architect, a senior software architect and team supervisor.
 
+## 🚨 CRITICAL: TALK TO THE USER - DON'T WRITE STATUS FILES
+- **COMMUNICATE IN CHAT** - Explain what's happening conversationally, like talking to a colleague
+- **DON'T write progress-report.md or status files** - Progress goes IN YOUR MESSAGE, not files
+- **BE CONVERSATIONAL** - "I'm setting up 3 workers because..." not bullet points
+- **EXPLAIN IN PLAIN LANGUAGE** - If something fails, explain WHY to the user directly
+
+### ✅ When to Write Files
+- Code files (.ts, .js, .html, etc.) - YES
+- Configuration files - YES  
+- KNOWLEDGE.md for persistent project notes - YES
+- Architecture docs workers need - YES
+- **Status/progress report files - NO, tell the user directly in chat**
+
+## 🚨 CRITICAL COMMUNICATION RULES - FOLLOW THESE ALWAYS!
+1. **ALWAYS REPORT ERRORS IMMEDIATELY** - The moment something fails, tell the user
+2. **SHOW THE ACTUAL ERROR MESSAGE** - Copy/paste the exact error text, don't summarize
+3. **SUGGEST SOLUTIONS** - Every error message must include "Here's what I can try:" with options
+4. **ASK BEFORE MAJOR ACTIONS** - Don't proceed with big changes without user approval
+5. **NO SILENT FAILURES** - If workers fail, STOP and report immediately with get_worker_logs()
+6. **ALWAYS END WITH STATUS** - Every response MUST end with what you did and what happens next
+
+## 📢 MANDATORY END-OF-RESPONSE FORMAT
+You MUST end EVERY response with a status block like this:
+\`\`\`
+---
+**Status:** ✅ Done | ⏳ In Progress | ❌ Failed | ⏸️ Waiting for you
+**What I did:** [Brief summary]
+**Next:** [What happens next OR what I need from you]
+\`\`\`
+NEVER stop without this status block. NEVER go silent. ALWAYS tell the user what's happening.
+
+Example error report format:
+\`\`\`
+❌ **ERROR:** [exact error message here]
+
+**What happened:** Brief explanation
+
+**Solutions I can try:**
+1. [Option A]
+2. [Option B]
+3. [Option C]
+
+Which would you like me to try?
+\`\`\`
+
 ## CRITICAL: READ YOUR AGENTS.md FIRST
 Before doing ANYTHING, use read_file to check your AGENTS.md file. It contains:
 - Your identity and evolving memory
@@ -257,6 +394,43 @@ ALWAYS include in task instructions:
 - Clear requirements and expected output
 - Technology choices if relevant
 - Any context the worker needs
+
+## 🎯 CRITICAL: Task Description Must Include Coordination Rules!
+Every task description MUST tell workers:
+1. **"If you encounter errors, STOP and fail the task with a clear error message"**
+2. **"If you're unsure or need clarification, fail the task with your question"**
+3. **"Do NOT guess or make assumptions - ask if unclear"**
+
+Example task description:
+\`\`\`
+Create the user authentication API.
+
+Requirements:
+- POST /api/auth/login
+- POST /api/auth/register  
+- Use JWT tokens
+
+Coordination:
+- If you're unsure about the database schema, STOP and ask
+- If bcrypt installation fails, fail the task with the error
+- Do NOT make assumptions about existing code - read files first
+\`\`\`
+
+## Using Task Dependencies
+Use the \`dependencies\` parameter to ensure correct order:
+\`\`\`
+// First task - no dependencies
+create_task({title: "Setup Types", description: "..."})
+// Returns task-123
+
+// Second task - depends on first
+create_task({title: "Build Backend", dependencies: ["task-123"]})
+\`\`\`
+
+## Monitoring Workers
+- Use get_worker_status() to check worker health
+- Use get_worker_logs(worker_id) to see what workers are doing
+- **IF ANY WORKER FAILS:** Stop immediately, get logs, show error to user, suggest fixes
 
 Use markdown formatting. Be decisive and action-oriented.`,
 					// Society Agent end
@@ -482,11 +656,18 @@ export class ProjectStore {
 
 		this.state.projects.push(project)
 		this.save()
+		
+		// Society Agent start - Create AGENTS.md for each agent in new project
+		for (const agent of project.agents) {
+			this.createAgentKnowledgeFile(project.id, agent)
+		}
+		// Society Agent end
+		
 		log.info(`Created project: ${project.name} (${project.id})`)
 		return project
 	}
 
-	update(id: string, updates: Partial<Pick<Project, "name" | "description" | "folder" | "knowledge" | "status">>): Project | undefined {
+	update(id: string, updates: Partial<Pick<Project, "name" | "description" | "folder" | "knowledge" | "status" | "gitConfig">>): Project | undefined {
 		const project = this.get(id)
 		if (!project) return undefined
 
@@ -495,6 +676,7 @@ export class ProjectStore {
 		if (updates.folder !== undefined) project.folder = updates.folder
 		if (updates.knowledge !== undefined) project.knowledge = updates.knowledge
 		if (updates.status !== undefined) project.status = updates.status
+		if (updates.gitConfig !== undefined) project.gitConfig = updates.gitConfig
 		project.updatedAt = new Date().toISOString()
 
 		this.save()
@@ -812,7 +994,8 @@ When learning organically → add to KNOWLEDGE.md as playbook
 		title: string,
 		description: string,
 		context: TaskContext,
-		priority: number = 5
+		priority: number = 5,
+		dependencies?: string[]
 	): Task | undefined {
 		const project = this.get(projectId)
 		if (!project) return undefined
@@ -830,6 +1013,7 @@ When learning organically → add to KNOWLEDGE.md as playbook
 			status: "available",
 			createdBy,
 			context,
+			dependencies: dependencies && dependencies.length > 0 ? dependencies : undefined,
 			createdAt: new Date().toISOString(),
 		}
 
@@ -857,14 +1041,26 @@ When learning organically → add to KNOWLEDGE.md as playbook
 		return task
 	}
 
-	/** Claim the next available task (highest priority first) */
+	/** Claim the next available task (highest priority first, respecting dependencies) */
 	claimNextTask(projectId: string, agentId: string): Task | undefined {
 		const project = this.get(projectId)
 		if (!project?.tasks) return undefined
 
-		// Find highest priority available task
+		// Get all completed task IDs for dependency checking
+		const completedTaskIds = new Set(
+			project.tasks.filter((t) => t.status === "completed").map((t) => t.id)
+		)
+
+		// Find highest priority available task with satisfied dependencies
 		const availableTasks = project.tasks
-			.filter((t) => t.status === "available")
+			.filter((t) => {
+				if (t.status !== "available") return false
+				// Check if all dependencies are completed
+				if (t.dependencies && t.dependencies.length > 0) {
+					return t.dependencies.every((depId) => completedTaskIds.has(depId))
+				}
+				return true
+			})
 			.sort((a, b) => b.priority - a.priority)
 
 		if (availableTasks.length === 0) return undefined
@@ -941,11 +1137,24 @@ When learning organically → add to KNOWLEDGE.md as playbook
 		return this.getActiveWorkerCount(projectId) < maxWorkers
 	}
 
-	/** Get available tasks count */
+	/** Get available tasks count (excludes tasks blocked by dependencies) */
 	getAvailableTaskCount(projectId: string): number {
 		const project = this.get(projectId)
 		if (!project?.tasks) return 0
-		return project.tasks.filter((t) => t.status === "available").length
+		
+		// Get completed task IDs for dependency checking
+		const completedTaskIds = new Set(
+			project.tasks.filter((t) => t.status === "completed").map((t) => t.id)
+		)
+		
+		return project.tasks.filter((t) => {
+			if (t.status !== "available") return false
+			// Check if all dependencies are completed
+			if (t.dependencies && t.dependencies.length > 0) {
+				return t.dependencies.every((depId) => completedTaskIds.has(depId))
+			}
+			return true
+		}).length
 	}
 
 	/** Reset stale tasks - tasks claimed by agents that no longer exist, or claimed too long ago
@@ -1226,6 +1435,213 @@ When learning organically → add to KNOWLEDGE.md as playbook
 			agent.memorySummary = undefined
 			this.save()
 		}
+	}
+	// Society Agent end
+
+	// Society Agent start - Approval queue methods
+	private _approvalQueue: ApprovalRequest[] = []
+	private approvalQueuePath: string = ""
+
+	/** Public getter for approval queue (read-only access) */
+	get approvalQueue(): ApprovalRequest[] | undefined {
+		this.initApprovalQueue()
+		return this._approvalQueue
+	}
+
+	/** Initialize approval queue storage */
+	private initApprovalQueue(): void {
+		if (!this.approvalQueuePath) {
+			this.approvalQueuePath = path.join(this.projectsBaseDir, ".society", "approvals.json")
+		}
+		if (fs.existsSync(this.approvalQueuePath)) {
+			try {
+				this._approvalQueue = JSON.parse(fs.readFileSync(this.approvalQueuePath, "utf-8"))
+			} catch (e) {
+				this._approvalQueue = []
+			}
+		}
+	}
+
+	/** Save approval queue */
+	private saveApprovalQueue(): void {
+		this.initApprovalQueue()
+		fs.writeFileSync(this.approvalQueuePath, JSON.stringify(this._approvalQueue, null, 2))
+	}
+
+	/** Check if the requesting agent is in the supervisor chain of the target agent */
+	isInSupervisorChain(projectId: string, targetAgentId: string, requestingAgentId: string): boolean {
+		const project = this.get(projectId)
+		if (!project) return false
+		
+		// Walk up from target agent checking if requestingAgent is in the chain
+		let currentId: string | undefined = targetAgentId
+		const visited = new Set<string>()
+		
+		while (currentId && !visited.has(currentId)) {
+			visited.add(currentId)
+			const agent = project.agents.find(a => a.id === currentId)
+			if (!agent) break
+			
+			// Check if current agent's supervisor is the requesting agent
+			if (agent.reportsTo === requestingAgentId) {
+				return true // Requesting agent is in the supervisor chain
+			}
+			currentId = agent.reportsTo
+		}
+		return false
+	}
+
+	/** Check if a permission grant exists for this operation */
+	hasPermissionGrant(projectId: string, targetAgentId: string, requestingAgentId: string, operation: string): { permanent: boolean } | false {
+		const project = this.get(projectId)
+		if (!project) return false
+		
+		const agent = project.agents.find(a => a.id === targetAgentId)
+		if (!agent || !agent.grantedPermissions) return false
+		
+		const grant = agent.grantedPermissions.find(g => 
+			g.fromAgentId === requestingAgentId &&
+			(g.operations.includes(operation) || g.operations.includes("*"))
+		)
+		return grant ? { permanent: grant.permanent } : false
+	}
+
+	/** Check if agent has ANY grant for this operation type (regardless of who requested it) */
+	hasAnyPermissionGrant(projectId: string, agentId: string, operation: string): boolean {
+		const project = this.get(projectId)
+		if (!project) return false
+		
+		const agent = project.agents.find(a => a.id === agentId)
+		if (!agent || !agent.grantedPermissions) return false
+		
+		return agent.grantedPermissions.some(grant => 
+			grant.operations.includes(operation) || grant.operations.includes("*")
+		)
+	}
+
+	/** Get the first permission grant for an operation (returns full grant info including who requested it) */
+	getPermissionGrant(projectId: string, agentId: string, operation: string): { fromAgentId: string; permanent: boolean } | null {
+		const project = this.get(projectId)
+		if (!project) return null
+		
+		const agent = project.agents.find(a => a.id === agentId)
+		if (!agent || !agent.grantedPermissions) return null
+		
+		const grant = agent.grantedPermissions.find(g => 
+			g.operations.includes(operation) || g.operations.includes("*")
+		)
+		return grant ? { fromAgentId: grant.fromAgentId, permanent: grant.permanent } : null
+	}
+
+	/** Remove a specific permission grant (for one-time grants) */
+	removePermissionGrant(projectId: string, agentId: string, fromAgentId: string, operation: string): boolean {
+		const project = this.get(projectId)
+		if (!project) return false
+		
+		const agent = project.agents.find(a => a.id === agentId)
+		if (!agent || !agent.grantedPermissions) return false
+		
+		const idx = agent.grantedPermissions.findIndex(g => 
+			g.fromAgentId === fromAgentId && g.operations.includes(operation)
+		)
+		if (idx === -1) return false
+		
+		agent.grantedPermissions.splice(idx, 1)
+		this.save()
+		return true
+	}
+
+	/** Create an approval request */
+	createApprovalRequest(request: Omit<ApprovalRequest, "id" | "createdAt" | "status">): ApprovalRequest {
+		this.initApprovalQueue()
+		const newRequest: ApprovalRequest = {
+			...request,
+			id: `approval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+			status: "pending",
+			createdAt: new Date().toISOString(),
+		}
+		this._approvalQueue.push(newRequest)
+		this.saveApprovalQueue()
+		return newRequest
+	}
+
+	/** Get pending approvals for a specific approver (agent or "human") */
+	getPendingApprovals(approverAgentId: string | "human", projectId?: string): ApprovalRequest[] {
+		this.initApprovalQueue()
+		return this._approvalQueue.filter(r => 
+			r.status === "pending" &&
+			r.approverAgentId === approverAgentId &&
+			(!projectId || r.projectId === projectId)
+		)
+	}
+
+	/** Get all pending approvals for a project (for human review) */
+	getAllPendingApprovals(projectId: string): ApprovalRequest[] {
+		this.initApprovalQueue()
+		return this._approvalQueue.filter(r => 
+			r.status === "pending" && r.projectId === projectId
+		)
+	}
+
+	/** Resolve an approval request */
+	resolveApproval(
+		requestId: string, 
+		resolution: "approved" | "denied", 
+		permanent: boolean = false,
+		resolvedBy: string
+	): ApprovalRequest | null {
+		this.initApprovalQueue()
+		const request = this._approvalQueue.find(r => r.id === requestId)
+		if (!request) return null
+		
+		request.status = resolution
+		request.resolvedAt = new Date().toISOString()
+		this.saveApprovalQueue()
+		
+		// If approved, add a permission grant to the target agent
+		// Even non-permanent approvals need a grant so the agent can perform the action
+		if (resolution === "approved") {
+			const project = this.get(request.projectId)
+			if (project) {
+				const agent = project.agents.find(a => a.id === request.targetAgentId)
+				if (agent) {
+					if (!agent.grantedPermissions) agent.grantedPermissions = []
+					agent.grantedPermissions.push({
+						fromAgentId: request.requestingAgentId,
+						operations: [request.operation],
+						permanent: permanent,
+						grantedAt: new Date().toISOString(),
+						grantedBy: resolvedBy,
+					})
+					this.save()
+				}
+			}
+		}
+		
+		return request
+	}
+
+	/** Get supervisor chain for an agent (returns array from direct supervisor up to top) */
+	getSupervisorChain(projectId: string, agentId: string): ProjectAgentConfig[] {
+		const project = this.get(projectId)
+		if (!project) return []
+		
+		const chain: ProjectAgentConfig[] = []
+		const agent = project.agents.find(a => a.id === agentId)
+		if (!agent) return []
+		
+		let currentId = agent.reportsTo
+		const visited = new Set<string>()
+		
+		while (currentId && !visited.has(currentId)) {
+			visited.add(currentId)
+			const supervisor = project.agents.find(a => a.id === currentId)
+			if (!supervisor) break
+			chain.push(supervisor)
+			currentId = supervisor.reportsTo
+		}
+		
+		return chain
 	}
 	// Society Agent end
 }

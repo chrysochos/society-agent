@@ -160,6 +160,88 @@ function clearPausedState(): void {
 const agentStore = new PersistentAgentStore(getWorkspacePath())
 const activeAgents = new Map<string, ConversationAgent>() // agentId → live ConversationAgent
 // Society Agent end
+
+// Society Agent start - Base communication rules (prepended to ALL agent system prompts)
+const BASE_AGENT_RULES = `
+# 🎯 UNIVERSAL AGENT RULES - READ FIRST
+
+## TALK TO USER - DON'T WRITE STATUS FILES
+You are having a conversation with a human. TALK to them directly in the chat.
+
+### ❌ NEVER DO THIS:
+- Writing progress-report.md, status.md, execution-log.md files
+- Creating markdown files to "report" your status
+- Silently working without updates
+- Saying "I'll create a progress report..."
+
+### ✅ ALWAYS DO THIS:
+- Type your updates directly in this chat
+- Tell the user what you're doing AS you do it
+- Share results, errors, and questions conversationally
+- Use natural language: "I'm working on...", "I found that...", "Should I...?"
+
+### 🗣️ Communication Examples
+BAD: "Writing progress-report.md with current status..."
+GOOD: "I'm setting up the project. I've created the package.json and now I'm adding TypeScript config."
+
+BAD: Silently creating execution-log.md
+GOOD: "Three workers are running: Worker 1 finished the types, Worker 2 is building the backend."
+
+### ⚠️ Error Reporting
+1. **REPORT ERRORS IMMEDIATELY** - Don't hide failures
+2. **SHOW THE ACTUAL ERROR** - Copy/paste exact error text
+3. **SUGGEST SOLUTIONS** - "Here's what I can try: [options]"
+4. **NO SILENT FAILURES** - If something breaks, tell the user
+
+### 📝 UPDATE YOUR KNOWLEDGE FILES!
+After completing tasks or learning something important, ASK YOURSELF:
+- **"Have I updated AGENTS.md with this decision/learning?"**
+- **"Should I create/update KNOWLEDGE.md with what I discovered?"**
+- **"Will future sessions need to know this?"**
+
+Update these files when you:
+- Make architecture decisions
+- Discover how something works
+- Fix a tricky bug (document the solution!)
+- Learn project conventions
+- Complete a major milestone
+
+This is YOUR memory - if you don't write it down, you'll forget it next session!
+
+### 📢 End Every Response With Summary & Status
+After completing work, give the user a helpful summary in chat:
+1. **What was accomplished** - Key deliverables, files created, features added
+2. **What you should know** - Important decisions made, caveats, dependencies
+3. **Suggestions for improvement** - Ideas you noticed while working
+4. **Next steps** - What could be done next, or what you need from the user
+
+Example:
+\`\`\`
+I've set up the basic project structure with frontend and backend folders.
+
+**What you should know:**
+- Both servers run on different ports (3000 frontend, 3001 backend)
+- Added CORS to the backend for communication
+
+**Suggestions:**
+- Consider adding authentication early - easier than retrofitting
+
+---
+**Status:** ✅ Done
+**What I did:** Created project structure with React frontend, Express backend
+**Next:** Ready for you to tell me what features to build
+\`\`\`
+
+---
+
+`
+
+// Helper to prepend base rules to any system prompt
+function buildFullSystemPrompt(agentSystemPrompt: string): string {
+	return BASE_AGENT_RULES + agentSystemPrompt
+}
+// Society Agent end - Base communication rules
+
 // Society Agent start - project system
 const projectStore = new ProjectStore(getWorkspacePath())
 // Society Agent end
@@ -2005,7 +2087,7 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 					createdAt: Date.now(),
 				},
 				apiHandler,
-				systemPrompt: `You are Society Agent, an AI assistant powering a multi-agent collaboration system.
+				systemPrompt: buildFullSystemPrompt(`You are Society Agent, an AI assistant powering a multi-agent collaboration system.
 
 Your role:
 - Answer questions conversationally and helpfully
@@ -2017,7 +2099,7 @@ Guidelines:
 - Be conversational and direct
 - Use markdown formatting when helpful
 - Be concise but thorough
-- You have full conversation memory across messages`,
+- You have full conversation memory across messages`),
 				onMessage: (message) => {
 					// Stream message to client
 					io.emit("agent-message", {
@@ -2355,7 +2437,7 @@ function getOrCreateAgent(profile: import("./persistent-agent-store").Persistent
 	// Society Agent end
 
 	// Build system prompt with memory context
-	let fullPrompt = profile.systemPrompt
+	let fullPrompt = buildFullSystemPrompt(profile.systemPrompt || "You are an AI assistant.")
 	if (profile.memorySummary) {
 		fullPrompt += `\n\n## Your Memory (from past conversations)\n${profile.memorySummary}`
 	}
@@ -2605,7 +2687,7 @@ app.post("/api/projects", (req, res): void => {
 				id: supervisorId,
 				name: "Main Supervisor",
 				role: "Project Supervisor - coordinates work, delegates to workers, or works solo on simple tasks",
-				systemPrompt: `You are the Main Supervisor for project "${name}".
+				systemPrompt: buildFullSystemPrompt(`You are the Main Supervisor for project "${name}".
 
 ## QUICK TASKS - DO THEM DIRECTLY!
 For simple operational requests, act immediately without over-analyzing:
@@ -2707,7 +2789,7 @@ Examples:
 - Figured out a bug fix? → write_file("FIXES.md", "...")
 - Made an important decision? → write_file("DECISIONS.md", "...")
 
-This way you (and future sessions) don't have to re-learn everything!`,
+This way you (and future sessions) don't have to re-learn everything!`),
 				homeFolder: "/", // Society Agent - supervisor works in project root, not subfolder
 			}]
 			log.info(`[Project] Auto-created Main Supervisor for project "${name}"`)
@@ -2771,12 +2853,12 @@ app.post("/api/projects/:id/agents", (req, res): void => {
 		}
 		
 		// Generate default system prompt if not provided
-		const defaultPrompt = systemPrompt || `You are ${name}, a ${role}.
+		const defaultPrompt = buildFullSystemPrompt(systemPrompt || `You are ${name}, a ${role}.
 
 Your responsibilities:
 ${capabilities?.length ? capabilities.map((c: string) => `- ${c}`).join('\n') : `- Fulfill your role as ${role}`}
 
-Work collaboratively with other agents in the project. Use available tools to complete tasks.`
+Work collaboratively with other agents in the project. Use available tools to complete tasks.`)
 
 		// Determine home folder - nest under parent if specified
 		const project = projectStore.get(req.params.id)
@@ -5019,15 +5101,25 @@ If you don't know, say so. Be concise.`,
 					id: workerId,
 					name: workerName,
 					role: "Ephemeral worker - claims and executes tasks from the pool",
-					systemPrompt: `You are an ephemeral worker agent. Your job is to:
+					systemPrompt: buildFullSystemPrompt(`You are an ephemeral worker agent. Your job is to:
 1. Claim a task from the pool with \`claim_task()\`
 2. Read the task details and understand what needs to be done
 3. Execute the task using available tools (read_file, write_file, run_command, etc.)
 4. When done, call \`complete_task(files_created, files_modified, summary)\`
 5. If you encounter an unrecoverable error, call \`fail_task(reason)\`
 
+## ASK FOR HELP - DON'T GUESS!
+If you're stuck, confused, or need clarification:
+- **Call \`fail_task("QUESTION: What should I do about X?")\`**
+- A helpful supervisor will answer and restart the task with more context
+- It's better to ask than to guess wrong and create a mess
+- Examples of when to ask:
+  - "QUESTION: The task mentions 'user service' but I don't see one - should I create it?"
+  - "QUESTION: Should I use REST or GraphQL for this endpoint?"
+  - "QUESTION: The file already exists - should I overwrite or add to it?"
+
 You will self-destruct after completing or failing your task. Focus on the task at hand.
-DO NOT spawn more workers or create new tasks - that's the supervisor's job.`,
+DO NOT spawn more workers or create new tasks - that's the supervisor's job.`),
 					ephemeral: true,
 					reportsTo: agentConfig.id,
 				}
@@ -5156,12 +5248,12 @@ DO NOT spawn more workers or create new tasks - that's the supervisor's job.`,
 				id: agentId,
 				name,
 				role,
-				systemPrompt: `You are ${name}, a ${role}.
+				systemPrompt: buildFullSystemPrompt(`You are ${name}, a ${role}.
 
 Your purpose: ${purpose}
 
 Work collaboratively with other agents in the project. Use available tools to complete tasks.
-You report to ${parentName}.`,
+You report to ${parentName}.`),
 				homeFolder: agentHome,  // Nested under parent's folder
 				ephemeral: false,
 				reportsTo: parentId,
@@ -6258,7 +6350,7 @@ function getOrCreateProjectAgent(
 	const projectDir = projectStore.agentHomeDir(project.id, agentConfig.id)
 
 	// Build system prompt with project + agent context + file creation instructions
-	let fullPrompt = agentConfig.systemPrompt
+	let fullPrompt = buildFullSystemPrompt(agentConfig.systemPrompt || `You are ${agentConfig.name}, part of project ${project.name}.`)
 	// Society Agent start - Tell the agent where its project folder is so it creates files there
 	fullPrompt += `\n\n## File Creation Instructions
 You are working in project "${project.name}". Your project folder is: ${projectDir}
