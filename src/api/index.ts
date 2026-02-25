@@ -1,9 +1,10 @@
 /**
  * Minimal API handler for Society Agent standalone
- * Anthropic-only implementation using direct SDK calls
+ * Multi-provider implementation using Anthropic and OpenAI SDKs
  */
 
 import Anthropic from "@anthropic-ai/sdk"
+import OpenAI from "openai"
 import { ApiStream, ApiStreamChunk } from "./stream"
 
 // Re-export stream types
@@ -121,6 +122,141 @@ export class AnthropicHandler implements ApiHandler {
 	}
 }
 
+// OpenAI-compatible provider base URLs
+const OPENAI_COMPATIBLE_BASE_URLS: Record<string, string> = {
+	openai: "https://api.openai.com/v1",
+	minimax: "https://api.minimax.chat/v1",
+	deepseek: "https://api.deepseek.com/v1",
+	groq: "https://api.groq.com/openai/v1",
+	mistral: "https://api.mistral.ai/v1",
+	openrouter: "https://openrouter.ai/api/v1",
+}
+
+export interface OpenAIHandlerOptions {
+	apiKey: string
+	model: string
+	maxTokens?: number
+	temperature?: number
+	baseURL?: string
+	providerName?: string
+}
+
+/**
+ * OpenAI-compatible handler - works with OpenAI, MiniMax, DeepSeek, Groq, Mistral, OpenRouter
+ */
+export class OpenAIHandler implements ApiHandler {
+	private client: OpenAI
+	private model: string
+	private maxTokens: number
+	private temperature?: number
+	private providerName: string
+
+	constructor(options: OpenAIHandlerOptions) {
+		this.client = new OpenAI({ 
+			apiKey: options.apiKey,
+			baseURL: options.baseURL,
+		})
+		this.model = options.model
+		this.maxTokens = options.maxTokens || DEFAULT_MAX_TOKENS
+		this.temperature = options.temperature
+		this.providerName = options.providerName || "openai"
+	}
+
+	getModel() {
+		return {
+			id: this.model,
+			info: {
+				contextWindow: 128000, // Most OpenAI models have ~128k context
+				maxTokens: this.maxTokens,
+			},
+		}
+	}
+
+	async countTokens(messages: Anthropic.Messages.MessageParam[]): Promise<number> {
+		// Simple approximation: ~4 chars per token
+		const text = messages
+			.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)))
+			.join(" ")
+		return Math.ceil(text.length / 4)
+	}
+
+	async *createMessage(
+		systemPrompt: string,
+		messages: Anthropic.Messages.MessageParam[],
+		metadata?: ApiHandlerCreateMessageMetadata
+	): ApiStream {
+		try {
+			// Convert Anthropic message format to OpenAI format
+			const openaiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+				{ role: "system", content: systemPrompt },
+				...messages.map((m) => ({
+					role: m.role as "user" | "assistant",
+					content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+				})),
+			]
+
+			// Build tools if provided
+			const tools = metadata?.allowedTools?.map((tool: any) => ({
+				type: "function" as const,
+				function: {
+					name: tool.name,
+					description: tool.description || "",
+					parameters: tool.input_schema || tool.parameters || {},
+				},
+			}))
+
+			const stream = await this.client.chat.completions.create({
+				model: this.model,
+				max_tokens: this.maxTokens,
+				messages: openaiMessages,
+				stream: true,
+				...(this.temperature !== undefined && { temperature: this.temperature }),
+				...(tools && tools.length > 0 && { tools }),
+			})
+
+			let inputTokens = 0
+			let outputTokens = 0
+
+			for await (const chunk of stream) {
+				const choice = chunk.choices[0]
+				if (choice?.delta?.content) {
+					yield { type: "text", text: choice.delta.content } as ApiStreamChunk
+				}
+				// Handle tool calls
+				if (choice?.delta?.tool_calls) {
+					for (const toolCall of choice.delta.tool_calls) {
+						if (toolCall.function?.name) {
+							yield {
+								type: "tool_use",
+								id: toolCall.id || `tool_${Date.now()}`,
+								name: toolCall.function.name,
+								input: toolCall.function.arguments || "{}",
+							} as ApiStreamChunk
+						}
+					}
+				}
+				// Track usage
+				if (chunk.usage) {
+					inputTokens = chunk.usage.prompt_tokens || 0
+					outputTokens = chunk.usage.completion_tokens || 0
+				}
+			}
+
+			yield {
+				type: "usage",
+				inputTokens,
+				outputTokens,
+			} as ApiStreamChunk
+		} catch (error: any) {
+			yield {
+				type: "error",
+				error: error.name || "ApiError",
+				message: error.message || "Unknown error",
+			} as ApiStreamChunk
+		}
+	}
+}
+
 /**
  * Build API handler from environment or config
  */
@@ -135,5 +271,20 @@ export function buildApiHandler(options?: Partial<AnthropicHandlerOptions>): Api
 		model: options?.model || process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
 		maxTokens: options?.maxTokens || parseInt(process.env.ANTHROPIC_MAX_TOKENS || String(DEFAULT_MAX_TOKENS)),
 		temperature: options?.temperature,
+	})
+}
+
+/**
+ * Build OpenAI-compatible API handler
+ */
+export function buildOpenAIHandler(provider: string, options: OpenAIHandlerOptions): ApiHandler {
+	const baseURL = options.baseURL || OPENAI_COMPATIBLE_BASE_URLS[provider]
+	if (!baseURL) {
+		throw new Error(`Unknown provider: ${provider}. Provide a baseURL or use a known provider.`)
+	}
+	return new OpenAIHandler({
+		...options,
+		baseURL,
+		providerName: provider,
 	})
 }

@@ -2,7 +2,7 @@
   "provider": {
     "type": "openrouter",
     "apiKey": "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",
-    "model": "anthropic/claude-sonnet-4"
+    "model": "minimax/minimax-m2.5"
   },
   "port": 4000,
   "workspacePath": "/workspaces/society-agent",

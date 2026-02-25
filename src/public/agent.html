@@ -22,6 +22,16 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
     background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+  
+  /* Disconnected state */
+  body.disconnected::before {
+    content: '⚠ Disconnected - Reconnecting...';
+    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+    background: var(--red); color: white; text-align: center;
+    padding: 8px; font-size: 13px; font-weight: 500;
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse { 50% { opacity: 0.7; } }
 
   /* Header */
   header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 20px;
@@ -160,10 +170,12 @@
   .tool-card { align-self: flex-start; max-width: 85%; background: var(--surface); border: 1px solid var(--border);
     border-radius: 10px; font-size: 13px; margin: 4px 0; transition: border-color 0.2s; }
   .tool-card:hover { border-color: var(--accent); }
-  .tool-card.error { border-color: var(--red); }
+  .tool-card.error { border-color: var(--red); border-width: 2px; }
   .tool-card-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; 
     background: rgba(88,166,255,0.05); border-bottom: 1px solid var(--border); cursor: pointer; }
-  .tool-card.error .tool-card-header { background: rgba(248,81,73,0.08); }
+  .tool-card.error .tool-card-header { background: rgba(248,81,73,0.15); }
+  .tool-card.error .tool-card-title { color: var(--red); }
+  .tool-card.error .tool-card-preview { color: var(--red); max-height: none; font-weight: 500; }
   .tool-card-icon { font-size: 16px; flex-shrink: 0; }
   .tool-card-title { font-weight: 600; color: var(--text); }
   .tool-card-detail { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; flex: 1; }
@@ -219,6 +231,17 @@
   .tool-modal-footer .copy-btn { background: var(--bg); border: 1px solid var(--border); color: var(--text); }
   .tool-modal-footer .copy-btn:hover { border-color: var(--accent); }
   .tool-modal-footer .close-btn { background: var(--accent); border: none; color: white; margin-left: auto; }
+
+  /* Scroll to bottom button */
+  .scroll-bottom-btn {
+    position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%);
+    padding: 8px 16px; background: var(--accent); color: white; border: none;
+    border-radius: 20px; font-size: 13px; font-weight: 500; cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3); z-index: 100;
+    display: none; /* Hidden by default, shown via JS */
+    transition: opacity 0.2s;
+  }
+  .scroll-bottom-btn:hover { opacity: 0.9; }
 
   /* Input area */
   .input-area { padding: 12px 20px; border-top: 1px solid var(--border); background: var(--surface); }
@@ -563,6 +586,10 @@
           <p id="welcomeDesc">Send a message to start a conversation with this agent.</p>
         </div>
       </div>
+      <!-- Scroll to bottom button (appears when scrolled up) -->
+      <button id="scrollBottomBtn" class="scroll-bottom-btn" onclick="scrollToBottom(true)" title="Scroll to bottom">
+        ↓ New messages
+      </button>
       <div class="input-area">
         <!-- Society Agent start - prominent status banner -->
         <div id="statusBanner" style="display:none;padding:10px 16px;margin-bottom:10px;border-radius:8px;border:2px solid var(--border);font-size:14px;font-weight:600;text-align:center">
@@ -620,13 +647,45 @@ if (PROJECT_ID) {
 }
 
 const API = window.location.origin;
-const socket = io(API);
+const socket = io(API, {
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000,
+  timeout: 20000,
+});
+
+// Reconnection handling
+socket.on('connect', () => {
+  console.log('[socket] Connected to server, socket.id:', socket.id);
+  document.body.classList.remove('disconnected');
+  // Reload agent data after reconnect
+  if (AGENT_ID) loadAgent();
+});
+
+socket.on('disconnect', (reason) => {
+  console.log('[socket] Disconnected:', reason);
+  document.body.classList.add('disconnected');
+});
+
+socket.on('reconnect_attempt', (attempt) => {
+  console.log('[socket] Reconnecting... attempt', attempt);
+});
+
+socket.on('connect_error', (err) => {
+  console.error('[socket] Connection error:', err.message);
+});
+
 let agentProfile = null;
 let messageCount = 0;
 let isStreaming = false;
 let currentStreamEl = null;
 let streamText = '';
 let chatAttachments = [];
+
+// Session error tracking for summary
+let sessionErrors = [];
+let sessionToolCount = 0;
 
 // ============================================================================
 // Load agent profile
@@ -747,11 +806,29 @@ socket.on('agent-reset', (data) => {
 // Society Agent end
 
 let streamDidFire = false;
+let lastStreamChunk = ''; // Detect repeated chunks
+let repeatCount = 0;
 socket.on('agent-message', (data) => {
+  console.log('[socket] agent-message received:', data.agentId, 'isStreaming:', data.isStreaming, 'isDone:', data.isDone, 'msg:', (data.message||'').substring(0,50));
   // Only handle messages for THIS agent
-  if (data.agentId !== AGENT_ID && data.agentId !== 'user-agent') return;
+  if (data.agentId !== AGENT_ID && data.agentId !== 'user-agent') {
+    console.log('[socket] Ignored - agentId mismatch. Expected:', AGENT_ID, 'Got:', data.agentId);
+    return;
+  }
 
   if (data.isStreaming) {
+    // Detect repeating text (model stuck in loop)
+    if (data.message === lastStreamChunk) {
+      repeatCount++;
+      if (repeatCount > 3) {
+        console.warn('Repeated streaming chunk detected, ignoring');
+        return; // Skip duplicate
+      }
+    } else {
+      lastStreamChunk = data.message;
+      repeatCount = 0;
+    }
+    
     streamDidFire = true;
     // Society Agent - Show working indicator
     showWorkingIndicator(true);
@@ -774,6 +851,8 @@ socket.on('agent-message', (data) => {
     currentStreamEl = null;
     streamText = '';
     isStreaming = false;
+    lastStreamChunk = ''; // Reset repeat detection
+    repeatCount = 0;
     document.getElementById('sendBtn').disabled = false;
     document.getElementById('stopBtn').style.display = 'none'; // Society Agent - hide stop button
     removeTyping();
@@ -782,16 +861,71 @@ socket.on('agent-message', (data) => {
     fetchAgentUsage();
     refreshContextStats(); // Society Agent - update context stats
     
-    // Society Agent start - Add clear completion divider in chat
+    // Society Agent start - Add clear completion divider with summary
     const divider = document.createElement('div');
     divider.className = 'completion-divider';
-    divider.innerHTML = '<span>✅ Task completed</span>';
-    divider.style.cssText = 'text-align:center;margin:16px 0;color:var(--green);font-size:12px;opacity:0.8;border-top:1px dashed var(--border);padding-top:12px;';
+    
+    // Build summary
+    let summaryHTML = '';
+    if (sessionErrors.length > 0) {
+      summaryHTML = `<div style="margin-top:8px;padding:12px;background:rgba(248,81,73,0.1);border:1px solid var(--red);border-radius:8px;text-align:left">
+        <strong style="color:var(--red)">⚠️ ${sessionErrors.length} error(s) occurred:</strong>
+        <ul style="margin:8px 0 0 0;padding-left:20px;color:var(--text);font-size:12px">
+          ${sessionErrors.slice(-5).map(e => `<li><code>${e.tool}</code>${e.detail ? ` (${e.detail.substring(0,30)}...)` : ''}: ${e.error.substring(0,100)}${e.error.length > 100 ? '...' : ''}</li>`).join('')}
+        </ul>
+        <div style="margin-top:8px;font-size:11px;color:var(--muted)">
+          💡 <strong>Tips:</strong> Check error details above. Common issues: missing files, syntax errors, or network problems.
+          ${sessionErrors.some(e => e.tool === 'run_command') ? '<br>🔧 A command failed - check if the server is running or paths are correct.' : ''}
+        </div>
+      </div>`;
+      divider.innerHTML = `<span style="color:var(--yellow)">⚠️ Completed with errors</span>${summaryHTML}`;
+    } else {
+      divider.innerHTML = '<span>✅ Task completed</span>';
+    }
+    divider.style.cssText = 'text-align:center;margin:16px 0;color:var(--green);font-size:12px;opacity:0.9;border-top:1px dashed var(--border);padding-top:12px;';
     document.getElementById('messages').appendChild(divider);
+    
+    // Reset session tracking for next task
+    sessionErrors = [];
+    sessionToolCount = 0;
+    
     scrollToBottom();
     // Society Agent end
   }
 });
+
+// Society Agent start - Show delegated tasks as incoming messages in receiving agent's chat
+socket.on('delegation-message', (data) => {
+  // Only show in the receiving agent's view
+  if (data.toAgentId !== AGENT_ID) return;
+  
+  // Show as an incoming user message from the delegating agent
+  const taskText = `📩 **Delegated task from ${data.fromAgentName}:**\n\n${data.task}${data.context ? `\n\n_Context: ${data.context}_` : ''}`;
+  addMessage('user', taskText, data.fromAgentName);
+  scrollToBottom();
+  
+  addLog('info', `Received task from ${data.fromAgentName}`);
+});
+
+// Show task claimed in worker's chat
+socket.on('task-claimed', (data) => {
+  if (data.agentId !== AGENT_ID) return;
+  
+  const taskText = `🎯 **Claimed task: ${data.taskTitle}**\n\n${data.taskDescription || ''}`;
+  addMessage('user', taskText, 'Task Pool');
+  scrollToBottom();
+  
+  addLog('info', `Claimed task: ${data.taskTitle}`);
+});
+
+// Show worker started message
+socket.on('worker-started', (data) => {
+  if (data.workerId !== AGENT_ID) return;
+  
+  addMessage('user', '🚀 **You have been spawned as an ephemeral worker.**\n\nStart by claiming a task from the pool.', 'Supervisor');
+  scrollToBottom();
+});
+// Society Agent end
 
 socket.on('file-created', (data) => {
   if (data.agentId === AGENT_ID) {
@@ -854,6 +988,7 @@ socket.on('agent-thinking', (data) => {
 });
 
 socket.on('tool-execution', (data) => {
+  console.log('[socket] tool-execution:', data.agentId, data.toolName, data.status);
   // Only show for THIS agent
   if (data.agentId !== AGENT_ID) {
     addLog('info', `[${data.agentName || data.agentId}] ${data.details || data.toolName}`);
@@ -864,6 +999,16 @@ socket.on('tool-execution', (data) => {
     // Just log - don't pollute stream text, the card will show it
     addLog('info', data.details);
   } else if (data.status === 'completed' || data.status === 'error') {
+    // Track session stats
+    sessionToolCount++;
+    if (data.status === 'error') {
+      sessionErrors.push({
+        tool: data.toolName,
+        detail: data.toolInput ? (data.toolInput.path || data.toolInput.command || data.toolInput.query || '') : '',
+        error: data.result.substring(0, 200),
+        timestamp: Date.now()
+      });
+    }
     // Render as tool card - insert before current streaming element so it appears inline
     addToolCard(data, currentStreamEl);
     addLog(data.status === 'error' ? 'error' : 'info', 
@@ -883,7 +1028,8 @@ function addToolCard(data, insertBeforeEl) {
   const cleanedResult = cleanToolResult(data.result);
   
   const card = document.createElement('div');
-  card.className = `tool-card${isError ? ' error' : ''}`;
+  // Auto-expand error cards so users can see what went wrong
+  card.className = `tool-card${isError ? ' error expanded' : ''}`;
   card.id = cardId;
   card.dataset.result = cleanedResult; // Store cleaned version for copy
   card.dataset.toolName = data.toolName;
@@ -1868,6 +2014,9 @@ async function sendMessage() {
   // Society Agent start - Reset stream state for new message (fixes continue after network error)
   currentStreamEl = null;
   streamText = '';
+  // Reset session error tracking for new task
+  sessionErrors = [];
+  sessionToolCount = 0;
   // Society Agent end
 
   const welcome = document.getElementById('welcome');
@@ -1998,8 +2147,39 @@ function stopAgent() {
 // Listen for stop confirmation
 socket.on('agent-stopped', (data) => {
   if (data.agentId === AGENT_ID) {
-    addMessage('system', '⛔ Agent stopped');
+    // Build stop summary
+    let stopMsg = '⛔ Agent stopped';
+    if (sessionErrors.length > 0) {
+      stopMsg += ` (${sessionErrors.length} error${sessionErrors.length > 1 ? 's' : ''} occurred)`;
+    }
+    addMessage('system', stopMsg);
+    
+    // Show error summary if there were errors
+    if (sessionErrors.length > 0) {
+      const summaryEl = document.createElement('div');
+      summaryEl.style.cssText = 'margin:8px 20px;padding:12px;background:rgba(248,81,73,0.1);border:1px solid var(--red);border-radius:8px;font-size:12px';
+      summaryEl.innerHTML = `
+        <strong style="color:var(--red)">Errors during this session:</strong>
+        <ul style="margin:8px 0 0 0;padding-left:20px;color:var(--text)">
+          ${sessionErrors.slice(-5).map(e => `<li><code>${e.tool}</code>: ${e.error.substring(0,100)}</li>`).join('')}
+        </ul>
+        <div style="margin-top:8px;color:var(--muted);font-size:11px">
+          💡 Review the red tool cards above for details.
+        </div>
+      `;
+      document.getElementById('messages').appendChild(summaryEl);
+    }
+    
+    // Reset session tracking
+    sessionErrors = [];
+    sessionToolCount = 0;
+    
+    // Clear all streaming state
     isStreaming = false;
+    streamText = '';
+    currentStreamEl = null;
+    lastStreamChunk = ''; // Reset repeat detection
+    repeatCount = 0;
     document.getElementById('sendBtn').disabled = false;
     document.getElementById('stopBtn').style.display = 'none';
     document.getElementById('stopBtn').disabled = false;
@@ -3154,7 +3334,27 @@ function showTyping() {
   document.getElementById('messages').appendChild(el); scrollToBottom();
 }
 function removeTyping() { const el = document.getElementById('typingIndicator'); if (el) el.remove(); }
-function scrollToBottom() { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; }
+
+// Smart scroll - only auto-scroll if user is near bottom (not reading history)
+function scrollToBottom(force = false) { 
+  const m = document.getElementById('messages'); 
+  const isNearBottom = m.scrollHeight - m.scrollTop - m.clientHeight < 150;
+  if (force || isNearBottom) {
+    m.scrollTop = m.scrollHeight; 
+  }
+}
+
+// Show/hide scroll-to-bottom button based on scroll position
+(function setupScrollButton() {
+  const messages = document.getElementById('messages');
+  const scrollBtn = document.getElementById('scrollBottomBtn');
+  if (!messages || !scrollBtn) return;
+  
+  messages.addEventListener('scroll', () => {
+    const isNearBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 150;
+    scrollBtn.style.display = isNearBottom ? 'none' : 'block';
+  });
+})();
 
 // Message actions
 function copyMessage(msgId) {

@@ -5,7 +5,7 @@
 
 import * as fs from "fs"
 import * as path from "path"
-import { ApiHandler, buildApiHandler } from "./api"
+import { ApiHandler, buildApiHandler, buildOpenAIHandler } from "./api"
 import { getLog } from "./logger"
 
 const log = getLog()
@@ -31,6 +31,12 @@ export interface ProviderSettings {
 	minimaxApiKey?: string
 	// Gemini
 	geminiApiKey?: string
+	// DeepSeek
+	deepseekApiKey?: string
+	// Groq
+	groqApiKey?: string
+	// Mistral
+	mistralApiKey?: string
 	// Ollama (local)
 	ollamaModelId?: string
 	// Generic
@@ -85,10 +91,16 @@ export function loadProviderSettings(workspacePath: string): ProviderSettings {
 				settings.geminiApiKey ||
 				settings.minimaxApiKey ||
 				settings.deepseekApiKey ||
+				settings.groqApiKey ||
+				settings.mistralApiKey ||
 				settings.apiKey ||
 				process.env.ANTHROPIC_API_KEY ||
 				process.env.OPENROUTER_API_KEY ||
-				process.env.OPENAI_API_KEY
+				process.env.OPENAI_API_KEY ||
+				process.env.MINIMAX_API_KEY ||
+				process.env.DEEPSEEK_API_KEY ||
+				process.env.GROQ_API_KEY ||
+				process.env.MISTRAL_API_KEY
 			)
 			if (hasApiKey) {
 				log.info(`Loaded ProviderSettings from ${settingsPath}`)
@@ -149,17 +161,115 @@ export async function saveProviderSettings(workspacePath: string, settings: Prov
  * Create API handler from ProviderSettings
  */
 export function buildApiHandlerFromSettings(settings: ProviderSettings): ApiHandler {
-	const apiKey = settings.anthropicApiKey || process.env.ANTHROPIC_API_KEY
-	if (!apiKey) {
-		throw new Error("No Anthropic API key found in settings or environment")
-	}
+	const provider = settings.apiProvider || "anthropic"
 
-	return buildApiHandler({
-		apiKey,
-		model: settings.apiModelId || "claude-sonnet-4-20250514",
-		maxTokens: settings.maxTokens,
-		temperature: settings.temperature,
-	})
+	// Determine API key based on provider
+	let apiKey: string | undefined
+	let model: string | undefined
+
+	switch (provider) {
+		case "anthropic":
+			apiKey = settings.anthropicApiKey || process.env.ANTHROPIC_API_KEY
+			model = settings.apiModelId || "claude-sonnet-4-20250514"
+			if (!apiKey) {
+				throw new Error("No Anthropic API key found in settings or environment")
+			}
+			return buildApiHandler({
+				apiKey,
+				model,
+				maxTokens: settings.maxTokens,
+				temperature: settings.temperature,
+			})
+
+		case "minimax":
+			apiKey = settings.minimaxApiKey || process.env.MINIMAX_API_KEY
+			model = settings.apiModelId || "MiniMax-Text-01"
+			if (!apiKey) {
+				throw new Error("No MiniMax API key found in settings or environment (minimaxApiKey or MINIMAX_API_KEY)")
+			}
+			return buildOpenAIHandler(provider, {
+				apiKey,
+				model,
+				maxTokens: settings.maxTokens,
+				temperature: settings.temperature,
+			})
+
+		case "openai":
+			apiKey = settings.openAiApiKey || process.env.OPENAI_API_KEY
+			model = settings.openAiModelId || settings.apiModelId || "gpt-4o"
+			if (!apiKey) {
+				throw new Error("No OpenAI API key found in settings or environment")
+			}
+			return buildOpenAIHandler(provider, {
+				apiKey,
+				model,
+				maxTokens: settings.maxTokens,
+				temperature: settings.temperature,
+			})
+
+		case "openrouter":
+			apiKey = settings.openRouterApiKey || process.env.OPENROUTER_API_KEY
+			model = settings.openRouterModelId || settings.apiModelId || "anthropic/claude-3.5-sonnet"
+			if (!apiKey) {
+				throw new Error("No OpenRouter API key found in settings or environment")
+			}
+			return buildOpenAIHandler(provider, {
+				apiKey,
+				model,
+				maxTokens: settings.maxTokens,
+				temperature: settings.temperature,
+			})
+
+		case "deepseek":
+			apiKey = settings.deepseekApiKey || settings.apiKey || process.env.DEEPSEEK_API_KEY
+			model = settings.apiModelId || "deepseek-chat"
+			if (!apiKey) {
+				throw new Error("No DeepSeek API key found in settings or environment")
+			}
+			return buildOpenAIHandler(provider, {
+				apiKey,
+				model,
+				maxTokens: settings.maxTokens,
+				temperature: settings.temperature,
+			})
+
+		case "groq":
+			apiKey = settings.groqApiKey || settings.apiKey || process.env.GROQ_API_KEY
+			model = settings.apiModelId || "llama-3.1-70b-versatile"
+			if (!apiKey) {
+				throw new Error("No Groq API key found in settings or environment")
+			}
+			return buildOpenAIHandler(provider, {
+				apiKey,
+				model,
+				maxTokens: settings.maxTokens,
+				temperature: settings.temperature,
+			})
+
+		case "mistral":
+			apiKey = settings.mistralApiKey || settings.apiKey || process.env.MISTRAL_API_KEY
+			model = settings.apiModelId || "mistral-large-latest"
+			if (!apiKey) {
+				throw new Error("No Mistral API key found in settings or environment")
+			}
+			return buildOpenAIHandler(provider, {
+				apiKey,
+				model,
+				maxTokens: settings.maxTokens,
+				temperature: settings.temperature,
+			})
+
+		case "gemini":
+			apiKey = settings.geminiApiKey || process.env.GEMINI_API_KEY
+			if (!apiKey) {
+				throw new Error("No Gemini API key found in settings or environment")
+			}
+			// Gemini uses a different API format - for now fall back to error
+			throw new Error("Gemini provider not yet fully implemented. Please use Anthropic, OpenAI, MiniMax, or OpenRouter.")
+
+		default:
+			throw new Error(`Unknown provider: ${provider}. Supported: anthropic, openai, minimax, openrouter, deepseek, groq, mistral`)
+	}
 }
 
 /**

@@ -183,6 +183,86 @@
   .typing::after { content: '...'; animation: dots 1.5s steps(3) infinite; }
   @keyframes dots { 0% { content: '.'; } 33% { content: '..'; } 66% { content: '...'; } }
 
+  /* Agent Turn Container - like Copilot chat */
+  .agent-turn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin: 8px 0;
+    overflow: hidden;
+  }
+  .agent-turn.completed { border-color: var(--green); border-left: 3px solid var(--green); }
+  .turn-header {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: rgba(88,166,255,0.1);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .turn-agent { color: var(--accent); font-weight: 600; }
+  .turn-time { color: var(--muted); }
+  .turn-content { padding: 12px; }
+  .turn-tools { padding: 0 12px 12px; }
+  .turn-summary {
+    padding: 12px;
+    background: rgba(63,185,80,0.1);
+    border-top: 1px solid var(--green);
+  }
+  .summary-label { font-size: 11px; color: var(--green); font-weight: 600; margin-bottom: 4px; }
+  .summary-text { font-size: 13px; color: var(--text); }
+
+  /* Agent Thinking */
+  .agent-thinking {
+    background: rgba(210,153,34,0.1);
+    border-radius: 6px;
+    padding: 10px;
+    margin-bottom: 8px;
+  }
+  .thinking-label { font-size: 11px; color: var(--yellow); font-weight: 600; margin-bottom: 4px; }
+  .thinking-text { font-size: 13px; color: var(--text); line-height: 1.5; }
+
+  /* Tool Cards */
+  .tool-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin: 6px 0;
+    font-size: 12px;
+  }
+  .tool-card.tool-running { border-left: 3px solid var(--yellow); }
+  .tool-card.tool-success { border-left: 3px solid var(--green); }
+  .tool-card.tool-error { border-left: 3px solid var(--red); }
+  .tool-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .tool-icon { font-size: 14px; }
+  .tool-name { font-weight: 600; color: var(--text); text-transform: capitalize; }
+  .tool-duration { color: var(--muted); margin-left: auto; font-size: 11px; }
+  .tool-input { color: var(--muted); font-family: monospace; font-size: 11px; padding: 4px 0; }
+  .tool-result {
+    color: var(--text);
+    font-size: 11px;
+    padding: 6px;
+    background: rgba(0,0,0,0.2);
+    border-radius: 4px;
+    margin-top: 4px;
+    max-height: 80px;
+    overflow: hidden;
+    font-family: monospace;
+  }
+  .tool-result.result-error { color: var(--red); }
+
+  /* Scroll to bottom button */
+  .scroll-bottom-btn {
+    position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%);
+    padding: 8px 16px; background: var(--accent); color: white; border: none;
+    border-radius: 20px; font-size: 13px; font-weight: 500; cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3); z-index: 100;
+    display: none; /* Hidden by default, shown via JS */
+    transition: opacity 0.2s;
+  }
+  .scroll-bottom-btn:hover { opacity: 0.9; }
+
   /* Input area */
   .input-area { padding: 12px 20px; border-top: 1px solid var(--border); background: var(--surface); }
   .input-row { display: flex; gap: 8px; }
@@ -501,6 +581,10 @@
         </div>
       </div>
     </div>
+    <!-- Scroll to bottom button (appears when scrolled up) -->
+    <button id="scrollBottomBtn" class="scroll-bottom-btn" onclick="scrollToBottom(true)" title="Scroll to bottom">
+      ↓ New messages
+    </button>
 
     <div class="input-area">
       <div id="attachChips" class="attach-chips" style="display:none"></div>
@@ -1087,8 +1171,172 @@ async function resetUsage() {
 setTimeout(fetchLimits, 1500);
 // Society Agent end
 
+// Society Agent - Unified turn management for proper message ordering
+let currentTurnEl = null; // Container for current agent turn
+let currentTextEl = null; // Current text streaming element within the turn
+let turnToolsContainer = null; // Container for tools within current turn
+
+function createAgentTurn(agentName) {
+  // End previous turn if exists
+  if (currentTurnEl) {
+    currentTurnEl.classList.add('completed');
+  }
+  
+  const turn = document.createElement('div');
+  turn.className = 'agent-turn';
+  turn.innerHTML = `
+    <div class="turn-header">
+      <span class="turn-agent">${escapeHtml(agentName)}</span>
+      <span class="turn-time">${new Date().toLocaleTimeString()}</span>
+    </div>
+    <div class="turn-content"></div>
+    <div class="turn-summary" style="display:none;"></div>
+  `;
+  document.getElementById('messages').appendChild(turn);
+  currentTurnEl = turn;
+  turnToolsContainer = turn.querySelector('.turn-content'); // Tools go directly in content, in order
+  scrollToBottom();
+  return turn;
+}
+
+function addThinkingToTurn(text) {
+  if (!currentTurnEl) return;
+  const content = currentTurnEl.querySelector('.turn-content');
+  
+  // Find or create thinking element
+  let thinkingEl = content.querySelector('.agent-thinking');
+  if (!thinkingEl) {
+    thinkingEl = document.createElement('div');
+    thinkingEl.className = 'agent-thinking';
+    thinkingEl.innerHTML = '<div class="thinking-label">💭 Thinking...</div><div class="thinking-text"></div>';
+    content.appendChild(thinkingEl);
+  }
+  
+  const textEl = thinkingEl.querySelector('.thinking-text');
+  textEl.innerHTML = formatMarkdown(text);
+  scrollToBottom();
+}
+
+function addToolCardToTurn(toolName, input, status, result, duration) {
+  if (!turnToolsContainer) {
+    // No turn active - create one
+    createAgentTurn('Agent');
+  }
+  
+  // For 'started' status - create new card
+  // For 'completed'/'error' - try to update existing card for this tool
+  const toolKey = `${toolName}-${JSON.stringify(input || {}).substring(0, 50)}`;
+  
+  const statusIcon = {
+    'started': '⏳',
+    'completed': '✅',
+    'error': '❌'
+  }[status] || '🔧';
+  
+  const statusClass = status === 'error' ? 'tool-error' : status === 'completed' ? 'tool-success' : 'tool-running';
+  
+  // Format tool input nicely - show what's happening
+  let inputDisplay = '';
+  let toolLabel = toolName.replace(/_/g, ' ');
+  
+  if (toolName === 'read_file' || toolName === 'read_project_file') {
+    toolLabel = 'Read File';
+    inputDisplay = input?.path || input?.relativePath || '';
+  } else if (toolName === 'write_file' || toolName === 'write_project_file') {
+    toolLabel = 'Write File';
+    inputDisplay = input?.path || input?.relativePath || '';
+  } else if (toolName === 'edit_file' || toolName === 'edit_project_file') {
+    toolLabel = 'Edit File';
+    inputDisplay = input?.path || input?.relativePath || '';
+  } else if (toolName === 'run_command') {
+    toolLabel = 'Run Command';
+    inputDisplay = (input?.command || '').substring(0, 80);
+  } else if (toolName === 'delegate_task') {
+    toolLabel = 'Delegate';
+    inputDisplay = `→ ${input?.agent_id}: ${(input?.task || '').substring(0, 60)}...`;
+  } else if (toolName === 'list_files' || toolName === 'list_project_files') {
+    toolLabel = 'List Files';
+    inputDisplay = input?.path || '.';
+  } else if (toolName === 'search_files' || toolName === 'search_project') {
+    toolLabel = 'Search';
+    inputDisplay = input?.query || input?.pattern || '';
+  } else {
+    inputDisplay = typeof input === 'string' ? input.substring(0, 80) : JSON.stringify(input || {}).substring(0, 80);
+  }
+  
+  // If completed/error, try to update existing 'started' card
+  if (status === 'completed' || status === 'error') {
+    const existingCards = turnToolsContainer.querySelectorAll('.tool-card.tool-running');
+    for (const card of existingCards) {
+      if (card.dataset.toolKey === toolKey) {
+        // Update this card
+        card.className = `tool-card ${statusClass}`;
+        card.querySelector('.tool-icon').textContent = statusIcon;
+        if (duration) {
+          const durEl = card.querySelector('.tool-duration');
+          if (durEl) durEl.textContent = `${duration}ms`;
+          else card.querySelector('.tool-header').insertAdjacentHTML('beforeend', `<span class="tool-duration">${duration}ms</span>`);
+        }
+        if (result) {
+          let resultEl = card.querySelector('.tool-result');
+          if (!resultEl) {
+            resultEl = document.createElement('div');
+            resultEl.className = 'tool-result';
+            card.appendChild(resultEl);
+          }
+          resultEl.className = `tool-result ${result.startsWith('❌') ? 'result-error' : ''}`;
+          resultEl.textContent = result.substring(0, 150) + (result.length > 150 ? '...' : '');
+        }
+        scrollToBottom();
+        return card;
+      }
+    }
+  }
+  
+  // Create new card
+  const card = document.createElement('div');
+  card.className = `tool-card ${statusClass}`;
+  card.dataset.toolKey = toolKey;
+  card.innerHTML = `
+    <div class="tool-header">
+      <span class="tool-icon">${statusIcon}</span>
+      <span class="tool-name">${escapeHtml(toolLabel)}</span>
+      ${duration ? `<span class="tool-duration">${duration}ms</span>` : ''}
+    </div>
+    <div class="tool-input">${escapeHtml(inputDisplay)}</div>
+    ${result ? `<div class="tool-result ${result.startsWith('❌') ? 'result-error' : ''}">${escapeHtml(result.substring(0, 150))}${result.length > 150 ? '...' : ''}</div>` : ''}
+  `;
+  
+  // Insert BEFORE any streaming text element, so tools appear in order above response
+  if (currentTextEl && currentTextEl.parentNode === turnToolsContainer) {
+    turnToolsContainer.insertBefore(card, currentTextEl);
+  } else {
+    turnToolsContainer.appendChild(card);
+  }
+  scrollToBottom();
+  return card;
+}
+
+function completeTurn(summary) {
+  if (!currentTurnEl) return;
+  
+  if (summary) {
+    const summaryEl = currentTurnEl.querySelector('.turn-summary');
+    summaryEl.style.display = 'block';
+    summaryEl.innerHTML = `<div class="summary-label">📋 Summary</div><div class="summary-text">${formatMarkdown(summary)}</div>`;
+  }
+  
+  currentTurnEl.classList.add('completed');
+  currentTurnEl = null;
+  currentTextEl = null;
+  turnToolsContainer = null;
+  scrollToBottom();
+}
+
 // Streaming agent messages
 let streamDidFire = false;
+let lastStreamChunk = ''; // Detect repeated chunks
+let repeatCount = 0;
 socket.on('agent-message', (data) => {
   // Society Agent - Filter to only show messages for selected agent
   // If an agent is selected and this message is from a different agent, ignore it
@@ -1099,33 +1347,63 @@ socket.on('agent-message', (data) => {
   }
   
   if (data.isStreaming) {
+    // Detect repeating text (model stuck in loop)
+    if (data.message === lastStreamChunk) {
+      repeatCount++;
+      if (repeatCount > 3) {
+        console.warn('Repeated streaming chunk detected, ignoring');
+        return; // Skip duplicate
+      }
+    } else {
+      lastStreamChunk = data.message;
+      repeatCount = 0;
+    }
+    
     streamDidFire = true;
+    
+    // Remove progress indicator when response starts
+    if (lastToolUpdate) {
+      lastToolUpdate.remove();
+      lastToolUpdate = null;
+    }
+    toolCount = 0;
+    
+    // Simple streaming - just show the response
     if (!currentStreamEl) {
       removeTyping();
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'message assistant';
       const senderName = data.agentName || 'Society Agent';
-      currentStreamEl = addMessage('assistant', '', senderName);
-      streamText = '';
+      msgDiv.innerHTML = `<div class="sender">${escapeHtml(senderName)}</div><div class="content"></div>`;
+      document.getElementById('messages').appendChild(msgDiv);
+      currentStreamEl = msgDiv.querySelector('.content');
     }
+    
     streamText += data.message;
-    // Society Agent - Null check in case element was removed from DOM
-    const contentEl = currentStreamEl?.querySelector('.content');
-    if (contentEl) {
-      contentEl.textContent = streamText;
-    }
+    currentStreamEl.innerHTML = formatMarkdown(streamText);
     scrollToBottom();
   } else if (data.isDone) {
-    // Streaming complete - format the final message
+    // Streaming complete
     if (currentStreamEl && streamText) {
-      const contentEl = currentStreamEl.querySelector('.content');
-      if (contentEl) {
-        contentEl.innerHTML = formatMarkdown(streamText);
-      }
+      currentStreamEl.innerHTML = formatMarkdown(streamText);
     }
+    
+    // Clean up
+    if (lastToolUpdate) {
+      lastToolUpdate.remove();
+      lastToolUpdate = null;
+    }
+    toolCount = 0;
+    
     currentStreamEl = null;
+    currentTextEl = null;
+    currentTurnEl = null;
     streamText = '';
     isStreaming = false;
+    lastStreamChunk = '';
+    repeatCount = 0;
     document.getElementById('sendBtn').disabled = false;
-    document.getElementById('stopBtn').style.display = 'none'; // Society Agent - hide stop
+    document.getElementById('stopBtn').style.display = 'none';
     removeTyping();
   }
 });
@@ -1133,6 +1411,8 @@ socket.on('agent-message', (data) => {
 // Purpose events
 socket.on('purpose-started', (data) => {
   addLog('info', `Purpose started: ${data.description}`);
+  // Show task card when a new purpose starts
+  addMessage('system', `🎯 <strong>Task:</strong> ${escapeHtml(data.description)}`);
 });
 
 // Society Agent start - Stop agent function
@@ -1144,14 +1424,19 @@ function stopAgent() {
   socket.emit('stop-agent', { agentId });
   
   // Update UI immediately
-  if (currentStreamEl) {
-    streamText += '\n\n*[Stopped by user]*';
-    const contentEl = currentStreamEl.querySelector('.content');
-    if (contentEl) contentEl.innerHTML = formatMarkdown(streamText);
+  if (currentTextEl) {
+    const stopMsg = document.createElement('div');
+    stopMsg.className = 'agent-stopped';
+    stopMsg.innerHTML = '<em style="color:var(--red);">⛔ Stopped by user</em>';
+    currentTextEl.appendChild(stopMsg);
   }
+  completeTurn();
   currentStreamEl = null;
+  currentTextEl = null;
   streamText = '';
   isStreaming = false;
+  lastStreamChunk = ''; // Reset repeat detection
+  repeatCount = 0;
   document.getElementById('sendBtn').disabled = false;
   document.getElementById('stopBtn').style.display = 'none';
   removeTyping();
@@ -1159,26 +1444,31 @@ function stopAgent() {
 }
 // Society Agent end
 
-// Society Agent start - Show tool executions in chat so user sees what agent is doing
+// Society Agent - Show tool executions as simple progress (not cards)
+let toolCount = 0;
+let lastToolUpdate = null;
 socket.on('tool-execution', (data) => {
-  // Only show for selected agent (or if no agent selected, show all)
+  // Only track for selected agent
   if (selectedAgentId && data.agentId && data.agentId !== selectedAgentId) {
-    addLog('info', `[${data.agentName || data.agentId}] ${data.details}`);
     return;
   }
   
-  // Show tool execution as a progress message
+  // Just count tools, show simple progress
   if (data.status === 'started') {
-    const toolMsg = `\n🔧 **${data.details}**\n`;
-    if (currentStreamEl) {
-      streamText += toolMsg;
-      const contentEl = currentStreamEl.querySelector('.content');
-      if (contentEl) contentEl.textContent = streamText;
-      scrollToBottom();
-    } else {
-      // No stream active - show as system message
-      addMessage('system', `🔧 ${escapeHtml(data.details)}`);
+    toolCount++;
+    // Update or create progress indicator
+    if (!lastToolUpdate) {
+      lastToolUpdate = document.createElement('div');
+      lastToolUpdate.className = 'tool-progress';
+      lastToolUpdate.style.cssText = 'color:var(--muted);font-size:12px;padding:4px 8px;';
+      const messages = document.getElementById('messages');
+      messages.appendChild(lastToolUpdate);
     }
+    lastToolUpdate.innerHTML = `⏳ Working... (${data.toolName.replace(/_/g, ' ')})`;
+    scrollToBottom();
+  } else if (data.status === 'error') {
+    // Only show errors
+    addMessage('system', `❌ Error in ${data.toolName}: ${(data.result || 'failed').substring(0, 100)}`);
   }
 });
 // Society Agent end
@@ -1193,8 +1483,77 @@ socket.on('progress-update', (data) => {
 });
 
 socket.on('agent-status-change', (data) => {
-  addLog('info', `Agent ${data.agentId}: ${data.status}`);
+  // Only log significant status changes
+  if (data.status === 'error' || data.status === 'stopped') {
+    addLog(data.status === 'error' ? 'error' : 'warn', `Agent ${data.agentId}: ${data.status}`);
+  }
   loadProjects();
+});
+
+// Society Agent - Task started event shows what was asked
+socket.on('task-started', (data) => {
+  // No log - the task card shows visually
+  // Create a new turn for this task
+  const turnId = createAgentTurn(data.agentId, data.agentName);
+  // Add task card showing what was asked
+  const taskHtml = `<div class="task-card" style="background:linear-gradient(145deg,#1a1f26,#21262d);border:2px solid #58a6ff;border-radius:8px;padding:12px;margin-bottom:10px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      <span style="background:#58a6ff;color:#0d1117;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;">TASK</span>
+      <span style="color:#8b949e;font-size:12px;">${new Date(data.timestamp).toLocaleTimeString()}</span>
+    </div>
+    <div style="color:#c9d1d9;line-height:1.5;">${data.task}</div>
+  </div>`;
+  const currentTurn = document.querySelector(`[data-turn-id="${turnId}"] .turn-content`);
+  if (currentTurn) {
+    currentTurn.insertAdjacentHTML('afterbegin', taskHtml);
+  }
+});
+
+// Society Agent - Delegation visibility events
+socket.on('task-delegated', (data) => {
+  addLog('info', `📋 Task delegated: ${data.fromAgentName || data.fromAgent} → ${data.toAgentName || data.toAgent}`);
+  const priorityBadge = data.priority === 'critical' ? '🔴' : data.priority === 'high' ? '🟠' : data.priority === 'medium' ? '🟡' : '🟢';
+  addMessage('system', `${priorityBadge} <strong>Delegation:</strong> ${data.fromAgentName || data.fromAgent} → ${data.toAgentName || data.toAgent}<br><em>${data.task}</em>`);
+});
+
+socket.on('delegation-message', (data) => {
+  addLog('info', `📨 Delegation message: ${data.fromAgentName} → ${data.toAgentName}`);
+  // Show detailed delegation in a collapsible format
+  let html = `<div class="delegation-card" style="background:#1c2128;border:1px solid #30363d;border-radius:6px;padding:10px;margin:5px 0;">`;
+  html += `<div style="color:#58a6ff;font-weight:600;">📋 Task from ${data.fromAgentName}</div>`;
+  html += `<div style="margin:5px 0;"><strong>Task:</strong> ${data.task}</div>`;
+  if (data.desired_state) html += `<div style="margin:5px 0;color:#8b949e;"><strong>Desired State:</strong> ${data.desired_state.substring(0, 200)}${data.desired_state.length > 200 ? '...' : ''}</div>`;
+  if (data.acceptance_criteria?.length) html += `<div style="margin:5px 0;color:#3fb950;"><strong>Acceptance:</strong> ${data.acceptance_criteria.length} criteria</div>`;
+  html += `</div>`;
+  addMessage('system', html);
+});
+
+socket.on('agent-report', (data) => {
+  const statusIcon = {
+    'in_progress': '🔄',
+    'completed': '✅',
+    'blocked': '🚫',
+    'needs_info': '❓',
+    'failed': '❌'
+  }[data.status] || '📝';
+  addLog(data.status === 'failed' ? 'error' : data.status === 'blocked' ? 'warn' : 'info', 
+    `${statusIcon} Report from ${data.fromAgentName}: ${data.summary}`);
+  
+  let html = `<div class="report-card" style="background:#1c2128;border:1px solid ${data.status === 'completed' ? '#3fb950' : data.status === 'blocked' ? '#f85149' : '#30363d'};border-radius:6px;padding:10px;margin:5px 0;">`;
+  html += `<div style="font-weight:600;">${statusIcon} Report from ${data.fromAgentName}</div>`;
+  html += `<div><strong>Status:</strong> ${data.status}</div>`;
+  html += `<div>${data.summary}</div>`;
+  if (data.completion_percentage !== undefined) html += `<div style="color:#58a6ff;">Progress: ${data.completion_percentage}%</div>`;
+  if (data.blockers?.length) html += `<div style="color:#f85149;">Blockers: ${data.blockers.join(', ')}</div>`;
+  if (data.questions?.length) html += `<div style="color:#d29922;">Questions: ${data.questions.join(', ')}</div>`;
+  html += `</div>`;
+  addMessage('system', html);
+});
+
+// Society Agent - Progress updates for long-running autonomous tasks
+socket.on('agent-progress', (data) => {
+  addLog('info', `📊 ${data.agentName} progress: iteration ${data.iteration}, ${data.totalFilesCreated} files created`);
+  // Don't spam the chat with every progress update, just log it
 });
 
 // File creation events
@@ -2473,10 +2832,25 @@ function removeTyping() {
   if (el) el.remove();
 }
 
-function scrollToBottom() {
+function scrollToBottom(force = false) {
   const m = document.getElementById('messages');
-  m.scrollTop = m.scrollHeight;
+  const isNearBottom = m.scrollHeight - m.scrollTop - m.clientHeight < 150;
+  if (force || isNearBottom) {
+    m.scrollTop = m.scrollHeight;
+  }
 }
+
+// Show/hide scroll-to-bottom button based on scroll position
+(function setupScrollButton() {
+  const messages = document.getElementById('messages');
+  const scrollBtn = document.getElementById('scrollBottomBtn');
+  if (!messages || !scrollBtn) return;
+  
+  messages.addEventListener('scroll', () => {
+    const isNearBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 150;
+    scrollBtn.style.display = isNearBottom ? 'none' : 'block';
+  });
+})();
 
 // Society Agent start - Enhanced status with reconnection message
 function setStatus(online, statusMsg) {

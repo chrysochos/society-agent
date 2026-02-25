@@ -14,6 +14,16 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
     background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+  
+  /* Disconnected state */
+  body.disconnected::before {
+    content: '⚠ Disconnected - Reconnecting...';
+    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+    background: var(--red); color: white; text-align: center;
+    padding: 8px; font-size: 13px; font-weight: 500;
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse { 50% { opacity: 0.7; } }
 
   /* Header */
   header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 24px;
@@ -877,7 +887,30 @@
 
 <script>
 const API = window.location.origin;
-const socket = io(API);
+const socket = io(API, {
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000,
+  timeout: 20000,
+});
+
+// Reconnection handling
+socket.on('connect', () => {
+  console.log('Connected to server');
+  document.body.classList.remove('disconnected');
+  // Reload project data after reconnect
+  if (projectId) loadProject();
+});
+
+socket.on('disconnect', (reason) => {
+  console.log('Disconnected:', reason);
+  document.body.classList.add('disconnected');
+});
+
+socket.on('reconnect_attempt', (attempt) => {
+  console.log('Reconnecting... attempt', attempt);
+});
 
 // Extract project ID from URL: /project/:projectId
 const pathParts = window.location.pathname.split('/');

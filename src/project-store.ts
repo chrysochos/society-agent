@@ -474,6 +474,11 @@ export class ProjectStore {
 	public projectsBaseDir: string // Society Agent - made public for file path calculations
 
 	constructor(workspacePath: string) {
+		// Defensive check
+		if (!workspacePath) {
+			console.error(`[ProjectStore] workspacePath is undefined, falling back to /workspaces/society-agent`)
+			workspacePath = "/workspaces/society-agent"
+		}
 		this.projectsBaseDir = path.join(workspacePath, "projects")
 		const metaDir = path.join(this.projectsBaseDir, ".society")
 		this.storePath = path.join(metaDir, "projects.json")
@@ -954,6 +959,16 @@ When learning organically → add to KNOWLEDGE.md as playbook
 
 	/** Get the resolved home directory for an agent within a project */
 	agentHomeDir(projectId: string, agentId: string): string {
+		// Defensive checks
+		if (!projectId) {
+			console.error(`[agentHomeDir] projectId is ${projectId}`)
+			projectId = "unknown"
+		}
+		if (!agentId) {
+			console.error(`[agentHomeDir] agentId is ${agentId}`)
+			agentId = "unknown"
+		}
+		
 		const project = this.get(projectId)
 		const agent = project?.agents.find((a) => a.id === agentId)
 		const projectFolder = project?.folder || projectId

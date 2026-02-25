@@ -61,6 +61,9 @@ import { settings as standaloneSettings, initializeSettings, getSettingsSummary,
 // Society Agent start - MCP server integration
 import { initMcpManager, getMcpManager } from "./mcp-client"
 // Society Agent end
+// Society Agent start - git loader for project history
+import { initGitLoader, getGitLoader } from "./git-loader"
+// Society Agent end
 
 const app = express()
 const server = http.createServer(app)
@@ -72,7 +75,7 @@ const io = new SocketIOServer(server, {
 	// Society Agent end
 })
 
-const PORT = process.env.PORT || 4000
+const PORT = parseInt(process.env.PORT || "4000", 10)
 const NODE_ENV = process.env.NODE_ENV || "development"
 const log = getLog()
 
@@ -95,6 +98,56 @@ let societyManager: SocietyManager | null = null
 const connectedClients = new Set<string>()
 let userAgent: ConversationAgent | null = null // Single agent for user conversations
 const stoppedAgents = new Set<string>() // Society Agent - track agents that should stop
+
+// Society Agent - MCP rate limiting to prevent runaway tool usage
+interface McpRateLimitState {
+	callCount: number
+	lastResetTime: number
+	errorCount: number
+}
+const mcpRateLimits = new Map<string, McpRateLimitState>() // key: agentId:serverName
+const MCP_RATE_LIMIT = 10 // max calls per window
+const MCP_RATE_WINDOW_MS = 60000 // 1 minute window
+const MCP_MAX_CONSECUTIVE_ERRORS = 3
+
+function checkMcpRateLimit(agentId: string, serverName: string): { allowed: boolean; message?: string } {
+	const key = `${agentId}:${serverName}`
+	const now = Date.now()
+	let state = mcpRateLimits.get(key)
+	
+	if (!state || now - state.lastResetTime > MCP_RATE_WINDOW_MS) {
+		state = { callCount: 0, lastResetTime: now, errorCount: 0 }
+		mcpRateLimits.set(key, state)
+	}
+	
+	state.callCount++
+	
+	if (state.callCount > MCP_RATE_LIMIT) {
+		return { 
+			allowed: false, 
+			message: `⚠️ Rate limit exceeded: ${serverName} called ${state.callCount} times in the last minute. Wait before retrying. Consider a different approach.` 
+		}
+	}
+	
+	return { allowed: true }
+}
+
+function recordMcpError(agentId: string, serverName: string): boolean {
+	const key = `${agentId}:${serverName}`
+	let state = mcpRateLimits.get(key)
+	if (!state) {
+		state = { callCount: 0, lastResetTime: Date.now(), errorCount: 0 }
+		mcpRateLimits.set(key, state)
+	}
+	state.errorCount++
+	return state.errorCount >= MCP_MAX_CONSECUTIVE_ERRORS
+}
+
+function resetMcpErrors(agentId: string, serverName: string): void {
+	const key = `${agentId}:${serverName}`
+	const state = mcpRateLimits.get(key)
+	if (state) state.errorCount = 0
+}
 
 // Society Agent start - system pause/resume for external oversight
 let systemPaused = false
@@ -168,6 +221,39 @@ const BASE_AGENT_RULES = `
 ## TALK TO USER - DON'T WRITE STATUS FILES
 You are having a conversation with a human. TALK to them directly in the chat.
 
+### 🚫 DON'T ECHO TOOL RESULTS AS CARDS
+When you use tools (read_file, run_command, etc.), the user already sees the tool execution happening.
+**DO NOT** repeat the tool results back in card-like format in your response.
+
+❌ DON'T DO THIS:
+\`\`\`
+📄 Read File
+package.json
+40 lines
+>
+{ "name": "my-app"...
+Copy Result
+\`\`\`
+
+✅ DO THIS INSTEAD:
+"I checked package.json and see that the project uses React 18 with Vite."
+
+❌ DON'T DO THIS:
+\`\`\`
+💻 Terminal
+npm run build
+✅ Completed
+\`\`\`
+
+✅ DO THIS INSTEAD:
+"The build completed successfully."
+
+**Summary:**
+- Use tools silently - don't announce each one
+- Summarize what you learned/did, not what tools you ran
+- If something fails, explain the error naturally
+- Talk like a human, not like a machine log
+
 ### ❌ NEVER DO THIS:
 - Writing progress-report.md, status.md, execution-log.md files
 - Creating markdown files to "report" your status
@@ -208,7 +294,24 @@ Update these files when you:
 
 This is YOUR memory - if you don't write it down, you'll forget it next session!
 
-### 📢 End Every Response With Summary & Status
+### � File Location Rules - CRITICAL
+**You are a persistent agent. By design, you ONLY write files in YOUR project folder.**
+
+Your project folder is: \`projects/<your-project-name>/\`
+
+- **README.md** → \`projects/<your-project>/README.md\`
+- **Source code** → \`projects/<your-project>/src/\`
+- **Documentation** → \`projects/<your-project>/docs/\`
+- **AGENTS.md, KNOWLEDGE.md** → \`projects/<your-project>/\`
+
+❌ **NEVER write to:**
+- Root workspace folder
+- Other agent's project folders
+- Random locations outside your project
+
+When asked to "create a README", create it at \`projects/<your-project>/README.md\` - not anywhere else!
+
+### �📢 End Every Response With Summary & Status
 After completing work, give the user a helpful summary in chat:
 1. **What was accomplished** - Key deliverables, files created, features added
 2. **What you should know** - Important decisions made, caveats, dependencies
@@ -231,6 +334,169 @@ I've set up the basic project structure with frontend and backend folders.
 **What I did:** Created project structure with React frontend, Express backend
 **Next:** Ready for you to tell me what features to build
 \`\`\`
+
+### 📦 Single Source of Truth
+Each object type (backend code, frontend code, types, configs, tests) has ONE canonical location.
+- ❌ Never spread the same type across multiple directories
+- ❌ Never duplicate code between folders
+- ✅ Pick one location, use it consistently
+
+### ✅ Verify Before Claiming - THIS IS MANDATORY
+**You MUST actually test things before claiming they work.**
+
+- **Servers**: After starting a server, run \`curl http://localhost:PORT/...\` to PROVE it responds
+  - If curl fails, the server is NOT running - don't claim it is
+  - Background processes may fail silently - always verify with an actual request
+- **Code**: Run \`tsc\` or the compiler to verify no errors before claiming "no errors"
+- **Files**: Use \`ls\` or \`cat\` to verify files exist before claiming they're created
+- **Tests**: Run the actual test command and check the output
+
+❌ NEVER say "it works" or "server is running" based on assumptions
+❌ NEVER claim success because a command "should have worked"  
+✅ ALWAYS show the actual verification output in your response
+✅ If verification fails, admit it and debug - don't pretend it succeeded
+
+### 🔌 Port Verification - CRITICAL
+**NEVER assume default ports. ALWAYS check config files.**
+
+- **Before claiming a port**: Check \`vite.config.ts\`, \`package.json\`, or config files for the actual port
+- **Vite default is 5173** but projects often override this - CHECK \`server.port\` in vite.config
+- **Express/Node default varies** - CHECK the code or config for the actual port
+- **To verify a port is in use**: \`lsof -i :PORT\` or \`netstat -tlnp | grep PORT\`
+- **To verify a service responds**: \`curl -s http://localhost:PORT/\`
+
+**Correct verification flow:**
+1. Check config file for actual port setting
+2. Start the server
+3. Run \`lsof -i :PORT\` to confirm process is listening
+4. Run \`curl http://localhost:PORT/\` to confirm it responds
+5. ONLY THEN claim "server running on PORT"
+
+❌ NEVER say "running on 5173" without checking vite.config.ts
+❌ NEVER say "running on 3000" without checking the actual config
+✅ ALWAYS grep config files: \`grep -r "port" vite.config.ts\`
+✅ ALWAYS verify with curl BEFORE claiming success
+
+### 🔍 Debug Failures Properly
+**When something fails, capture and report the ACTUAL error.**
+
+- **Don't guess** - run the command and capture stderr: \`command 2>&1\`
+- **Don't repeat blindly** - if it failed once, investigate WHY before retrying
+- **Check logs**: Look for .log files, check \`journalctl\`, or process output
+- **Check process status**: \`ps aux | grep process-name\`
+
+❌ NEVER say "command not found" without checking PATH and which command
+❌ NEVER retry the same failed command 5 times hoping it magically works
+✅ Capture error output: \`npm run dev 2>&1 | tail -20\`
+✅ Check if binary exists: \`which npm\`, \`ls node_modules/.bin/\`
+✅ Report the ACTUAL error message to the user
+
+### 🔄 Re-Verify After Fixes
+**After fixing an error, you MUST re-run the verification command.**
+
+- Fixed TypeScript errors? Run \`tsc --noEmit\` again and show the output
+- Fixed a bug? Run the failing command again to prove it works
+- ❌ NEVER show old/cached error output after making fixes
+- ✅ ALWAYS re-run the check and show FRESH output
+
+### 🔁 Error Correction Loop - AUTOMATIC
+**When you encounter an error, you MUST automatically fix it and retry. Do NOT stop and wait for instructions.**
+
+The correct workflow is:
+1. Run a command → get an error
+2. Analyze the error and identify the fix
+3. Apply the fix
+4. Re-run the SAME command to verify
+5. If still errors, repeat steps 2-4
+6. Only report success when verification passes
+
+❌ NEVER stop after seeing an error and ask "should I fix this?"
+❌ NEVER report errors without attempting to fix them
+❌ NEVER claim you're "done" when there are unresolved errors
+✅ ALWAYS attempt to fix errors automatically
+✅ ALWAYS re-verify after applying fixes
+✅ Keep iterating until the task succeeds or you truly cannot fix it
+
+Example:
+- \`npm run build\` fails with "Cannot find module '../data-source'"
+- You should IMMEDIATELY fix the import path
+- Then run \`npm run build\` again
+- If it passes, continue. If more errors, fix those too.
+
+### 🎯 AUTONOMOUS WORK - DESIRED STATE
+If you have a DESIRED_STATE.md file in your folder, you should work autonomously to achieve it.
+
+**Check for desired state on startup:**
+1. Read your DESIRED_STATE.md if it exists
+2. Understand what you need to achieve
+3. Work autonomously toward that goal
+4. Report progress using \`report_to_supervisor\` tool
+
+**Using report_to_supervisor:**
+- \`status: "in_progress"\` - You're making progress
+- \`status: "completed"\` - You finished ALL acceptance criteria
+- \`status: "blocked"\` - You cannot continue without help
+- \`status: "needs_info"\` - You have questions that need answers
+- \`status: "failed"\` - You cannot complete the task
+
+**When to report:**
+- Completing significant milestones (50%, 100%)
+- Encountering blockers you cannot solve
+- Needing clarification on requirements
+- Finishing all acceptance criteria
+
+**Example report:**
+\`\`\`
+report_to_supervisor({
+  status: "blocked",
+  summary: "Cannot access database",
+  details: "The database credentials in .env are invalid",
+  completion_percentage: 30,
+  blockers: ["Invalid DB_PASSWORD in .env", "Cannot create tables"],
+  questions: ["What are the correct database credentials?"]
+})
+\`\`\`
+
+### 🏃 AUTONOMOUS MODE - Work Until Done!
+You are an **autonomous agent**. You can run up to 100 iterations per request.
+- **Keep working** until the task is fully complete
+- **Don't stop early** - if there's more work to do, keep going
+- **Self-verify** - after finishing, verify your work meets acceptance criteria
+- **Report completion** - use report_to_supervisor when truly done
+
+If you hit 100 iterations:
+- A checkpoint message will appear
+- The supervisor can send "continue" to let you keep working
+- This is normal for large tasks - don't treat it as a failure
+
+**The goal is COMPLETION, not stopping at arbitrary limits.**
+
+### 🔗 Import Safety
+Every import must resolve to an existing file.
+- ❌ Never import from a path that hasn't been created yet
+- ✅ Create the file first, then import it
+- ✅ Check that imported modules exist
+
+
+### 🚨 CRITICAL: Protected Ports & Processes
+**NEVER kill, stop, or interfere with these system resources:**
+
+- **Port 4000** - Society Agent system server (YOUR HOST - killing it kills YOU)
+- **Port 3001** - Related system services
+- **Any process running \`society-server\`** - The system that runs you
+
+❌ NEVER run \`pkill\`, \`kill\`, or \`fuser -k\` on port 4000
+❌ NEVER run commands that would stop the society-server
+❌ NEVER try to "free up" port 4000 - it's supposed to be in use
+✅ Your server should use a DIFFERENT port (6001, 8080, 3000, etc.)
+✅ If port conflict, pick another port - don't kill existing processes
+
+**If you kill port 4000, you destroy the entire agent system.**
+
+### 🧹 Clean Up After Yourself
+- Delete temporary files when done
+- Remove status reports and progress files
+- Keep the project clean - no leftover artifacts
 
 ---
 
@@ -2418,7 +2684,15 @@ app.post("/api/agent/:agentId/pause", async (req, res) => {
  */
 app.post("/api/agent/:agentId/stop", async (req, res) => {
 	try {
-		res.status(501).json({ error: "Agent stop not yet implemented", agentId: req.params.agentId })
+		const agentId = req.params.agentId
+		log.info(`REST API stop request for agent: ${agentId}`)
+		// Add to stopped set - the agentic loop will check this
+		stoppedAgents.add(agentId)
+		// Clear after a timeout (in case request already finished)
+		setTimeout(() => stoppedAgents.delete(agentId), 30000)
+		// Emit via socket for UI update
+		io.emit("agent-stopped", { agentId })
+		res.json({ success: true, agentId, message: "Stop signal sent" })
 	} catch (error) {
 		res.status(500).json({ error: String(error) })
 	}
@@ -2668,6 +2942,33 @@ app.get("/api/projects/:id", (req, res): void => {
 })
 
 /**
+ * GET /api/projects/:id/git/log - Get git commit history for a project
+ */
+app.get("/api/projects/:id/git/log", (req, res): void => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+		
+		const gitLoader = getGitLoader()
+		if (!gitLoader) {
+			res.status(500).json({ error: "Git loader not initialized" })
+			return
+		}
+		
+		const limit = parseInt(req.query.limit as string) || 50
+		const branch = req.query.branch as string | undefined
+		
+		const result = gitLoader.getLog(req.params.id, { limit, branch })
+		res.json(result)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
  * POST /api/projects - Create a new project
  * Body: { id, name, description, folder?, agents?: [...] }
  */
@@ -2753,6 +3054,49 @@ This is the #1 cause of failures. Install first, run second.
 - Workers automatically claim tasks, execute them, and self-destruct
 - Use \`list_tasks()\` to see task status
 - Use \`get_worker_status()\` to monitor workers
+
+## 📋 DELEGATION WITH DETAILED SPECS - MANDATORY!
+When delegating to sub-agents, you MUST provide detailed specifications:
+
+**Required for every delegate_task call:**
+1. **task** - Clear task title/summary
+2. **desired_state** - EXACTLY what should exist when done (files, behavior, outputs)
+3. **acceptance_criteria** - Specific checkable items to verify completion
+4. **constraints** - What NOT to do, boundaries
+5. **context** - Why this matters, how it fits the project
+
+**Example delegation:**
+\`\`\`
+delegate_task({
+  agent_id: "backend-dev",
+  task: "Create REST API for user authentication",
+  desired_state: "A working /api/auth endpoint with login, logout, and register routes. JWT tokens for sessions. Password hashing with bcrypt. Returns proper HTTP status codes.",
+  acceptance_criteria: [
+    "POST /api/auth/register creates user and returns 201",
+    "POST /api/auth/login returns JWT token",
+    "Protected routes return 401 without valid token",
+    "Passwords are hashed, never stored plain"
+  ],
+  constraints: [
+    "Don't modify existing routes",
+    "Use existing database connection",
+    "No third-party auth providers"
+  ],
+  context: "This is the foundation for all user features. Other agents will build on this."
+})
+\`\`\`
+
+**Sub-agents will:**
+- Receive the full specs
+- Have specs saved to their DESIRED_STATE.md
+- Work autonomously to achieve the desired state
+- Report back using \`report_to_supervisor\` tool
+- Ask questions if blocked or need clarification
+
+**You should:**
+- Monitor agent reports (watch for "agent-report" events)
+- Answer questions when agents are blocked
+- Verify completed work meets acceptance criteria
 
 ## Deciding Worker Count
 Think about parallelism:
@@ -3639,14 +3983,43 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 	},
 	{
 		name: "delegate_task",
-		description: "Delegate a task to another agent and wait for their response. Use this to get help from specialized agents or distribute work.",
+		description: `Delegate a task to another agent with DETAILED SPECIFICATIONS. The agent will work autonomously on these specs.
+
+REQUIRED: You MUST provide detailed specs including:
+1. DESIRED STATE - Exactly what should exist when done (files, behavior, output)
+2. ACCEPTANCE CRITERIA - How to verify the work is complete
+3. CONSTRAINTS - What NOT to do, boundaries, limitations
+4. CONTEXT - Why this is needed, how it fits the bigger picture
+
+The specs will be saved to the agent's DESIRED_STATE.md for autonomous work.`,
 		input_schema: {
 			type: "object" as const,
 			properties: {
 				agent_id: { type: "string", description: "ID of the agent to delegate to" },
-				task: { type: "string", description: "Full task description with all context needed" },
+				task: { type: "string", description: "Brief task title/summary" },
+				desired_state: { type: "string", description: "DETAILED description of what should exist when done - files, features, behavior" },
+				acceptance_criteria: { type: "array", items: { type: "string" }, description: "List of specific criteria to verify completion" },
+				constraints: { type: "array", items: { type: "string" }, description: "What NOT to do, limitations, boundaries" },
+				context: { type: "string", description: "Why this is needed, how it fits the project" },
+				priority: { type: "string", enum: ["low", "medium", "high", "critical"], description: "Task priority. Default: medium" },
 			},
-			required: ["agent_id", "task"],
+			required: ["agent_id", "task", "desired_state", "acceptance_criteria"],
+		},
+	},
+	{
+		name: "report_to_supervisor",
+		description: "Report status, completion, or blockers to your supervisor. Use this to communicate progress, ask questions, or request help.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				status: { type: "string", enum: ["in_progress", "completed", "blocked", "needs_info", "failed"], description: "Current status of your work" },
+				summary: { type: "string", description: "Brief summary of what you've done or your situation" },
+				details: { type: "string", description: "Detailed information - completed work, blockers, questions" },
+				completion_percentage: { type: "number", description: "Estimated completion 0-100" },
+				blockers: { type: "array", items: { type: "string" }, description: "List of things blocking progress" },
+				questions: { type: "array", items: { type: "string" }, description: "Questions you need answered to proceed" },
+			},
+			required: ["status", "summary"],
 		},
 	},
 	{
@@ -3762,6 +4135,17 @@ async function executeAgentTool(
 	io: SocketIOServer,
 	apiKey?: string, // Society Agent - Optional API key for spawning sub-agents
 ): Promise<{ result: string; filesCreated: number }> {
+	// Society Agent start - Defensive checks
+	if (!project || !project.id) {
+		log.error(`[executeAgentTool] Invalid project passed to tool execution`)
+		return { result: `❌ Internal error: Invalid project context`, filesCreated: 0 }
+	}
+	if (!agentConfig || !agentConfig.id) {
+		log.error(`[executeAgentTool] Invalid agentConfig passed to tool execution`)
+		return { result: `❌ Internal error: Invalid agent config`, filesCreated: 0 }
+	}
+	// Society Agent end
+	
 	// Society Agent start - Determine the working folder
 	// For ephemeral workers: use parent agent's folder (the one who spawned them)
 	// For persistent agents: use their own folder
@@ -4009,10 +4393,36 @@ async function executeAgentTool(
 				log.error(`[Worker ${agentConfig.name}] run_command received invalid command: ${JSON.stringify(toolInput)}`)
 				return { result: `❌ Error: run_command requires a valid 'command' string parameter. Received: ${JSON.stringify(toolInput)}`, filesCreated: 0 }
 			}
+			
+			// CRITICAL: Block commands that would kill the system server
+			const dangerousPatterns = [
+				/kill.*4000/i,
+				/pkill.*4000/i,
+				/fuser.*-k.*4000/i,
+				/lsof.*-t.*4000.*\|.*kill/i,
+				/kill.*society/i,
+				/pkill.*society/i,
+				/pkill.*tsx.*society/i,
+				/kill.*-9.*$(.*4000)/i,
+			]
+			
+			const isDangerous = dangerousPatterns.some(pattern => pattern.test(command))
+			if (isDangerous) {
+				log.warn(`[BLOCKED] Agent ${agentConfig.name} tried to run dangerous command: ${command}`)
+				return { 
+					result: `🚨 **BLOCKED: This command would kill the system server!**\n\nPort 4000 is the Society Agent system - killing it would destroy yourself and all other agents.\n\n✅ Use a different port for YOUR server (6001, 8080, 3000, etc.)\n❌ Never try to kill processes on port 4000`, 
+					filesCreated: 0 
+				}
+			}
 			// Society Agent end
 
 			// Society Agent - Use workingFolder for commands
 			log.info(`[Worker ${agentConfig.name}] Running: ${command} (cwd: ${workingFolder}, bg: ${background || false})`)
+			
+			// Check if working directory exists
+			if (!fs.existsSync(workingFolder)) {
+				return { result: `❌ Working directory not found: ${workingFolder}\n\n💡 The directory may not exist yet. Check the path or create it first.`, filesCreated: 0 }
+			}
 
 			io.emit("system-event", {
 				type: "command-start",
@@ -4212,19 +4622,29 @@ async function executeAgentTool(
 				return { result: `❌ You cannot ask yourself questions. Save your own notes with write_file.`, filesCreated: 0 }
 			}
 
-			log.info(`[Worker ${agentConfig.name}] Asking ${targetAgent.name}: ${question.substring(0, 80)}...`)
+			log.info(`[${agentConfig.name}] Asking ${targetAgent.name}: ${question.substring(0, 80)}...`)
 			
+			// Show in REQUESTER's panel: "I'm asking X..."
 			io.emit("agent-message", {
 				agentId: agentConfig.id,
 				agentName: agentConfig.name,
 				projectId: project.id,
 				message: `\n💬 **Asking ${targetAgent.name}:** ${question}\n`,
 				timestamp: Date.now(),
-				isStreaming: true,
+				isStreaming: false,
+			})
+			
+			// Show in TARGET's panel: "X is asking me..."
+			io.emit("agent-message", {
+				agentId: targetAgent.id,
+				agentName: targetAgent.name,
+				projectId: project.id,
+				message: `\n📨 **Question from ${agentConfig.name}:** ${question}\n`,
+				timestamp: Date.now(),
+				isStreaming: false,
 			})
 
 			try {
-				// Society Agent start - use createOneShot for inter-agent communication
 				const targetFolder = projectStore.agentHomeDir(project.id, targetAgent.id)
 				const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 				
@@ -4236,21 +4656,44 @@ Another agent (${agentConfig.name}) is asking you a question. Answer briefly and
 If you don't know, say so. Be concise.`,
 					`[Question from ${agentConfig.name}]: ${question}`
 				)
-				// Society Agent end
 				
+				// Show answer in REQUESTER's panel (the agent who asked)
 				io.emit("agent-message", {
 					agentId: agentConfig.id,
 					agentName: agentConfig.name,
 					projectId: project.id,
-					message: `\n💬 **${targetAgent.name} replied:** ${answer || '(no response)'}\n`,
+					message: `\n✅ **${targetAgent.name} replied:**\n${answer || '(no response)'}\n`,
 					timestamp: Date.now(),
-					isStreaming: true,
+					isStreaming: false,
+				})
+				
+				// Also show in TARGET's panel so they see what they "said"
+				io.emit("agent-message", {
+					agentId: targetAgent.id,
+					agentName: targetAgent.name,
+					projectId: project.id,
+					message: `\n📤 **My reply to ${agentConfig.name}:**\n${answer || '(no response)'}\n`,
+					timestamp: Date.now(),
+					isStreaming: false,
 				})
 
+				log.info(`[${agentConfig.name}] Got reply from ${targetAgent.name}: ${(answer || '').substring(0, 80)}...`)
 				return { result: `📨 **Response from ${targetAgent.name}:**\n${answer || '(no response)'}`, filesCreated: 0 }
 			} catch (err: any) {
-				log.error(`[Worker ${agentConfig.name}] ask_agent failed:`, err)
-				return { result: `❌ Failed to reach ${targetAgent.name}: ${err.message}`, filesCreated: 0 }
+				log.error(`[${agentConfig.name}] ask_agent failed:`, err)
+				
+				// Show error in both panels
+				const errorMsg = `❌ Failed to reach ${targetAgent.name}: ${err.message}`
+				io.emit("agent-message", {
+					agentId: agentConfig.id,
+					agentName: agentConfig.name,
+					projectId: project.id,
+					message: `\n${errorMsg}\n`,
+					timestamp: Date.now(),
+					isStreaming: false,
+				})
+				
+				return { result: errorMsg, filesCreated: 0 }
 			}
 		}
 
@@ -4456,11 +4899,25 @@ If you don't know, say so. Be concise.`,
 
 		case "use_mcp": {
 			const { server_name, tool_name, params } = toolInput as { server_name: string; tool_name: string; params?: any }
+			
+			// Society Agent - Apply rate limiting for MCP tools
+			const rateCheck = checkMcpRateLimit(agentConfig.id, server_name)
+			if (!rateCheck.allowed) {
+				log.warn(`[MCP] Rate limit hit for ${agentConfig.id}:${server_name}`)
+				return { result: rateCheck.message!, filesCreated: 0 }
+			}
+			
 			try {
 				const mcpManager = getMcpManager()
 				const result = await mcpManager.useMcp(server_name, tool_name, params || {}, project.id)
+				resetMcpErrors(agentConfig.id, server_name) // Success - reset error count
 				return { result, filesCreated: 0 }
 			} catch (err: any) {
+				const hitErrorLimit = recordMcpError(agentConfig.id, server_name)
+				if (hitErrorLimit) {
+					log.warn(`[MCP] Too many consecutive errors for ${agentConfig.id}:${server_name}`)
+					return { result: `❌ MCP tool call failed: ${err.message}\n\n⚠️ **${MCP_MAX_CONSECUTIVE_ERRORS} consecutive errors.** Stop using ${server_name} and try a different approach.`, filesCreated: 0 }
+				}
 				return { result: `❌ MCP tool call failed: ${err.message}`, filesCreated: 0 }
 			}
 		}
@@ -4503,6 +4960,11 @@ If you don't know, say so. Be concise.`,
 				searchDir = path.join(workspacePath, "projects", project.folder || project.id)
 			} else if (searchPath) {
 				searchDir = path.join(agentFolder, searchPath)
+			}
+			
+			// Check if directory exists before running find
+			if (!fs.existsSync(searchDir)) {
+				return { result: `❌ Directory not found: ${searchDir}\n\n💡 The directory may not exist yet. Create it first or check the path.`, filesCreated: 0 }
 			}
 			
 			try {
@@ -4865,7 +5327,9 @@ If you don't know, say so. Be concise.`,
 				projectId: project.id,
 				taskId: task.id,
 				agentId: agentConfig.id,
+				agentName: agentConfig.name,
 				taskTitle: task.title,
+				taskDescription: task.description.substring(0, 500) + (task.description.length > 500 ? '...' : ''),
 				timestamp: Date.now(),
 			})
 			
@@ -5008,7 +5472,6 @@ If you don't know, say so. Be concise.`,
 			const context: TaskContext = {
 				workingDirectory: working_directory || ".",
 				conventions: (project as any).conventions,
-				existingPatterns: (project as any).existingPatterns,
 			}
 			
 			const task = projectStore.createTask(
@@ -5101,6 +5564,7 @@ If you don't know, say so. Be concise.`,
 					id: workerId,
 					name: workerName,
 					role: "Ephemeral worker - claims and executes tasks from the pool",
+					homeFolder: agentConfig.homeFolder || "/",
 					systemPrompt: buildFullSystemPrompt(`You are an ephemeral worker agent. Your job is to:
 1. Claim a task from the pool with \`claim_task()\`
 2. Read the task details and understand what needs to be done
@@ -5152,6 +5616,15 @@ DO NOT spawn more workers or create new tasks - that's the supervisor's job.`),
 							workerId,
 							error: err.message,
 							timestamp: Date.now(),
+						})
+						// Show error in chat so user can see it
+						io.emit("agent-message", {
+							agentId: workerId,
+							agentName: workerName,
+							projectId: project.id,
+							message: `❌ **Worker Error**\n\n${err.message}`,
+							timestamp: Date.now(),
+							isStreaming: false,
 						})
 					}
 				})()
@@ -5286,9 +5759,32 @@ You report to ${parentName}.`),
 		}
 		// Society Agent end
 
-		// Society Agent start - delegate_task to persistent agents
+		// Society Agent start - delegate_task to persistent agents with detailed specs
 		case "delegate_task": {
-			const { agent_id, task, context } = toolInput as { agent_id: string; task: string; context?: string }
+			const { 
+				agent_id, 
+				task, 
+				desired_state, 
+				acceptance_criteria, 
+				constraints, 
+				context, 
+				priority 
+			} = toolInput as { 
+				agent_id: string
+				task: string
+				desired_state?: string
+				acceptance_criteria?: string[]
+				constraints?: string[]
+				context?: string
+				priority?: string
+			}
+			
+			// Debug: log what we have
+			log.info(`[delegate_task] project.id=${project?.id}, agent_id=${agent_id}`)
+			
+			if (!project || !project.id) {
+				return { result: `❌ Delegation failed: Project context is missing or invalid`, filesCreated: 0 }
+			}
 			
 			// Find target agent
 			const targetAgent = project.agents.find(a => a.id === agent_id && !a.ephemeral)
@@ -5300,36 +5796,232 @@ You report to ${parentName}.`),
 				}
 			}
 			
-			// Emit delegation event
+			// Debug: log target agent
+			log.info(`[delegate_task] targetAgent.id=${targetAgent.id}, homeFolder=${targetAgent.homeFolder}`)
+			
+			// Society Agent - Save desired state to agent's folder
+			const targetHomeDir = projectStore.agentHomeDir(project.id, targetAgent.id)
+			const desiredStateFile = path.join(targetHomeDir, "DESIRED_STATE.md")
+			const timestamp = new Date().toISOString()
+			
+			const desiredStateContent = `# Desired State - ${task}
+
+> **Assigned by**: ${agentConfig.name}  
+> **Assigned at**: ${timestamp}  
+> **Priority**: ${priority || "medium"}  
+> **Status**: pending
+
+---
+
+## 📋 Task Summary
+${task}
+
+## 🎯 Desired State
+${desired_state || "(Not specified - work autonomously based on task)"}
+
+## ✅ Acceptance Criteria
+${acceptance_criteria?.map((c, i) => `${i + 1}. ${c}`).join("\n") || "- Task completed successfully"}
+
+## 🚫 Constraints
+${constraints?.map(c => `- ${c}`).join("\n") || "- None specified"}
+
+## 📝 Context
+${context || "No additional context provided."}
+
+---
+
+## 📊 Progress Log
+*(Agent updates this as work progresses)*
+
+| Time | Status | Notes |
+|------|--------|-------|
+| ${timestamp} | pending | Task received from ${agentConfig.name} |
+
+---
+
+## 💬 Communication Log
+*(Messages between agent and supervisor)*
+
+### From ${agentConfig.name} (${timestamp})
+Initial delegation: ${task}
+
+`
+			
+			try {
+				fs.mkdirSync(targetHomeDir, { recursive: true })
+				fs.writeFileSync(desiredStateFile, desiredStateContent)
+				log.info(`[delegate_task] Saved desired state to ${desiredStateFile}`)
+			} catch (err: any) {
+				log.error(`[delegate_task] Failed to save desired state: ${err.message}`)
+			}
+			
+			// Emit delegation event with full details
 			io.emit("task-delegated", {
 				projectId: project.id,
 				fromAgent: agentConfig.id,
+				fromAgentName: agentConfig.name,
 				toAgent: agent_id,
+				toAgentName: targetAgent.name,
 				task,
+				desired_state,
+				acceptance_criteria,
+				constraints,
 				context,
+				priority: priority || "medium",
 				timestamp: Date.now(),
 			})
 			
 			log.info(`[${agentConfig.name}] Delegating to ${targetAgent.name}: ${task.substring(0, 100)}...`)
 			
+			// Build comprehensive delegation message with specs
+			const delegationMessage = `# 📋 Task Delegation from ${agentConfig.name}
+
+## Task
+${task}
+
+## 🎯 Desired State (What should exist when done)
+${desired_state || "Complete the task as described."}
+
+## ✅ Acceptance Criteria (How to verify completion)
+${acceptance_criteria?.map((c, i) => `${i + 1}. ${c}`).join("\n") || "- Task completed successfully"}
+
+## 🚫 Constraints (What NOT to do)
+${constraints?.map(c => `- ${c}`).join("\n") || "- None specified"}
+
+## 📝 Context
+${context || "No additional context."}
+
+---
+
+**Instructions:**
+1. Read this carefully and understand the desired state
+2. Work autonomously to achieve the desired state
+3. Use \`report_to_supervisor\` to report progress, blockers, or completion
+4. Your DESIRED_STATE.md file has been updated with these specs
+5. If you cannot complete something, report it - don't guess`
+			
+			io.emit("delegation-message", {
+				projectId: project.id,
+				toAgentId: targetAgent.id,
+				toAgentName: targetAgent.name,
+				fromAgentId: agentConfig.id,
+				fromAgentName: agentConfig.name,
+				task,
+				desired_state,
+				acceptance_criteria,
+				constraints,
+				context,
+				priority: priority || "medium",
+				timestamp: Date.now(),
+			})
+			
 			// Execute the task via handleSupervisorChat for the target agent
 			try {
 				const delegateApiKey = apiKey || process.env.ANTHROPIC_API_KEY || ""
+				
+				log.info(`[delegate_task] Target agent home: ${targetHomeDir}`)
+				
 				const result = await handleSupervisorChat(
-					`[Delegated from ${agentConfig.name}]\n\n${task}${context ? `\n\nContext: ${context}` : ""}`,
+					delegationMessage,
 					targetAgent,
 					project,
 					delegateApiKey,
 					io,
 				)
 				
+				// Update desired state file with completion
+				try {
+					const completionLog = `\n| ${new Date().toISOString()} | completed | Work finished, response sent to supervisor |`
+					fs.appendFileSync(desiredStateFile, completionLog)
+				} catch {}
+				
 				return { 
 					result: `✅ **Delegation to ${targetAgent.name} complete**\n\n**Response:**\n${result.fullResponse.substring(0, 2000)}${result.fullResponse.length > 2000 ? '...(truncated)' : ''}`, 
 					filesCreated: result.totalFilesCreated 
 				}
 			} catch (err: any) {
-				return { result: `❌ Delegation failed: ${err.message}`, filesCreated: 0 }
+				log.error(`[delegate_task] Failed:`, err)
+				return { result: `❌ Delegation failed: ${err.message}\n\nStack: ${err.stack?.substring(0, 500)}`, filesCreated: 0 }
 			}
+		}
+		// Society Agent end
+		
+		// Society Agent start - report_to_supervisor tool
+		case "report_to_supervisor": {
+			const { 
+				status, 
+				summary, 
+				details, 
+				completion_percentage, 
+				blockers, 
+				questions 
+			} = toolInput as {
+				status: string
+				summary: string
+				details?: string
+				completion_percentage?: number
+				blockers?: string[]
+				questions?: string[]
+			}
+			
+			// Find this agent's supervisor (reportsTo field, or first supervisor in project)
+			const supervisorId = agentConfig.reportsTo || project.agents.find(a => a.role?.toLowerCase().includes("supervisor"))?.id
+			const supervisor = supervisorId ? project.agents.find(a => a.id === supervisorId) : null
+			
+			// Emit the report
+			io.emit("agent-report", {
+				projectId: project.id,
+				fromAgentId: agentConfig.id,
+				fromAgentName: agentConfig.name,
+				toAgentId: supervisorId || "supervisor",
+				toAgentName: supervisor?.name || "Supervisor",
+				status,
+				summary,
+				details,
+				completion_percentage,
+				blockers,
+				questions,
+				timestamp: Date.now(),
+			})
+			
+			// Update the agent's DESIRED_STATE.md if it exists
+			const homeDir = projectStore.agentHomeDir(project.id, agentConfig.id)
+			const desiredStateFile = path.join(homeDir, "DESIRED_STATE.md")
+			
+			if (fs.existsSync(desiredStateFile)) {
+				const statusEmoji = {
+					in_progress: "🔄",
+					completed: "✅",
+					blocked: "🚫",
+					needs_info: "❓",
+					failed: "❌",
+				}[status] || "📝"
+				
+				const logEntry = `\n| ${new Date().toISOString()} | ${status} | ${statusEmoji} ${summary} |`
+				
+				try {
+					fs.appendFileSync(desiredStateFile, logEntry)
+					
+					// If completed, update the status in the file header
+					if (status === "completed") {
+						let content = fs.readFileSync(desiredStateFile, "utf-8")
+						content = content.replace(/\*\*Status\*\*: \w+/, `**Status**: completed`)
+						fs.writeFileSync(desiredStateFile, content)
+					}
+				} catch {}
+			}
+			
+			// Build response message
+			let response = `📤 **Report sent to ${supervisor?.name || "Supervisor"}**\n\n`
+			response += `**Status:** ${status}\n`
+			response += `**Summary:** ${summary}\n`
+			if (completion_percentage !== undefined) response += `**Progress:** ${completion_percentage}%\n`
+			if (blockers?.length) response += `**Blockers:**\n${blockers.map(b => `  - ${b}`).join("\n")}\n`
+			if (questions?.length) response += `**Questions:**\n${questions.map(q => `  - ${q}`).join("\n")}\n`
+			
+			log.info(`[${agentConfig.name}] Reported to supervisor: ${status} - ${summary}`)
+			
+			return { result: response, filesCreated: 0 }
 		}
 		// Society Agent end
 
@@ -5354,9 +6046,16 @@ async function handleSupervisorChat(
 	delegationResults: Array<{ agentId: string; agentName: string; filesCreated: number; responseLength: number }>
 	totalFilesCreated: number
 }> {
-	// Society Agent start - Progress indicator at start (suppressed - replaced by tool cards)
-	// io.emit("agent-message", { ... "🤔 **Analyzing your request...**" ... })
-	// Society Agent end
+	// Society Agent - Emit task-started event so UI can show what was asked
+	const taskPreview = userMessage.substring(0, 200) + (userMessage.length > 200 ? '...' : '')
+	io.emit("task-started", {
+		agentId: supervisorConfig.id,
+		agentName: supervisorConfig.name,
+		projectId: project.id,
+		task: taskPreview,
+		fullTask: userMessage,
+		timestamp: Date.now(),
+	})
 
 	// Society Agent start - use provider config for model and API key
 	// Priority: 1) Standalone settings 2) ProviderSettings 3) Legacy config 4) Environment
@@ -5508,10 +6207,37 @@ async function handleSupervisorChat(
 	let fullResponse = ""
 	const delegationResults: Array<{ agentId: string; agentName: string; filesCreated: number; responseLength: number }> = []
 	let totalFilesCreated = 0
-	const MAX_TOOL_ITERATIONS = 15 // Society Agent - Increased from 10 for auto-continue
+	
+	// Society Agent - Autonomous mode: much higher limit for long-running tasks
+	// Agents can run up to 100 iterations, but smart loop detection will stop them if stuck
+	const MAX_TOOL_ITERATIONS = 100
 	let lastActionDescription = "" // Society Agent - Track what the last step did
+	let iterationCount = 0 // Track actual iterations for summary
+	
+	// Society Agent - Smart loop detection for tool calls
+	let lastToolSignature = ""
+	let toolRepeatCount = 0
+	const MAX_TOOL_REPEATS = 2 // Reduced - catch loops after 2 repeats
+	
+	// Society Agent - Track run_command history separately (catches build loops)
+	let lastCommandRuns: string[] = []
+	const MAX_COMMAND_HISTORY = 5
+	const COMMAND_REPEAT_THRESHOLD = 3 // Same command 3 times in last 5 = loop
+	
+	// Society Agent - Text loop detection
+	let lastTextOutput = ""
+	let textRepeatCount = 0
+	const MAX_TEXT_REPEATS = 4
+	
+	// Society Agent - Progress tracking for autonomous work
+	let lastProgressTime = Date.now()
+	let filesCreatedSinceLastCheck = 0
+	let meaningfulActionsCount = 0
+	const PROGRESS_CHECK_INTERVAL = 10 // Check every 10 iterations
+	const STALL_THRESHOLD_MS = 300000 // 5 minutes without progress = stalled
 
 	for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+		iterationCount = iteration + 1
 		log.info(`[Supervisor] ${supervisorConfig.name} iteration ${iteration + 1}, ${messages.length} messages, useOpenRouter=${useOpenRouter}`)
 
 		// Society Agent start - Check if agent was stopped
@@ -5601,8 +6327,35 @@ async function handleSupervisorChat(
 			let streamUsage: { prompt_tokens?: number; completion_tokens?: number } | null = null
 			const toolCallsMap = new Map<number, { id: string; name: string; arguments: string }>()
 			
+			// Society Agent - Loop detection for stuck models
+			let lastChunk = ""
+			let repeatCount = 0
+			const MAX_REPEATS = 3 // Reduced from 5 - catch loops faster
+			
+			// Society Agent - Pattern-based loop detection (catches semantic repetition)
+			let sentenceBuffer: string[] = []
+			const MAX_SENTENCE_REPEATS = 2
+			let userStoppedDuringStream = false
+			
 			// Stream text in real-time
 			for await (const chunk of stream) {
+				// Society Agent - Check for user stop DURING streaming
+				if (stoppedAgents.has(supervisorConfig.id)) {
+					log.info(`[Supervisor] ${supervisorConfig.name} stopped by user during stream`)
+					stoppedAgents.delete(supervisorConfig.id)
+					userStoppedDuringStream = true
+					io.emit("agent-message", {
+						agentId: supervisorConfig.id,
+						agentName: supervisorConfig.name,
+						projectId: project.id,
+						message: "\n⛔ **Stopped by user**\n",
+						timestamp: Date.now(),
+						isStreaming: false,
+						isDone: true,
+					})
+					break
+				}
+				
 				// Society Agent start - Capture usage from stream
 				if ((chunk as any).usage) {
 					streamUsage = (chunk as any).usage
@@ -5615,8 +6368,71 @@ async function handleSupervisorChat(
 				// Handle text content
 				const delta = choice.delta
 				if (delta?.content) {
+					// Society Agent - Detect repetitive output (model stuck in loop)
+					if (delta.content === lastChunk && delta.content.length > 5) {
+						repeatCount++
+						if (repeatCount >= MAX_REPEATS) {
+							log.warn(`[Supervisor] Model stuck in loop, breaking stream. Repeated: "${delta.content.substring(0, 50)}..."`)
+							io.emit("agent-message", {
+								agentId: supervisorConfig.id,
+								agentName: supervisorConfig.name,
+								projectId: project.id,
+								message: "\n\n⚠️ *[Model stuck in loop - stopping]*",
+								timestamp: Date.now(),
+								isStreaming: false,
+								isDone: true,
+							})
+							break
+						}
+					} else {
+						lastChunk = delta.content
+						repeatCount = 0
+					}
+					
 					textContent += delta.content
 					fullResponse += delta.content
+					
+					// Society Agent - Aggressive loop detection
+					// Check for repeated sentences (same sentence 3+ times)
+					const sentences = fullResponse.split(/[.!?]\s+/).filter(s => s.length > 15)
+					if (sentences.length >= 3) {
+						const lastThree = sentences.slice(-3)
+						const uniqueSentences = new Set(lastThree.map(s => s.toLowerCase().trim().substring(0, 50)))
+						if (uniqueSentences.size === 1) {
+							log.warn(`[Supervisor] Sentence-level loop detected (3x), stopping`)
+							io.emit("agent-message", {
+								agentId: supervisorConfig.id,
+								agentName: supervisorConfig.name,
+								projectId: project.id,
+								message: "\n\n⚠️ *[Repetitive output detected - stopping]*",
+								timestamp: Date.now(),
+								isStreaming: false,
+								isDone: true,
+							})
+							break
+						}
+					}
+					
+					// Check for repeated phrases (same 30+ char block appears 3+ times)
+					if (fullResponse.length > 100) {
+						const lastChars = fullResponse.slice(-80)
+						const pattern = lastChars.substring(0, 30)
+						const occurrences = (fullResponse.match(new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')) || []).length
+						if (occurrences >= 3) {
+							log.warn(`[Supervisor] Phrase-level loop detected ("${pattern.substring(0, 20)}..." x${occurrences}), stopping`)
+							io.emit("agent-message", {
+								agentId: supervisorConfig.id,
+								agentName: supervisorConfig.name,
+								projectId: project.id,
+								message: "\n\n⚠️ *[Repeating phrase detected - stopping]*",
+								timestamp: Date.now(),
+								isStreaming: false,
+								isDone: true,
+							})
+							break
+						}
+					}
+					
 					io.emit("agent-message", {
 						agentId: supervisorConfig.id,
 						agentName: supervisorConfig.name,
@@ -5646,6 +6462,11 @@ async function handleSupervisorChat(
 				}
 			}
 			
+			// Society Agent - If user stopped during stream, break out of main loop
+			if (userStoppedDuringStream) {
+				break
+			}
+			
 			// Convert accumulated tool calls to array
 			const toolCallsList = Array.from(toolCallsMap.values()).filter(tc => tc.id && tc.name).map(tc => ({
 				id: tc.id,
@@ -5665,6 +6486,28 @@ async function handleSupervisorChat(
 				})
 			}
 			// Society Agent end
+			
+			// Society Agent - Detect repeated text output (model stuck in loop)
+			const normalizedText = textContent.trim().toLowerCase().replace(/\s+/g, ' ').substring(0, 100)
+			if (normalizedText.length > 20 && normalizedText === lastTextOutput) {
+				textRepeatCount++
+				if (textRepeatCount >= MAX_TEXT_REPEATS) {
+					log.warn(`[Supervisor] Model stuck repeating text, breaking. Repeated: "${textContent.substring(0, 50)}..."`)
+					io.emit("agent-message", {
+						agentId: supervisorConfig.id,
+						agentName: supervisorConfig.name,
+						projectId: project.id,
+						message: "\n\n⚠️ *[Model stuck repeating same output - stopping]*",
+						timestamp: Date.now(),
+						isStreaming: false,
+						isDone: true,
+					})
+					break
+				}
+			} else {
+				lastTextOutput = normalizedText
+				textRepeatCount = 0
+			}
 
 			// Check for tool calls
 			if (toolCallsList.length === 0) {
@@ -5692,6 +6535,66 @@ async function handleSupervisorChat(
 				})
 			}
 			messages.push({ role: "assistant", content: anthropicContent })
+			
+			// Society Agent - Detect repeated tool calls (model stuck in loop)
+			const currentToolSignature = toolCallsList.map((tc: any) => 
+				`${tc.function?.name}:${JSON.stringify(safeParseToolArgs(tc.function?.arguments))}`
+			).join("|")
+			
+			// Special handling for run_command - track history of commands
+			for (const tc of toolCallsList) {
+				const toolCall = tc as any
+				if (toolCall.function?.name === "run_command") {
+					const args = safeParseToolArgs(toolCall.function.arguments)
+					const cmd = (args.command || "").substring(0, 100) // Normalize
+					lastCommandRuns.push(cmd)
+					if (lastCommandRuns.length > MAX_COMMAND_HISTORY) {
+						lastCommandRuns.shift()
+					}
+					// Check if same command appears too many times
+					const cmdCount = lastCommandRuns.filter(c => c === cmd).length
+					if (cmdCount >= COMMAND_REPEAT_THRESHOLD) {
+						log.warn(`[Supervisor] Command loop detected: "${cmd}" run ${cmdCount} times`)
+						io.emit("agent-message", {
+							agentId: supervisorConfig.id,
+							agentName: supervisorConfig.name,
+							projectId: project.id,
+							message: `\n\n⚠️ *[Command loop detected - same command run ${cmdCount} times. Stopping.]*`,
+							timestamp: Date.now(),
+							isStreaming: false,
+							isDone: true,
+						})
+						// Force break - set a flag and break out
+						toolRepeatCount = MAX_TOOL_REPEATS + 10
+						break
+					}
+				}
+			}
+			
+			// Quick exit if command loop was detected
+			if (toolRepeatCount > MAX_TOOL_REPEATS) {
+				break
+			}
+			
+			if (currentToolSignature === lastToolSignature) {
+				toolRepeatCount++
+				if (toolRepeatCount >= MAX_TOOL_REPEATS) {
+					log.warn(`[Supervisor] Model stuck in tool loop, breaking. Repeated: ${currentToolSignature.substring(0, 100)}...`)
+					io.emit("agent-message", {
+						agentId: supervisorConfig.id,
+						agentName: supervisorConfig.name,
+						projectId: project.id,
+						message: "\n\n⚠️ *[Model stuck repeating same tool calls - stopping]*",
+						timestamp: Date.now(),
+						isStreaming: false,
+						isDone: true,
+					})
+					break
+				}
+			} else {
+				lastToolSignature = currentToolSignature
+				toolRepeatCount = 0
+			}
 
 			// Execute tools
 			const toolResults: { type: "tool_result"; tool_use_id: string; content: string }[] = []
@@ -5802,11 +6705,88 @@ async function handleSupervisorChat(
 
 		// Society Agent start - TRUE STREAMING: emit text as it arrives
 		let textContent = ""
+		let anthropicLoopDetected = false
+		let anthropicUserStopped = false
+		let lastAnthropicChunk = ""
+		let anthropicRepeatCount = 0
+		
+		// Society Agent - Periodic stop check during Anthropic streaming
+		const stopCheckInterval = setInterval(() => {
+			if (stoppedAgents.has(supervisorConfig.id)) {
+				log.info(`[Supervisor] ${supervisorConfig.name} stopped by user during Anthropic stream`)
+				stoppedAgents.delete(supervisorConfig.id)
+				anthropicUserStopped = true
+				anthropicLoopDetected = true // Reuse the loop flag to break
+				io.emit("agent-message", {
+					agentId: supervisorConfig.id,
+					agentName: supervisorConfig.name,
+					projectId: project.id,
+					message: "\n⛔ **Stopped by user**\n",
+					timestamp: Date.now(),
+					isStreaming: false,
+					isDone: true,
+				})
+				try {
+					stream.abort() // Try to abort the stream
+				} catch (e) { /* ignore */ }
+			}
+		}, 100) // Check every 100ms
 		
 		// Stream text chunks in real-time
 		stream.on('text', (text) => {
+			if (anthropicLoopDetected || anthropicUserStopped) return // Skip if stopped
+			
 			textContent += text
 			fullResponse += text
+			
+			// Detect chunk-level repetition
+			if (text === lastAnthropicChunk && text.length > 5) {
+				anthropicRepeatCount++
+				if (anthropicRepeatCount >= 3) {
+					anthropicLoopDetected = true
+					log.warn(`[Supervisor] Anthropic chunk loop detected, will stop`)
+					io.emit("agent-message", {
+						agentId: supervisorConfig.id,
+						agentName: supervisorConfig.name,
+						projectId: project.id,
+						message: "\n\n⚠️ *[Model stuck in loop - stopping]*",
+						timestamp: Date.now(),
+						isStreaming: false,
+						isDone: true,
+					})
+					try { stream.abort() } catch (e) {}
+					return
+				}
+			} else {
+				lastAnthropicChunk = text
+				anthropicRepeatCount = 0
+			}
+			
+			// Detect phrase-level repetition in accumulated text
+			if (textContent.length > 100) {
+				const lastChars = textContent.slice(-80)
+				const pattern = lastChars.substring(0, 30)
+				try {
+					const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+					const occurrences = (textContent.match(new RegExp(escaped, 'gi')) || []).length
+					if (occurrences >= 3) {
+						anthropicLoopDetected = true
+						log.warn(`[Supervisor] Anthropic phrase loop detected ("${pattern.substring(0, 20)}..." x${occurrences})`)
+						io.emit("agent-message", {
+							agentId: supervisorConfig.id,
+							agentName: supervisorConfig.name,
+							projectId: project.id,
+							message: "\n\n⚠️ *[Repeating phrase detected - stopping]*",
+							timestamp: Date.now(),
+							isStreaming: false,
+							isDone: true,
+						})
+						try { stream.abort() } catch (e) {}
+						return
+					}
+				} catch (e) { /* ignore regex errors */ }
+			}
+			
 			io.emit("agent-message", {
 				agentId: supervisorConfig.id,
 				agentName: supervisorConfig.name,
@@ -5818,7 +6798,25 @@ async function handleSupervisorChat(
 		})
 
 		// Wait for complete message (needed for tool_use blocks)
-		const finalMessage = await stream.finalMessage()
+		let finalMessage
+		try {
+			finalMessage = await stream.finalMessage()
+		} catch (e: any) {
+			// Stream may have been aborted
+			if (anthropicUserStopped || anthropicLoopDetected) {
+				clearInterval(stopCheckInterval)
+				break
+			}
+			throw e
+		}
+		
+		// Clear the stop check interval
+		clearInterval(stopCheckInterval)
+		
+		// If loop detected or user stopped during streaming, break out
+		if (anthropicLoopDetected || anthropicUserStopped) {
+			break
+		}
 		// Society Agent end
 
 		// Society Agent start - Handle extended thinking blocks for supervisor
@@ -5849,6 +6847,28 @@ async function handleSupervisorChat(
 		// Society Agent end
 
 		// Note: text was already streamed via stream.on('text') above
+		
+		// Society Agent - Detect repeated text output (model stuck in loop)
+		const normalizedText = textContent.trim().toLowerCase().replace(/\s+/g, ' ').substring(0, 100)
+		if (normalizedText.length > 20 && normalizedText === lastTextOutput) {
+			textRepeatCount++
+			if (textRepeatCount >= MAX_TEXT_REPEATS) {
+				log.warn(`[Supervisor] Model stuck repeating text, breaking. Repeated: "${textContent.substring(0, 50)}..."`)
+				io.emit("agent-message", {
+					agentId: supervisorConfig.id,
+					agentName: supervisorConfig.name,
+					projectId: project.id,
+					message: "\n\n⚠️ *[Model stuck repeating same output - stopping]*",
+					timestamp: Date.now(),
+					isStreaming: false,
+					isDone: true,
+				})
+				break
+			}
+		} else {
+			lastTextOutput = normalizedText
+			textRepeatCount = 0
+		}
 
 		// Check if the LLM wants to use tools
 		const toolBlocks = finalMessage.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use")
@@ -5881,6 +6901,62 @@ async function handleSupervisorChat(
 
 		// Add the assistant's message (with tool_use blocks) to conversation
 		messages.push({ role: "assistant", content: finalMessage.content })
+
+		// Society Agent - Detect repeated tool calls (model stuck in loop)
+		const currentToolSignature = toolBlocks.map(tb => 
+			`${tb.name}:${JSON.stringify(tb.input)}`
+		).join("|")
+		
+		// Special handling for run_command - track history of commands
+		for (const tb of toolBlocks) {
+			if (tb.name === "run_command") {
+				const cmd = ((tb.input as any).command || "").substring(0, 100)
+				lastCommandRuns.push(cmd)
+				if (lastCommandRuns.length > MAX_COMMAND_HISTORY) {
+					lastCommandRuns.shift()
+				}
+				const cmdCount = lastCommandRuns.filter(c => c === cmd).length
+				if (cmdCount >= COMMAND_REPEAT_THRESHOLD) {
+					log.warn(`[Supervisor] Command loop detected: "${cmd}" run ${cmdCount} times`)
+					io.emit("agent-message", {
+						agentId: supervisorConfig.id,
+						agentName: supervisorConfig.name,
+						projectId: project.id,
+						message: `\n\n⚠️ *[Command loop detected - same command run ${cmdCount} times. Stopping.]*`,
+						timestamp: Date.now(),
+						isStreaming: false,
+						isDone: true,
+					})
+					toolRepeatCount = MAX_TOOL_REPEATS + 10
+					break
+				}
+			}
+		}
+		
+		// Quick exit if command loop was detected
+		if (toolRepeatCount > MAX_TOOL_REPEATS) {
+			break
+		}
+		
+		if (currentToolSignature === lastToolSignature) {
+			toolRepeatCount++
+			if (toolRepeatCount >= MAX_TOOL_REPEATS) {
+				log.warn(`[Supervisor] Model stuck in tool loop, breaking. Repeated: ${currentToolSignature.substring(0, 100)}...`)
+				io.emit("agent-message", {
+					agentId: supervisorConfig.id,
+					agentName: supervisorConfig.name,
+					projectId: project.id,
+					message: "\n\n⚠️ *[Model stuck repeating same tool calls - stopping]*",
+					timestamp: Date.now(),
+					isStreaming: false,
+					isDone: true,
+				})
+				break
+			}
+		} else {
+			lastToolSignature = currentToolSignature
+			toolRepeatCount = 0
+		}
 
 		// Execute each tool call and build results
 		const toolResults: Anthropic.ToolResultBlockParam[] = []
@@ -5979,6 +7055,57 @@ async function handleSupervisorChat(
 
 		// Add tool results as user message
 		messages.push({ role: "user", content: toolResults })
+		
+		// Society Agent - Track meaningful progress
+		if (totalFilesCreated > filesCreatedSinceLastCheck) {
+			lastProgressTime = Date.now()
+			filesCreatedSinceLastCheck = totalFilesCreated
+			meaningfulActionsCount++
+		}
+		
+		// Society Agent - Progress checkpoint every N iterations
+		if (iteration > 0 && iteration % PROGRESS_CHECK_INTERVAL === 0) {
+			const timeSinceProgress = Date.now() - lastProgressTime
+			log.info(`[Supervisor] ${supervisorConfig.name} checkpoint: iteration ${iteration}, files created: ${totalFilesCreated}, meaningful actions: ${meaningfulActionsCount}`)
+			
+			// Emit progress update for visibility
+			io.emit("agent-progress", {
+				agentId: supervisorConfig.id,
+				agentName: supervisorConfig.name,
+				projectId: project.id,
+				iteration,
+				totalFilesCreated,
+				lastAction: lastActionDescription,
+				timestamp: Date.now(),
+			})
+			
+			// Check for stall (no progress in 5 minutes)
+			if (timeSinceProgress > STALL_THRESHOLD_MS && meaningfulActionsCount === 0) {
+				log.warn(`[Supervisor] ${supervisorConfig.name} appears stalled - no progress in ${Math.round(timeSinceProgress / 60000)} minutes`)
+				io.emit("agent-message", {
+					agentId: supervisorConfig.id,
+					agentName: supervisorConfig.name,
+					projectId: project.id,
+					message: `\n\n⚠️ **Agent may be stalled** - No meaningful progress in ${Math.round(timeSinceProgress / 60000)} minutes.\n\nLast action: ${lastActionDescription || 'unknown'}\n\nType "continue" to keep going or "stop" to abort.`,
+					timestamp: Date.now(),
+					isStreaming: true,
+				})
+			}
+		}
+	}
+
+	// Society Agent - Notify if iteration limit was hit (now 100 iterations)
+	if (iterationCount >= MAX_TOOL_ITERATIONS) {
+		log.warn(`[Supervisor] ${supervisorConfig.name} hit iteration limit (${MAX_TOOL_ITERATIONS})`)
+		io.emit("agent-message", {
+			agentId: supervisorConfig.id,
+			agentName: supervisorConfig.name,
+			projectId: project.id,
+			message: `\n\n⚠️ **Reached ${MAX_TOOL_ITERATIONS} iterations**\n\nProgress: ${totalFilesCreated} files created, ${meaningfulActionsCount} meaningful actions\nLast action: ${lastActionDescription || 'unknown'}\n\nSend "continue" to keep working on this task.`,
+			timestamp: Date.now(),
+			isStreaming: true,
+		})
+		fullResponse += `\n\n⚠️ [Checkpoint at ${MAX_TOOL_ITERATIONS} iterations - send "continue" to proceed]`
 	}
 
 	// Signal streaming done
@@ -6153,8 +7280,9 @@ You will self-destruct after completing or failing. Focus on your task.`
 			const toolResults: any[] = []
 			
 			for (const tc of toolCalls) {
-				const toolName = tc.function.name
-				const toolInput = safeParseToolArgs(tc.function.arguments)
+				const tcAny = tc as any
+				const toolName = tcAny.function?.name || tcAny.name
+				const toolInput = safeParseToolArgs(tcAny.function?.arguments || tcAny.arguments)
 				
 				// Emit tool execution start
 				io.emit("tool-execution", {
@@ -6311,9 +7439,26 @@ You will self-destruct after completing or failing. Focus on your task.`
 				iteration: iteration + 1,
 				timestamp: Date.now(),
 			})
+			// Show error in chat so user can see it
+			io.emit("agent-message", {
+				agentId: workerId,
+				agentName: workerName,
+				projectId: project.id,
+				message: `❌ **Worker Error (iteration ${iteration + 1})**\n\n${iterErr.message}`,
+				timestamp: Date.now(),
+				isStreaming: false,
+			})
 			// Continue to next iteration or break if too many errors
 			if (iteration > 2) {
 				log.error(`[Worker ${workerName}] Too many errors, giving up`)
+				io.emit("agent-message", {
+					agentId: workerId,
+					agentName: workerName,
+					projectId: project.id,
+					message: `❌ **Worker giving up after too many errors**`,
+					timestamp: Date.now(),
+					isStreaming: false,
+				})
 				break
 			}
 		}
@@ -6341,6 +7486,17 @@ function getOrCreateProjectAgent(
 ): ConversationAgent {
 	const existing = activeAgents.get(agentConfig.id)
 	if (existing) return existing
+
+	// Society Agent start - Defensive checks
+	if (!project || !project.id) {
+		log.error(`[getOrCreateProjectAgent] Invalid project: ${JSON.stringify(project)}`)
+		throw new Error(`Invalid project object - missing id`)
+	}
+	if (!agentConfig || !agentConfig.id) {
+		log.error(`[getOrCreateProjectAgent] Invalid agentConfig: ${JSON.stringify(agentConfig)}`)
+		throw new Error(`Invalid agentConfig - missing id`)
+	}
+	// Society Agent end
 
 	// Society Agent start - use provider config instead of hardcoded Anthropic
 	const apiHandler = getApiHandlerFromConfig()
@@ -7304,11 +8460,17 @@ async function start() {
 		log.info(`MCP client manager initialized`)
 		// Society Agent end
 		
+		// Society Agent start - initialize git loader for project history
+		initGitLoader(workspacePath)
+		log.info(`Git loader initialized`)
+		// Society Agent end
+		
 		log.info(`Society Agent Web Server | Environment: ${NODE_ENV} | Port: ${PORT}`)
 
 		// Don't initialize Society Manager at startup - wait for first request with API key
 
-		server.listen(PORT, () => {
+		// Bind to 0.0.0.0 (IPv4) for VS Code port forwarding compatibility
+		server.listen(PORT, "0.0.0.0", () => {
 			log.info(`Server running on http://localhost:${PORT}`)
 			log.info(`API: http://localhost:${PORT}/api`)
 			log.info(`WebSocket: ws://localhost:${PORT}`)

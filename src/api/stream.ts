@@ -9,6 +9,7 @@ export type ApiStreamChunk =
 	| ApiStreamTextChunk
 	| ApiStreamUsageChunk
 	| ApiStreamReasoningChunk
+	| ApiStreamToolUseChunk
 	| ApiStreamError
 
 export interface ApiStreamError {
@@ -25,6 +26,13 @@ export interface ApiStreamTextChunk {
 export interface ApiStreamReasoningChunk {
 	type: "reasoning"
 	text: string
+}
+
+export interface ApiStreamToolUseChunk {
+	type: "tool_use"
+	id: string
+	name: string
+	input: string
 }
 
 export interface ApiStreamUsageChunk {
