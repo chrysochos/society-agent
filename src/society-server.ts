@@ -6064,34 +6064,44 @@ async function handleSupervisorChat(
 	let model: string
 	let useOpenRouter = false
 
+	// Society Agent start - Determine effective provider and model
+	// Priority: 1) Agent override 2) Project override 3) Server default
+	const effectiveProvider = supervisorConfig.provider || project.provider || null
+	const effectiveModel = supervisorConfig.model || project.model || null
+	
 	// Society Agent start - Check standalone settings FIRST
 	if (standaloneSettings.isInitialized() && standaloneSettings.hasApiKey()) {
 		const providerConfig = standaloneSettings.getProvider()
-		log.info(`[handleSupervisorChat] Using standalone settings: ${providerConfig.type}/${providerConfig.model}`)
 		
-		if (providerConfig.type === "openrouter") {
+		// Use effective overrides if set, otherwise fall back to server config
+		const useProvider = effectiveProvider || providerConfig.type
+		const useModel = effectiveModel || providerConfig.model
+		
+		log.info(`[handleSupervisorChat] Provider: ${useProvider}, Model: ${useModel} (agent: ${supervisorConfig.model}, project: ${project.model}, server: ${providerConfig.model})`)
+		
+		if (useProvider === "openrouter") {
 			useOpenRouter = true
 			openRouterClient = new OpenAI({
 				baseURL: "https://openrouter.ai/api/v1",
 				apiKey: providerConfig.apiKey,
 			})
-			model = providerConfig.model
-		} else if (providerConfig.type === "anthropic" || providerConfig.type === "minimax") {
+			model = useModel
+		} else if (useProvider === "anthropic" || useProvider === "minimax") {
 			anthropic = new Anthropic({
 				apiKey: providerConfig.apiKey,
-				baseURL: providerConfig.type === "minimax" ? "https://api.minimax.io/anthropic" : undefined,
+				baseURL: useProvider === "minimax" ? "https://api.minimax.io/anthropic" : undefined,
 			})
-			model = providerConfig.model
-		} else if (providerConfig.type === "openai" || providerConfig.type === "groq" || providerConfig.type === "deepseek" || providerConfig.type === "mistral") {
+			model = useModel
+		} else if (useProvider === "openai" || useProvider === "groq" || useProvider === "deepseek" || useProvider === "mistral") {
 			useOpenRouter = true
 			openRouterClient = new OpenAI({
-				baseURL: providerConfig.baseUrl || PROVIDER_BASE_URLS[providerConfig.type],
+				baseURL: providerConfig.baseUrl || PROVIDER_BASE_URLS[useProvider],
 				apiKey: providerConfig.apiKey,
 			})
-			model = providerConfig.model
+			model = useModel
 		} else {
 			anthropic = new Anthropic({ apiKey: providerConfig.apiKey })
-			model = providerConfig.model
+			model = useModel
 		}
 	}
 	// Society Agent end

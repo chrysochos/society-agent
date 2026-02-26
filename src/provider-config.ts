@@ -57,15 +57,75 @@ export interface ProviderConfig {
 }
 
 // ============================================================================
-// File Paths
+// .env File Utilities
 // ============================================================================
 
-function getProviderSettingsPath(workspacePath: string): string {
-	return path.join(workspacePath, ".society-agent", "provider-settings.json")
+// Map provider types to their API key environment variable names
+const API_KEY_ENV_MAP: Record<ProviderType, string> = {
+	openrouter: "OPENROUTER_API_KEY",
+	anthropic: "ANTHROPIC_API_KEY",
+	openai: "OPENAI_API_KEY",
+	minimax: "MINIMAX_API_KEY",
+	gemini: "GEMINI_API_KEY",
+	deepseek: "DEEPSEEK_API_KEY",
+	groq: "GROQ_API_KEY",
+	mistral: "MISTRAL_API_KEY",
+	custom: "CUSTOM_API_KEY",
 }
 
-function getLegacyConfigPath(workspacePath: string): string {
-	return path.join(workspacePath, ".society-agent", "provider-config.json")
+function getEnvPath(workspacePath: string): string {
+	return path.join(workspacePath, ".env")
+}
+
+/**
+ * Update .env file with new values while preserving structure and comments
+ */
+function updateEnvFile(envPath: string, updates: Record<string, string>): void {
+	let content = ""
+	const existingKeys = new Set<string>()
+
+	if (fs.existsSync(envPath)) {
+		content = fs.readFileSync(envPath, "utf-8")
+		const lines = content.split("\n")
+		const updatedLines: string[] = []
+
+		for (const line of lines) {
+			const trimmed = line.trim()
+			// Preserve comments and empty lines
+			if (!trimmed || trimmed.startsWith("#")) {
+				updatedLines.push(line)
+				continue
+			}
+
+			const eqIndex = trimmed.indexOf("=")
+			if (eqIndex > 0) {
+				const key = trimmed.slice(0, eqIndex).trim()
+				existingKeys.add(key)
+				if (key in updates) {
+					// Update existing key
+					updatedLines.push(`${key}=${updates[key]}`)
+				} else {
+					// Keep existing line
+					updatedLines.push(line)
+				}
+			} else {
+				updatedLines.push(line)
+			}
+		}
+
+		content = updatedLines.join("\n")
+	}
+
+	// Add any new keys that weren't in the file
+	const newKeys = Object.keys(updates).filter((k) => !existingKeys.has(k))
+	if (newKeys.length > 0) {
+		if (content && !content.endsWith("\n")) content += "\n"
+		for (const key of newKeys) {
+			content += `${key}=${updates[key]}\n`
+		}
+	}
+
+	fs.writeFileSync(envPath, content)
 }
 
 // ============================================================================
@@ -73,84 +133,80 @@ function getLegacyConfigPath(workspacePath: string): string {
 // ============================================================================
 
 /**
- * Load provider settings from workspace or environment
+ * Load provider settings from environment variables (.env is the single source of truth)
  */
 export function loadProviderSettings(workspacePath: string): ProviderSettings {
-	const settingsPath = getProviderSettingsPath(workspacePath)
+	// Determine active provider from ACTIVE_PROVIDER or detect from available API keys
+	const activeProvider = (process.env.ACTIVE_PROVIDER as ProviderType) || detectActiveProvider()
+	const activeModel = process.env.ACTIVE_MODEL
 
-	// Try to load settings file
-	if (fs.existsSync(settingsPath)) {
-		try {
-			const content = fs.readFileSync(settingsPath, "utf-8")
-			const settings = JSON.parse(content) as ProviderSettings
-			// Accept settings if any API key is configured (for any provider)
-			const hasApiKey = !!(
-				settings.anthropicApiKey ||
-				settings.openRouterApiKey ||
-				settings.openAiApiKey ||
-				settings.geminiApiKey ||
-				settings.minimaxApiKey ||
-				settings.deepseekApiKey ||
-				settings.groqApiKey ||
-				settings.mistralApiKey ||
-				settings.apiKey ||
-				process.env.ANTHROPIC_API_KEY ||
-				process.env.OPENROUTER_API_KEY ||
-				process.env.OPENAI_API_KEY ||
-				process.env.MINIMAX_API_KEY ||
-				process.env.DEEPSEEK_API_KEY ||
-				process.env.GROQ_API_KEY ||
-				process.env.MISTRAL_API_KEY
-			)
-			if (hasApiKey) {
-				log.info(`Loaded ProviderSettings from ${settingsPath}`)
-				return settings
-			}
-		} catch (e) {
-			log.warn(`Failed to load ${settingsPath}:`, e)
-		}
-	}
-
-	// Try legacy config
-	const legacyPath = getLegacyConfigPath(workspacePath)
-	if (fs.existsSync(legacyPath)) {
-		try {
-			const content = fs.readFileSync(legacyPath, "utf-8")
-			const config = JSON.parse(content)
-			if (config.providers?.anthropic?.apiKey || process.env.ANTHROPIC_API_KEY) {
-				log.info(`Loaded legacy config from ${legacyPath}`)
-				return {
-					apiProvider: "anthropic",
-					anthropicApiKey: config.providers?.anthropic?.apiKey,
-					apiModelId: config.providers?.anthropic?.model,
-				}
-			}
-		} catch (e) {
-			log.warn(`Failed to load ${legacyPath}:`, e)
-		}
-	}
-
-	// Fall back to environment variables
-	return {
-		apiProvider: "anthropic",
+	const settings: ProviderSettings = {
+		apiProvider: activeProvider,
+		apiModelId: activeModel,
 		anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-		apiModelId: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
+		openRouterApiKey: process.env.OPENROUTER_API_KEY,
+		openAiApiKey: process.env.OPENAI_API_KEY,
+		minimaxApiKey: process.env.MINIMAX_API_KEY,
+		geminiApiKey: process.env.GEMINI_API_KEY,
+		deepseekApiKey: process.env.DEEPSEEK_API_KEY,
+		groqApiKey: process.env.GROQ_API_KEY,
+		mistralApiKey: process.env.MISTRAL_API_KEY,
 	}
+
+	log.info(`Loaded ProviderSettings from .env: provider=${activeProvider}`)
+	return settings
 }
 
 /**
- * Save provider settings to file
+ * Detect which provider to use based on available API keys
+ */
+function detectActiveProvider(): ProviderType {
+	if (process.env.OPENROUTER_API_KEY) return "openrouter"
+	if (process.env.ANTHROPIC_API_KEY) return "anthropic"
+	if (process.env.OPENAI_API_KEY) return "openai"
+	if (process.env.MINIMAX_API_KEY) return "minimax"
+	if (process.env.DEEPSEEK_API_KEY) return "deepseek"
+	if (process.env.GROQ_API_KEY) return "groq"
+	if (process.env.MISTRAL_API_KEY) return "mistral"
+	return "anthropic" // fallback
+}
+
+/**
+ * Save provider settings to .env file
  */
 export async function saveProviderSettings(workspacePath: string, settings: ProviderSettings): Promise<void> {
-	const settingsPath = getProviderSettingsPath(workspacePath)
-	const dir = path.dirname(settingsPath)
-
-	if (!fs.existsSync(dir)) {
-		fs.mkdirSync(dir, { recursive: true })
+	const envPath = getEnvPath(workspacePath)
+	const updates: Record<string, string> = {
+		ACTIVE_PROVIDER: settings.apiProvider,
 	}
 
-	fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2))
-	log.info(`Saved ProviderSettings to ${settingsPath}`)
+	if (settings.apiModelId) {
+		updates.ACTIVE_MODEL = settings.apiModelId
+	}
+
+	// Set provider-specific API keys
+	if (settings.anthropicApiKey) updates.ANTHROPIC_API_KEY = settings.anthropicApiKey
+	if (settings.openRouterApiKey) updates.OPENROUTER_API_KEY = settings.openRouterApiKey
+	if (settings.openAiApiKey) updates.OPENAI_API_KEY = settings.openAiApiKey
+	if (settings.minimaxApiKey) updates.MINIMAX_API_KEY = settings.minimaxApiKey
+	if (settings.geminiApiKey) updates.GEMINI_API_KEY = settings.geminiApiKey
+	if (settings.deepseekApiKey) updates.DEEPSEEK_API_KEY = settings.deepseekApiKey
+	if (settings.groqApiKey) updates.GROQ_API_KEY = settings.groqApiKey
+	if (settings.mistralApiKey) updates.MISTRAL_API_KEY = settings.mistralApiKey
+	if (settings.apiKey) {
+		// Generic apiKey - use for active provider
+		const keyEnv = API_KEY_ENV_MAP[settings.apiProvider]
+		if (keyEnv) updates[keyEnv] = settings.apiKey
+	}
+
+	updateEnvFile(envPath, updates)
+
+	// Update process.env so changes take effect immediately
+	Object.entries(updates).forEach(([key, value]) => {
+		process.env[key] = value
+	})
+
+	log.info(`Saved ProviderSettings to .env`)
 }
 
 // ============================================================================

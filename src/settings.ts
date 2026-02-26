@@ -5,7 +5,7 @@
  * This is a self-contained settings system for the Society Agent Server.
  * It does NOT depend on Society Agent's settings - it's a separate product.
  *
- * Settings are stored in: .society-agent/settings.json
+ * Settings are stored in: .env file (single source of truth)
  */
 
 import fs from "fs"
@@ -98,93 +98,128 @@ export const PROVIDER_BASE_URLS: Record<ProviderType, string> = {
 	mistral: "https://api.mistral.ai/v1",
 }
 
+// Map provider types to their API key environment variable names
+const API_KEY_ENV_MAP: Record<ProviderType, string> = {
+	openrouter: "OPENROUTER_API_KEY",
+	anthropic: "ANTHROPIC_API_KEY",
+	openai: "OPENAI_API_KEY",
+	minimax: "MINIMAX_API_KEY",
+	gemini: "GEMINI_API_KEY",
+	deepseek: "DEEPSEEK_API_KEY",
+	groq: "GROQ_API_KEY",
+	mistral: "MISTRAL_API_KEY",
+}
+
+// ============================================================================
+// .env File Utilities
+// ============================================================================
+
+/**
+ * Parse .env file content into key-value pairs
+ */
+function parseEnvFile(content: string): Map<string, string> {
+	const result = new Map<string, string>()
+	const lines = content.split("\n")
+
+	for (const line of lines) {
+		const trimmed = line.trim()
+		// Skip comments and empty lines
+		if (!trimmed || trimmed.startsWith("#")) continue
+
+		const eqIndex = trimmed.indexOf("=")
+		if (eqIndex > 0) {
+			const key = trimmed.slice(0, eqIndex).trim()
+			let value = trimmed.slice(eqIndex + 1).trim()
+			// Remove surrounding quotes if present
+			if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+				value = value.slice(1, -1)
+			}
+			result.set(key, value)
+		}
+	}
+
+	return result
+}
+
+/**
+ * Update .env file with new values while preserving structure and comments
+ */
+function updateEnvFile(envPath: string, updates: Record<string, string>): void {
+	let content = ""
+	const existingKeys = new Set<string>()
+
+	if (fs.existsSync(envPath)) {
+		content = fs.readFileSync(envPath, "utf-8")
+		const lines = content.split("\n")
+		const updatedLines: string[] = []
+
+		for (const line of lines) {
+			const trimmed = line.trim()
+			// Preserve comments and empty lines
+			if (!trimmed || trimmed.startsWith("#")) {
+				updatedLines.push(line)
+				continue
+			}
+
+			const eqIndex = trimmed.indexOf("=")
+			if (eqIndex > 0) {
+				const key = trimmed.slice(0, eqIndex).trim()
+				existingKeys.add(key)
+				if (key in updates) {
+					// Update existing key
+					updatedLines.push(`${key}=${updates[key]}`)
+				} else {
+					// Keep existing line
+					updatedLines.push(line)
+				}
+			} else {
+				updatedLines.push(line)
+			}
+		}
+
+		content = updatedLines.join("\n")
+	}
+
+	// Add any new keys that weren't in the file
+	const newKeys = Object.keys(updates).filter((k) => !existingKeys.has(k))
+	if (newKeys.length > 0) {
+		if (content && !content.endsWith("\n")) content += "\n"
+		for (const key of newKeys) {
+			content += `${key}=${updates[key]}\n`
+		}
+	}
+
+	fs.writeFileSync(envPath, content)
+}
+
 // ============================================================================
 // Settings Manager
 // ============================================================================
 
 class SettingsManager {
 	private settings: ServerSettings
-	private settingsPath: string
+	private envPath: string
 	private initialized = false
 
 	constructor() {
 		this.settings = { ...DEFAULT_SETTINGS }
-		this.settingsPath = ""
+		this.envPath = ""
 	}
 
 	/**
 	 * Initialize settings from a workspace path
 	 */
 	initialize(workspacePath: string): void {
-		this.settingsPath = path.join(workspacePath, ".society-agent", "settings.json")
+		this.envPath = path.join(workspacePath, ".env")
 		this.settings.workspacePath = workspacePath
 		this.settings.projectsDir = path.join(workspacePath, "projects")
-		this.load()
+		this.loadFromEnv()
 		this.initialized = true
-		log.info(`Settings initialized from ${this.settingsPath}`)
+		log.info(`Settings initialized from .env`)
 	}
 
 	/**
-	 * Load settings from disk
-	 */
-	load(): void {
-		// Also check for legacy provider-settings.json
-		const legacyPath = path.join(path.dirname(this.settingsPath), "provider-settings.json")
-
-		if (fs.existsSync(this.settingsPath)) {
-			try {
-				const content = fs.readFileSync(this.settingsPath, "utf-8")
-				const loaded = JSON.parse(content) as Partial<ServerSettings>
-				this.settings = { ...DEFAULT_SETTINGS, ...loaded }
-				log.info(`Loaded settings: provider=${this.settings.provider.type}, model=${this.settings.provider.model}`)
-			} catch (error) {
-				log.warn(`Failed to load settings from ${this.settingsPath}: ${error}`)
-			}
-		} else if (fs.existsSync(legacyPath)) {
-			// Migrate from legacy provider-settings.json
-			try {
-				const content = fs.readFileSync(legacyPath, "utf-8")
-				const legacy = JSON.parse(content)
-				this.migrateFromLegacy(legacy)
-				this.save() // Save in new format
-				log.info(`Migrated settings from legacy provider-settings.json`)
-			} catch (error) {
-				log.warn(`Failed to migrate legacy settings: ${error}`)
-			}
-		} else {
-			// Check environment variables
-			this.loadFromEnv()
-		}
-	}
-
-	/**
-	 * Migrate from legacy provider-settings.json format
-	 */
-	private migrateFromLegacy(legacy: Record<string, any>): void {
-		if (legacy.apiProvider === "openrouter") {
-			this.settings.provider = {
-				type: "openrouter",
-				apiKey: legacy.openRouterApiKey || "",
-				model: legacy.openRouterModelId || DEFAULT_MODELS.openrouter,
-			}
-		} else if (legacy.apiProvider === "anthropic") {
-			this.settings.provider = {
-				type: "anthropic",
-				apiKey: legacy.apiKey || "",
-				model: legacy.apiModelId || DEFAULT_MODELS.anthropic,
-			}
-		} else if (legacy.apiProvider === "minimax") {
-			this.settings.provider = {
-				type: "minimax",
-				apiKey: legacy.minimaxApiKey || "",
-				model: legacy.apiModelId || DEFAULT_MODELS.minimax,
-			}
-		}
-		// Add more providers as needed
-	}
-
-	/**
-	 * Load from environment variables
+	 * Load from environment variables (the single source of truth)
 	 */
 	private loadFromEnv(): void {
 		// Check for explicit provider selection
@@ -193,18 +228,7 @@ class SettingsManager {
 
 		if (activeProvider) {
 			// Use explicitly selected provider
-			const apiKeyEnvMap: Record<ProviderType, string> = {
-				openrouter: "OPENROUTER_API_KEY",
-				anthropic: "ANTHROPIC_API_KEY",
-				openai: "OPENAI_API_KEY",
-				minimax: "MINIMAX_API_KEY",
-				gemini: "GEMINI_API_KEY",
-				deepseek: "DEEPSEEK_API_KEY",
-				groq: "GROQ_API_KEY",
-				mistral: "MISTRAL_API_KEY",
-			}
-
-			const apiKeyEnv = apiKeyEnvMap[activeProvider]
+			const apiKeyEnv = API_KEY_ENV_MAP[activeProvider]
 			const apiKey = process.env[apiKeyEnv]
 
 			if (apiKey) {
@@ -213,7 +237,7 @@ class SettingsManager {
 					apiKey,
 					model: activeModel || DEFAULT_MODELS[activeProvider],
 				}
-				log.info(`Loaded ${activeProvider} config from environment (ACTIVE_PROVIDER)`)
+				log.info(`Loaded ${activeProvider} config from .env (ACTIVE_PROVIDER)`)
 			} else {
 				log.warn(`ACTIVE_PROVIDER=${activeProvider} but ${apiKeyEnv} is not set`)
 			}
@@ -225,21 +249,21 @@ class SettingsManager {
 					apiKey: process.env.OPENROUTER_API_KEY,
 					model: process.env.OPENROUTER_MODEL_ID || DEFAULT_MODELS.openrouter,
 				}
-				log.info("Loaded OpenRouter config from environment")
+				log.info("Loaded OpenRouter config from .env")
 			} else if (process.env.ANTHROPIC_API_KEY) {
 				this.settings.provider = {
 					type: "anthropic",
 					apiKey: process.env.ANTHROPIC_API_KEY,
 					model: process.env.API_MODEL_ID || DEFAULT_MODELS.anthropic,
 				}
-				log.info("Loaded Anthropic config from environment")
+				log.info("Loaded Anthropic config from .env")
 			} else if (process.env.OPENAI_API_KEY) {
 				this.settings.provider = {
 					type: "openai",
 					apiKey: process.env.OPENAI_API_KEY,
 					model: process.env.OPENAI_MODEL_ID || DEFAULT_MODELS.openai,
 				}
-				log.info("Loaded OpenAI config from environment")
+				log.info("Loaded OpenAI config from .env")
 			}
 		}
 
@@ -253,15 +277,30 @@ class SettingsManager {
 	}
 
 	/**
-	 * Save settings to disk
+	 * Save settings to .env file
 	 */
 	save(): void {
-		const dir = path.dirname(this.settingsPath)
-		if (!fs.existsSync(dir)) {
-			fs.mkdirSync(dir, { recursive: true })
+		const updates: Record<string, string> = {
+			ACTIVE_PROVIDER: this.settings.provider.type,
+			ACTIVE_MODEL: this.settings.provider.model,
+			PORT: String(this.settings.port),
+			VERBOSE_LOGGING: String(this.settings.verboseLogging),
 		}
-		fs.writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2))
-		log.info(`Settings saved to ${this.settingsPath}`)
+
+		// Set the appropriate API key for the active provider
+		const apiKeyEnv = API_KEY_ENV_MAP[this.settings.provider.type]
+		if (apiKeyEnv && this.settings.provider.apiKey) {
+			updates[apiKeyEnv] = this.settings.provider.apiKey
+		}
+
+		updateEnvFile(this.envPath, updates)
+
+		// Also update process.env so changes take effect immediately
+		Object.entries(updates).forEach(([key, value]) => {
+			process.env[key] = value
+		})
+
+		log.info(`Settings saved to .env`)
 	}
 
 	/**
