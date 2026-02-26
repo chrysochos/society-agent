@@ -1,7 +1,0 @@
-{
-  "apiProvider": "openrouter",
-  "apiModelId": "minimax/minimax-m2.5",
-  "maxTokens": 16384,
-  "temperature": 0.7,
-  "openRouterApiKey": "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"
-}

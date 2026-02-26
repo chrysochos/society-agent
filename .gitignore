@@ -6,3 +6,6 @@ dist/
 projects/
 *.bak*
 projects/john/
+
+# Local settings with API keys
+.society-agent/
