@@ -7,6 +7,18 @@ Society Agent lets you create, organize, and collaborate with specialized AI age
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-green.svg)](https://nodejs.org/)
 
+## ⚠️ Security Warning
+
+**Agents are autonomous and can execute arbitrary code.** They have full access to the terminal, file system, and network within their environment.
+
+**Recommended precautions:**
+- Run in an **isolated environment** (VM, container, or dedicated machine)
+- **Never** run on a machine with access to production systems or sensitive data
+- Keep **regular backups** of important data
+- Review agent actions in the chat history
+
+*You are responsible for the environment where agents operate.*
+
 ## ✨ Features
 
 - **🏢 Project Workspaces** - Organize agents into isolated projects with their own files and settings
@@ -22,7 +34,7 @@ Society Agent lets you create, organize, and collaborate with specialized AI age
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/society-agent.git
+git clone https://github.com/chrysochos/society-agent.git
 cd society-agent
 
 # Install dependencies
@@ -38,15 +50,104 @@ npm start
 
 Open **http://localhost:4000** in your browser.
 
+## � Docker (Recommended for Isolation)
+
+Docker provides a safe, isolated environment for running autonomous agents.
+
+```bash
+# Clone and configure
+git clone https://github.com/chrysochos/society-agent.git
+cd society-agent
+cp .env.example .env
+# Edit .env and add your ANTHROPIC_API_KEY
+
+# Start with Docker Compose
+docker compose up -d
+```
+
+Open **http://localhost:4000** in your browser.
+
+### Data Persistence
+
+The `projects/` directory is mounted as a volume - all agent workspaces, files, and knowledge persist across container restarts.
+
+### Installing Additional Packages
+
+Agents may need tools not included in the base image (Python, LaTeX, etc.). Two approaches:
+
+**Option 1: Modify Dockerfile (Permanent)**
+
+Edit `Dockerfile` to add packages, then rebuild:
+
+```dockerfile
+# Add to Dockerfile after the existing apt-get install
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    texlive-latex-base \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+```bash
+docker compose down
+docker compose build --no-cache
+docker compose up -d
+```
+
+**Option 2: Install at Runtime (Temporary)**
+
+Install packages inside the running container - these are lost when container restarts:
+
+```bash
+docker compose exec society-agent apt-get update
+docker compose exec society-agent apt-get install -y python3
+```
+
+> **Note:** Option 1 is recommended. Runtime installs (Option 2) must be repeated after every container restart.
+## 🏛️ Architecture Philosophy
+
+Society Agent models AI teams after human organizations:
+
+**Hierarchical Structure**
+- Agents form org charts with unlimited depth - from startups to enterprises
+- Each agent owns a folder (their "desk") and supervises subordinates
+- Supervisors can have both **persistent** agents (always available) and **ephemeral** agents (created for specific tasks)
+
+**Communication Channels**
+- Agents communicate through structured messaging
+- Supervisors delegate work down, subordinates escalate issues up
+- Cross-team coordination through shared knowledge systems
+
+**Human-AI Transition**
+- Every agent seat can be occupied by AI or a human
+- Humans can step in to handle edge cases, then step back out
+- Enables gradual transition: start with humans, add AI assistants, eventually AI-led with human oversight
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    Organization                      │
+├─────────────────────────────────────────────────────┤
+│  CEO (human/AI)                                     │
+│   ├── Engineering Lead (AI)                         │
+│   │    ├── Backend Team Lead (AI)                   │
+│   │    │    ├── API Developer (AI)                  │
+│   │    │    └── DB Specialist (AI)                  │
+│   │    └── Frontend Team Lead (human)               │
+│   │         └── UI Developer (AI)                   │
+│   └── Operations Lead (AI)                          │
+│        └── DevOps Engineer (AI)                     │
+└─────────────────────────────────────────────────────┘
+```
 ## 📖 How It Works
 
 ### Agent Teams
 
-Society Agent uses a hierarchical team structure. Each project has a **lead agent** who can have subordinates:
+Each project has a **lead agent** who can have subordinates. The folder structure mirrors the org chart:
 
 ```
 projects/my-startup/
-├── lead/                    # Project lead - the main contact
+├── lead/                    # Project lead - owns this folder
+│   ├── MIND.md              # Lead's persistent memory
 │   ├── frontend-dev/        # Reports to lead
 │   ├── backend-dev/         # Reports to lead
 │   │   └── db-specialist/   # Reports to backend-dev
@@ -54,9 +155,10 @@ projects/my-startup/
 ```
 
 Agents can:
-- **Delegate tasks** to their subordinates
+- **Delegate tasks** to subordinates via messaging
 - **Escalate issues** to their supervisor
-- **Share context** through the knowledge system
+- **Share context** through knowledge files
+- **Spawn ephemeral agents** for one-off tasks
 
 ### Knowledge Architecture
 
@@ -168,6 +270,20 @@ npm test
 npm run test:watch
 ```
 
+## � History
+
+Society Agent started in **November 2025** as an experiment in multi-agent collaboration using VS Code.
+
+**v1 (Nov 2025)** - Built on [Kilo Code](https://kilocode.ai) VS Code extension. Each agent ran in its own VS Code instance, with file-based message passing between agents. While powerful, this approach was resource-heavy and complex to orchestrate.
+
+**v2 (Feb 2026)** - Complete rewrite as a lightweight web server. Single Express server, agents as web pages, real-time WebSocket communication. Simpler, faster, more flexible.
+
+The current version prioritizes:
+- **Simplicity** - One server, no VS Code dependency
+- **Accessibility** - Web UI works from any browser
+- **Flexibility** - Easy to extend and customize
+
 ## 📄 License
 
 [MIT](LICENSE) - Built with ❤️ for the AI agent community
+

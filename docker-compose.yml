@@ -1,0 +1,13 @@
+services:
+  society-agent:
+    build: .
+    ports:
+      - "4000:4000"
+    volumes:
+      # Persist project data (agent workspaces, files, knowledge)
+      - ./projects:/app/projects
+      # Skills directory (optional - for global skills)
+      - ./skills:/app/skills
+    env_file:
+      - .env
+    restart: unless-stopped
