@@ -484,6 +484,11 @@
     <div class="stat-row"><span class="label">Folder</span><span id="folderName">-</span></div>
     <div class="stat-row"><span class="label">Files</span><span id="fileCount">0</span></div>
     <div class="stat-row"><span class="label">🔀 Git</span><span id="gitStatus" style="cursor:pointer" onclick="refreshGitStatus()" title="Click to refresh">-</span></div>
+    <!-- Society Agent start - LLM model settings for this agent -->
+    <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+      <div class="stat-row"><span class="label">🤖 Model</span><span id="agentModelDisplay" style="cursor:pointer;color:var(--accent)" onclick="showModelSettings()" title="Click to change">-</span></div>
+    </div>
+    <!-- Society Agent end -->
     <!-- Society Agent start - usage tracking for this agent -->
     <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
       <div class="stat-row"><span class="label">💰 Tokens</span><span id="agentTokens" style="cursor:pointer" onclick="showUsageDetails()" title="Click for details">0</span></div>
@@ -687,6 +692,87 @@ let chatAttachments = [];
 let sessionErrors = [];
 let sessionToolCount = 0;
 
+// Society Agent start - LLM model configuration
+let serverProvider = 'anthropic';
+let serverModel = null;
+let projectProvider = null;
+let projectModel = null;
+
+const MODELS_BY_PROVIDER = {
+  anthropic: [
+    { id: 'claude-opus-4-6', name: 'Claude Opus 4.6 (Latest)', input: 5, output: 25 },
+    { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (Latest)', input: 3, output: 15 },
+    { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5 (Fast)', input: 1, output: 5 },
+    { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', input: 3, output: 15 },
+    { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', input: 3, output: 15 },
+    { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', input: 15, output: 75 },
+    { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku (Fast)', input: 0.25, output: 1.25 },
+  ],
+  openrouter: [
+    { id: 'anthropic/claude-opus-4-6', name: 'Claude Opus 4.6 (Latest)', input: 5, output: 25 },
+    { id: 'anthropic/claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (Latest)', input: 3, output: 15 },
+    { id: 'anthropic/claude-haiku-4-5', name: 'Claude Haiku 4.5 (Fast)', input: 1, output: 5 },
+    { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', input: 3, output: 15 },
+    { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', input: 3, output: 15 },
+    { id: 'anthropic/claude-3-opus', name: 'Claude 3 Opus', input: 15, output: 75 },
+    { id: 'anthropic/claude-3-haiku', name: 'Claude 3 Haiku', input: 0.25, output: 1.25 },
+    { id: 'openai/gpt-4o', name: 'GPT-4o', input: 2.5, output: 10 },
+    { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini (Fast)', input: 0.15, output: 0.60 },
+    { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash', input: 0.10, output: 0.40 },
+    { id: 'meta-llama/llama-3.1-70b-instruct', name: 'Llama 3.1 70B', input: 0.52, output: 0.75 },
+    { id: 'deepseek/deepseek-chat', name: 'DeepSeek Chat', input: 0.14, output: 0.28 },
+    { id: 'mistralai/mistral-large', name: 'Mistral Large', input: 2, output: 6 },
+    { id: 'minimax/minimax-m2.5', name: 'MiniMax M2.5', input: 0.30, output: 1.10 },
+  ],
+  openai: [
+    { id: 'gpt-4o', name: 'GPT-4o', input: 2.5, output: 10 },
+    { id: 'gpt-4o-mini', name: 'GPT-4o Mini (Fast)', input: 0.15, output: 0.60 },
+    { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', input: 10, output: 30 },
+    { id: 'o1-preview', name: 'o1 Preview (Reasoning)', input: 15, output: 60 },
+  ],
+  gemini: [
+    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', input: 1.25, output: 5 },
+    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (Fast)', input: 0.075, output: 0.30 },
+  ],
+  deepseek: [
+    { id: 'deepseek-chat', name: 'DeepSeek Chat', input: 0.14, output: 0.28 },
+  ],
+  groq: [
+    { id: 'llama-3.1-70b-versatile', name: 'Llama 3.1 70B', input: 0.59, output: 0.79 },
+    { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B (Fast)', input: 0.05, output: 0.08 },
+  ],
+  mistral: [
+    { id: 'mistral-large-latest', name: 'Mistral Large', input: 2, output: 6 },
+    { id: 'mistral-small-latest', name: 'Mistral Small', input: 0.2, output: 0.6 },
+  ],
+};
+
+async function loadServerProviderConfig() {
+  try {
+    const res = await fetch(`${API}/api/config/provider`);
+    const data = await res.json();
+    serverProvider = data.provider || 'anthropic';
+    serverModel = data.model || null;
+  } catch (e) {
+    console.error('Failed to load server provider config:', e);
+  }
+}
+
+async function loadProjectConfig() {
+  if (!PROJECT_ID) return;
+  try {
+    const res = await fetch(`${API}/api/projects/${PROJECT_ID}`);
+    if (res.ok) {
+      const project = await res.json();
+      projectProvider = project.provider || null;
+      projectModel = project.model || null;
+    }
+  } catch (e) {
+    console.error('Failed to load project config:', e);
+  }
+}
+// Society Agent end
+
 // ============================================================================
 // Load agent profile
 // ============================================================================
@@ -770,6 +856,9 @@ async function loadAgent() {
         </div>`;
       }
     }
+
+    // Society Agent - Update model display
+    updateModelDisplay();
 
     refreshFiles();
     refreshApprovals();
@@ -3747,6 +3836,150 @@ socket.on('system-event', (data) => {
 });
 
 checkSystemPauseState();
+// Society Agent end
+
+// Society Agent start - Model settings functions
+function updateModelDisplay() {
+  const el = document.getElementById('agentModelDisplay');
+  if (!el) return;
+  
+  // Priority: agent > project > server
+  const effectiveProvider = agentProfile?.provider || projectProvider || serverProvider || 'anthropic';
+  const effectiveModel = agentProfile?.model || projectModel || serverModel;
+  
+  let displayText = effectiveModel ? effectiveModel.split('/').pop() : 'Server default';
+  let source = '';
+  if (agentProfile?.model) source = '(agent)';
+  else if (projectModel) source = '(project)';
+  else if (serverModel) source = '(server)';
+  
+  el.textContent = displayText + (source ? ' ' + source : '');
+  el.title = `Provider: ${effectiveProvider}\nModel: ${effectiveModel || 'default'}\nClick to change`;
+}
+
+function showModelSettings() {
+  // Remove existing modal
+  const existing = document.getElementById('modelSettingsModal');
+  if (existing) existing.remove();
+  
+  // Effective provider/model
+  const agentProvider = agentProfile?.provider || '';
+  const agentModel = agentProfile?.model || '';
+  
+  const modal = document.createElement('div');
+  modal.id = 'modelSettingsModal';
+  modal.className = 'tool-modal';
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  
+  const providerOptions = [
+    { value: '', label: `(Use ${projectProvider ? 'project' : 'server'} default: ${projectProvider || serverProvider || 'anthropic'})` },
+    { value: 'anthropic', label: 'Anthropic (Direct)' },
+    { value: 'openrouter', label: 'OpenRouter' },
+    { value: 'openai', label: 'OpenAI' },
+    { value: 'gemini', label: 'Google Gemini' },
+    { value: 'deepseek', label: 'DeepSeek' },
+    { value: 'groq', label: 'Groq' },
+    { value: 'mistral', label: 'Mistral' },
+  ].map(o => `<option value="${o.value}"${agentProvider === o.value ? ' selected' : ''}>${o.label}</option>`).join('');
+  
+  modal.innerHTML = `
+    <div class="tool-modal-panel" style="max-width:500px;">
+      <div class="tool-modal-header">
+        <span class="icon">🤖</span>
+        <span class="title">Agent LLM Settings</span>
+        <button class="close-btn" onclick="this.closest('.tool-modal').remove()">&times;</button>
+      </div>
+      <div class="tool-modal-body" style="font-family:inherit;white-space:normal;padding:20px;">
+        <p style="font-size:12px;color:var(--muted);margin-bottom:16px;">Override the LLM settings for this agent. Leave empty to inherit from project or server defaults.</p>
+        <div style="margin-bottom:16px;">
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:6px;">Provider</label>
+          <select id="modelSettingsProvider" onchange="updateModelSettingsDropdown()" style="width:100%;padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;">
+            ${providerOptions}
+          </select>
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:6px;">Model</label>
+          <select id="modelSettingsModel" style="width:100%;padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;">
+          </select>
+        </div>
+        <div style="font-size:11px;color:var(--muted);padding:10px;background:var(--bg);border-radius:6px;">
+          <strong>Inheritance:</strong> Agent → Project → Server<br>
+          Server: ${serverProvider || 'anthropic'} / ${serverModel || 'default'}<br>
+          ${projectProvider ? `Project: ${projectProvider} / ${projectModel || 'default'}<br>` : ''}
+        </div>
+      </div>
+      <div class="tool-modal-footer">
+        <button class="close-btn" onclick="this.closest('.tool-modal').remove()">Cancel</button>
+        <button class="copy-btn" style="background:var(--accent);color:white;border:none;" onclick="saveAgentModelSettings()">Save</button>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(modal);
+  updateModelSettingsDropdown();
+}
+
+function updateModelSettingsDropdown() {
+  const providerSelect = document.getElementById('modelSettingsProvider');
+  const modelSelect = document.getElementById('modelSettingsModel');
+  if (!providerSelect || !modelSelect) return;
+  
+  const selectedProvider = providerSelect.value || projectProvider || serverProvider || 'anthropic';
+  const models = MODELS_BY_PROVIDER[selectedProvider] || MODELS_BY_PROVIDER.anthropic;
+  const currentModel = agentProfile?.model || '';
+  
+  const defaultLabel = providerSelect.value ? '(Select model)' : `(Use ${projectModel ? 'project' : 'server'} default: ${(projectModel || serverModel || 'default').split('/').pop()})`;
+  let html = `<option value="">${defaultLabel}</option>`;
+  html += models.map(m => 
+    `<option value="${m.id}"${currentModel === m.id ? ' selected' : ''}>${m.name} ($${m.input}/$${m.output})</option>`
+  ).join('');
+  
+  modelSelect.innerHTML = html;
+}
+
+async function saveAgentModelSettings() {
+  const provider = document.getElementById('modelSettingsProvider')?.value || null;
+  const model = document.getElementById('modelSettingsModel')?.value || null;
+  
+  if (!PROJECT_ID || !AGENT_ID) {
+    alert('Cannot save - missing project or agent ID');
+    return;
+  }
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${PROJECT_ID}/agents/${AGENT_ID}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, model }),
+    });
+    
+    if (res.ok) {
+      const updated = await res.json();
+      agentProfile.provider = updated.provider;
+      agentProfile.model = updated.model;
+      updateModelDisplay();
+      document.getElementById('modelSettingsModal')?.remove();
+      showToast('Model settings saved', 'success');
+    } else {
+      const data = await res.json();
+      alert(data.error || 'Failed to save');
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+function showToast(msg, type = 'success') {
+  const toast = document.createElement('div');
+  toast.style.cssText = `position:fixed;bottom:20px;left:50%;transform:translateX(-50%);padding:10px 20px;border-radius:8px;font-size:13px;z-index:9999;animation:fadeIn 0.2s;${type === 'success' ? 'background:var(--green);color:white;' : 'background:var(--red);color:white;'}`;
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+// Load server and project configs on init
+loadServerProviderConfig();
+loadProjectConfig();
 // Society Agent end
 </script>
 </body>

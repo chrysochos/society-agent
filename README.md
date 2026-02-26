@@ -1,186 +1,173 @@
 # Society Agent
 
-Standalone multi-agent orchestration system for managing AI agents.
+> **A multi-agent orchestration system for building AI agent teams**
 
-## Features
+Society Agent lets you create, organize, and collaborate with specialized AI agents. Build hierarchical teams where agents can delegate tasks, share knowledge, and work together on complex projects.
 
-- **Project-based organization**: Each project has its own workspace and agents
-- **Agent management**: Create, configure, and monitor AI agents
-- **Hierarchical agent teams**: Agents can have subordinates with nested folder structures
-- **Real-time chat**: Interactive conversations with agents via web UI
-- **File explorer**: Browse and view files in agent workspaces
-- **Knowledge management**: Persistent memory and context for agents
-- **Skills system**: Reusable procedural knowledge (global and project-specific)
-- **MCP integration**: Connect to external services via Model Context Protocol
-- **Git management**: Agents can manage project repos with approval for push operations
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/badge/Node.js-18%2B-green.svg)](https://nodejs.org/)
 
-## Agent Naming and IDs
+## ✨ Features
 
-When creating agents, you provide a **Name** and the system auto-generates an **ID**:
+- **🏢 Project Workspaces** - Organize agents into isolated projects with their own files and settings
+- **👥 Hierarchical Teams** - Build agent org charts where leads can delegate to subordinates
+- **💬 Real-time Chat** - Interactive web UI for conversations with streaming responses
+- **🧠 Persistent Knowledge** - Agents maintain memory across sessions via Mind-Tool architecture
+- **🔧 Skills System** - Reusable procedural knowledge agents can discover and execute
+- **🔌 MCP Integration** - Connect to external services via Model Context Protocol
+- **📁 File Management** - Agents have full access to their workspace with terminal capabilities
+- **🌐 Multi-Provider** - Support for Anthropic, OpenRouter, OpenAI, Gemini, and more
 
-| Field | Name | ID |
-|-------|------|-----|
-| **Purpose** | Display label for humans | Technical identifier |
-| **Example** | "Documentation Specialist" | `documentation-specialist` |
-| **Format** | Any text | Lowercase, alphanumeric + hyphens |
-| **Unique?** | No (recommended) | **Yes** - must be unique in project |
-
-**Important**: Agent IDs must be unique across the entire project. If you have teams with similar roles at different levels:
-
-```
-❌ Conflict:
-├── Coder → Documentation Specialist (id: documentation-specialist)
-└── Coder → Viewer → Documentation Specialist (id: documentation-specialist)
-
-✅ Solution - use distinct names:
-├── Coder → Documentation Specialist (id: documentation-specialist)  
-└── Coder → Viewer → Viewer Docs (id: viewer-docs)
-```
-
-The folder structure follows the reporting hierarchy:
-```
-projects/my-project/
-├── coder/                          # Lead agent
-│   ├── documentation-specialist/   # Reports to coder
-│   └── viewer/                     # Reports to coder
-│       └── viewer-docs/            # Reports to viewer
-```
-
-## Documentation
-
-See the [docs/](docs/) folder for detailed documentation:
-
-- [**KNOWLEDGE_ARCHITECTURE.md**](docs/KNOWLEDGE_ARCHITECTURE.md) - Complete guide to Mind-Tool, Skills, and MCP systems
-
-## Quick Start
+## 🚀 Quick Start
 
 ```bash
+# Clone the repository
+git clone https://github.com/yourusername/society-agent.git
+cd society-agent
+
 # Install dependencies
 npm install
 
-# Copy environment file and add your API key
+# Configure your API key
 cp .env.example .env
+# Edit .env and add your ANTHROPIC_API_KEY
 
 # Start the server
 npm start
 ```
 
-Open http://localhost:4000 in your browser.
+Open **http://localhost:4000** in your browser.
 
-## Project Structure
+## 📖 How It Works
+
+### Agent Teams
+
+Society Agent uses a hierarchical team structure. Each project has a **lead agent** who can have subordinates:
 
 ```
-society-agent/
-├── src/                    # TypeScript source files
-│   ├── society-server.ts   # Main Express server
-│   ├── conversation-agent.ts   # Agent LLM interface
-│   ├── mcp-client.ts       # MCP server connections
-│   └── ...
-├── public/                 # Web UI
-│   ├── index.html          # Main dashboard
-│   ├── project.html        # Project view
-│   └── agent.html          # Agent chat interface
-├── docs/                   # Documentation
-│   └── KNOWLEDGE_ARCHITECTURE.md
-├── skills/                 # Global skills (user-managed)
-├── mcp-config.json         # Global MCP servers
-├── __tests__/              # Test files
-└── projects/               # Agent workspaces (created at runtime)
-    └── {project}/
-        ├── skills/         # Project-specific skills
-        └── mcp.json        # Project-specific MCPs
+projects/my-startup/
+├── lead/                    # Project lead - the main contact
+│   ├── frontend-dev/        # Reports to lead
+│   ├── backend-dev/         # Reports to lead
+│   │   └── db-specialist/   # Reports to backend-dev
+│   └── qa-engineer/         # Reports to lead
 ```
 
-## API Endpoints
+Agents can:
+- **Delegate tasks** to their subordinates
+- **Escalate issues** to their supervisor
+- **Share context** through the knowledge system
 
-- `GET /` - Main dashboard
-- `GET /project/:projectId` - Project view
-- `GET /project/:projectId/agent/:agentId` - Agent chat
-- `GET /api/projects` - List all projects
-- `POST /api/projects` - Create new project
-- `POST /api/agent/:agentId/chat` - Send message to agent
-- `GET /api/agent/:agentId/workspace/files` - List agent files
+### Knowledge Architecture
 
-## Configuration
+Agents have three types of knowledge:
 
-Environment variables:
+| Type | Scope | Purpose |
+|------|-------|---------|
+| **Mind-Tool** | Per-agent | Persistent memory, notes, and context |
+| **Skills** | Global/Project | Reusable procedures (LaTeX compilation, deployments, etc.) |
+| **MCP Servers** | Global/Project | External tools and APIs |
+
+See [docs/KNOWLEDGE_ARCHITECTURE.md](docs/KNOWLEDGE_ARCHITECTURE.md) for details.
+
+## ⚙️ Configuration
+
+### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ANTHROPIC_API_KEY` | Your Anthropic API key | Required |
+| `ANTHROPIC_API_KEY` | Anthropic API key | Required |
+| `OPENROUTER_API_KEY` | OpenRouter API key | Optional |
+| `OPENAI_API_KEY` | OpenAI API key | Optional |
 | `PORT` | Server port | 4000 |
-| `PROJECTS_DIR` | Projects storage directory | ./projects |
-| `ANTHROPIC_MODEL` | Model to use | claude-sonnet-4-20250514 |
+| `PROJECTS_DIR` | Project storage path | ./projects |
+| `API_PROVIDER` | Default provider | anthropic |
 
-## Skills
+### LLM Provider Hierarchy
 
-Skills are reusable capabilities that agents can discover and use. Agents can list available skills but cannot create them (user-managed only).
+Models can be configured at three levels (most specific wins):
 
-### Global Skills
-Place skill folders in `/skills/` directory. Each skill needs a `SKILL.md` file:
+1. **Agent level** - Override for a specific agent
+2. **Project level** - Override for all agents in a project  
+3. **Server level** - Global default (environment variables)
+
+Supported providers: `anthropic`, `openrouter`, `openai`, `gemini`, `deepseek`, `groq`, `mistral`
+
+## 📁 Project Structure
 
 ```
-skills/
-└── compile-latex/
-    ├── SKILL.md          # Metadata (name, description, version)
-    ├── compile.sh        # Implementation
-    └── README.md         # Usage docs
+society-agent/
+├── src/                      # TypeScript source
+│   ├── society-server.ts     # Express server + API
+│   ├── conversation-agent.ts # LLM conversation handling
+│   ├── mcp-client.ts         # MCP server connections
+│   └── public/               # Web UI (HTML/CSS/JS)
+├── docs/                     # Documentation
+├── skills/                   # Global skills directory
+├── __tests__/                # Test suite
+└── projects/                 # Runtime project workspaces
 ```
 
-Example `SKILL.md`:
-```markdown
----
-name: compile-latex
-description: Compile LaTeX documents with BibTeX support
-version: 1.0
----
-# Usage
-Run `./compile.sh <filename>` to compile a .tex file.
+## 🔌 API Overview
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/projects` | List all projects |
+| `POST /api/projects` | Create a new project |
+| `GET /api/projects/:id` | Get project details |
+| `POST /api/projects/:id/agents` | Create an agent |
+| `POST /api/agent/:id/chat` | Chat with an agent |
+| `GET /api/agent/:id/workspace/files` | List agent files |
+
+## 🛠️ Skills
+
+Skills are user-managed procedures that agents can discover and execute. Create a skill by adding a folder with a `SKILL.md` file:
+
+```
+skills/compile-latex/
+├── SKILL.md        # Metadata and description
+├── compile.sh      # Implementation
+└── README.md       # Usage documentation
 ```
 
-### Project-Specific Skills
-Place in `projects/{projectId}/skills/` with the same structure.
+Skills can be **global** (`/skills/`) or **project-specific** (`/projects/{id}/skills/`).
 
-## MCP Servers
+## 🔗 MCP Servers
 
-MCP (Model Context Protocol) servers extend agent capabilities with external tools. Agents can use MCPs but cannot register them (user-managed only).
-
-### Global MCPs
-Configure in `/mcp-config.json`:
+Connect agents to external tools via [Model Context Protocol](https://modelcontextprotocol.io/):
 
 ```json
+// mcp-config.json
 {
-  "servers": {
-    "playwright": {
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-playwright"],
-      "description": "Browser automation - navigate, click, screenshot",
-      "enabled": true
-    },
+  "mcpServers": {
     "github": {
-      "command": "npx", 
-      "args": ["-y", "@anthropic/mcp-github"],
-      "description": "GitHub API - issues, PRs, repos",
-      "enabled": true
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_TOKEN": "..." }
     }
   }
 }
 ```
 
-### Project-Specific MCPs
-Configure in `projects/{projectId}/mcp.json` with the same format.
+## 📚 Documentation
 
-### Enable/Disable MCPs
-- **Dashboard**: Go to http://localhost:4000, see "Global MCPs" in sidebar, click Enable/Disable
-- **Project Page**: Open a project, see "MCP Servers" section with toggle buttons
-- **API**: `POST /api/mcps/:name/toggle` or `POST /api/project/:projectId/mcps/:name/toggle`
+- [Knowledge Architecture](docs/KNOWLEDGE_ARCHITECTURE.md) - Mind-Tool, Skills, and MCP systems
+- [Security Architecture](docs/SECURITY_ARCHITECTURE.md) - Permissions and sandboxing
+- [System Features](docs/SYSTEM_FEATURES.md) - Detailed feature documentation
 
-### Available MCP Tools for Agents
-Agents have these tools to interact with MCPs:
-- `list_mcps()` - List available MCP servers (name + description)
-- `list_mcp_tools(server)` - Get detailed tools from a specific MCP
-- `use_mcp(server, tool, args)` - Execute an MCP tool
+## 🧪 Development
 
-## License
+```bash
+# Run in development mode (auto-reload)
+npm run dev
 
-MIT
+# Run tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+```
+
+## 📄 License
+
+[MIT](LICENSE) - Built with ❤️ for the AI agent community

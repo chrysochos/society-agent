@@ -258,6 +258,10 @@ export interface Project {
 	folder: string
 	/** Project-level knowledge (shared across all agents) */
 	knowledge: string
+	/** LLM provider override for all agents in this project (defaults to server default) */
+	provider?: string
+	/** LLM model override for all agents in this project (defaults to server default) */
+	model?: string
 	/** Agents assigned to this project */
 	agents: ProjectAgentConfig[]
 	// Society Agent start - Task pool
@@ -672,7 +676,7 @@ export class ProjectStore {
 		return project
 	}
 
-	update(id: string, updates: Partial<Pick<Project, "name" | "description" | "folder" | "knowledge" | "status" | "gitConfig">>): Project | undefined {
+	update(id: string, updates: Partial<Pick<Project, "name" | "description" | "folder" | "knowledge" | "status" | "gitConfig" | "provider" | "model">>): Project | undefined {
 		const project = this.get(id)
 		if (!project) return undefined
 
@@ -682,6 +686,8 @@ export class ProjectStore {
 		if (updates.knowledge !== undefined) project.knowledge = updates.knowledge
 		if (updates.status !== undefined) project.status = updates.status
 		if (updates.gitConfig !== undefined) project.gitConfig = updates.gitConfig
+		if (updates.provider !== undefined) project.provider = updates.provider || undefined
+		if (updates.model !== undefined) project.model = updates.model || undefined
 		project.updatedAt = new Date().toISOString()
 
 		this.save()
@@ -891,8 +897,8 @@ When learning organically → add to KNOWLEDGE.md as playbook
 	updateAgent(
 		projectId: string,
 		agentId: string,
-		// Society Agent - added port, serverType, reportsTo, scope, scheduledTasks, ephemeral, inheritedFolders; removed canSpawnWorkers, capabilities, knowledgeSummary
-		updates: Partial<Pick<ProjectAgentConfig, "name" | "role" | "systemPrompt" | "ephemeral" | "homeFolder" | "model" | "port" | "serverType" | "reportsTo" | "scope" | "scheduledTasks" | "inheritedFolders">>,
+		// Society Agent - added port, serverType, reportsTo, scope, scheduledTasks, ephemeral, inheritedFolders, provider; removed canSpawnWorkers, capabilities, knowledgeSummary
+		updates: Partial<Pick<ProjectAgentConfig, "name" | "role" | "systemPrompt" | "ephemeral" | "homeFolder" | "provider" | "model" | "port" | "serverType" | "reportsTo" | "scope" | "scheduledTasks" | "inheritedFolders">>,
 	): ProjectAgentConfig | undefined {
 		const project = this.get(projectId)
 		if (!project) return undefined
