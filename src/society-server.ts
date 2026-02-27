@@ -2716,6 +2716,10 @@ function getOrCreateAgent(profile: import("./persistent-agent-store").Persistent
 		fullPrompt += `\n\n## Your Memory (from past conversations)\n${profile.memorySummary}`
 	}
 
+	// Society Agent start - agent workspace path for history persistence
+	const agentWorkspace = path.join(getWorkspacePath(), "projects", profile.workspaceFolder || profile.id)
+	// Society Agent end
+
 	const agent = new ConversationAgent({
 		identity: {
 			id: profile.id,
@@ -2723,6 +2727,12 @@ function getOrCreateAgent(profile: import("./persistent-agent-store").Persistent
 		},
 		apiHandler,
 		systemPrompt: fullPrompt,
+		workspacePath: agentWorkspace, // Society Agent - use agent's folder
+		// Society Agent start - enable history persistence for restart recovery
+		persistHistory: true,
+		historyDir: path.join(agentWorkspace, ".history"),
+		backupsEnabled: true,
+		// Society Agent end
 		onMessage: (message) => {
 			io.emit("agent-message", {
 				agentId: profile.id,
@@ -4393,6 +4403,40 @@ async function executeAgentTool(
 				log.error(`[Worker ${agentConfig.name}] run_command received invalid command: ${JSON.stringify(toolInput)}`)
 				return { result: `❌ Error: run_command requires a valid 'command' string parameter. Received: ${JSON.stringify(toolInput)}`, filesCreated: 0 }
 			}
+
+			// Society Agent - Fix incorrect paths that miss the projects/<project-id> folder
+			// Common mistake: /workspaces/society-agent/backend-specialist
+			// Should be: /workspaces/society-agent/projects/architect/backend-specialist
+			let fixedCommand = command
+			const workspaceRoot = getWorkspacePath()
+			
+			// Find all absolute paths in the command that start with workspace root
+			const pathRegex = new RegExp(`${workspaceRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/([^\\s;&|"']+)`, 'g')
+			let match
+			while ((match = pathRegex.exec(command)) !== null) {
+				const fullPath = match[0]
+				const afterRoot = match[1]
+				
+				// Skip if it already has projects/ or is a known root folder
+				if (afterRoot.startsWith("projects/") || 
+				    afterRoot.startsWith("src/") || 
+				    afterRoot.startsWith("node_modules/") ||
+				    afterRoot.startsWith("docs/") ||
+				    afterRoot.startsWith("skills/") ||
+				    afterRoot.startsWith("__tests__/") ||
+				    afterRoot === "package.json" ||
+				    afterRoot === "tsconfig.json" ||
+				    afterRoot.startsWith(".")) {
+					continue
+				}
+				
+				// This path is probably missing projects/<project-id>/
+				const correctedPath = path.join(workspaceRoot, "projects", project.id, afterRoot)
+				log.warn(`[Worker ${agentConfig.name}] Detected incorrect path: ${fullPath}`)
+				log.warn(`[Worker ${agentConfig.name}] Auto-correcting to: ${correctedPath}`)
+				fixedCommand = fixedCommand.replace(fullPath, correctedPath)
+			}
+			// Society Agent end
 			
 			// CRITICAL: Block commands that would kill the system server
 			const dangerousPatterns = [
@@ -4406,9 +4450,9 @@ async function executeAgentTool(
 				/kill.*-9.*$(.*4000)/i,
 			]
 			
-			const isDangerous = dangerousPatterns.some(pattern => pattern.test(command))
+			const isDangerous = dangerousPatterns.some(pattern => pattern.test(fixedCommand))
 			if (isDangerous) {
-				log.warn(`[BLOCKED] Agent ${agentConfig.name} tried to run dangerous command: ${command}`)
+				log.warn(`[BLOCKED] Agent ${agentConfig.name} tried to run dangerous command: ${fixedCommand}`)
 				return { 
 					result: `🚨 **BLOCKED: This command would kill the system server!**\n\nPort 4000 is the Society Agent system - killing it would destroy yourself and all other agents.\n\n✅ Use a different port for YOUR server (6001, 8080, 3000, etc.)\n❌ Never try to kill processes on port 4000`, 
 					filesCreated: 0 
@@ -4416,8 +4460,32 @@ async function executeAgentTool(
 			}
 			// Society Agent end
 
+			// Society Agent - Auto-detect commands that should run in background
+			// These patterns indicate long-running servers that will never exit on their own
+			let autoBackground = background || false
+			const serverPatterns = [
+				/npm\s+(run\s+)?(dev|start|serve|server)/i,   // npm run dev, npm start, etc.
+				/yarn\s+(run\s+)?(dev|start|serve|server)/i,  // yarn equivalents
+				/pnpm\s+(run\s+)?(dev|start|serve|server)/i,  // pnpm equivalents
+				/node\s+.*server/i,                            // node server.js
+				/nodemon/i,                                    // nodemon
+				/ts-node\s+.*server/i,                         // ts-node server.ts
+				/tsx\s+.*server/i,                             // tsx server.ts
+				/python.*-m\s+http\.server/i,                  // python http server
+				/python.*flask\s+run/i,                        // flask
+				/python.*uvicorn/i,                            // uvicorn
+				/go\s+run.*server/i,                           // go server
+				/cargo\s+run.*server/i,                        // rust server
+			]
+			
+			if (!background && serverPatterns.some(pattern => pattern.test(fixedCommand))) {
+				log.info(`[Worker ${agentConfig.name}] Auto-enabling background mode for server command: ${fixedCommand}`)
+				autoBackground = true
+			}
+			// Society Agent end
+
 			// Society Agent - Use workingFolder for commands
-			log.info(`[Worker ${agentConfig.name}] Running: ${command} (cwd: ${workingFolder}, bg: ${background || false})`)
+			log.info(`[Worker ${agentConfig.name}] Running: ${fixedCommand} (cwd: ${workingFolder}, bg: ${autoBackground})`)
 			
 			// Check if working directory exists
 			if (!fs.existsSync(workingFolder)) {
@@ -4428,17 +4496,17 @@ async function executeAgentTool(
 				type: "command-start",
 				agentId: agentConfig.id,
 				projectId: project.id,
-				message: `Running: ${command}`,
-				command,
+				message: `Running: ${fixedCommand}`,
+				command: fixedCommand,
 				cwd: workingFolder,
-				background: background || false,
+				background: autoBackground,
 				timestamp: Date.now(),
 			})
 
-	if (background) {
+	if (autoBackground) {
 		const { exec } = await import("child_process")
 		const logFile = `/tmp/worker-${agentConfig.id}-${Date.now()}.log`
-		const bgCommand = `nohup ${command} > ${logFile} 2>&1 & echo $!`
+		const bgCommand = `nohup ${fixedCommand} > ${logFile} 2>&1 & echo $!`
 
 		const cleanEnv = { ...process.env }
 		delete cleanEnv.PORT
@@ -4451,8 +4519,8 @@ async function executeAgentTool(
 					type: "command-background",
 					agentId: agentConfig.id,
 					projectId: project.id,
-					message: `Background: ${command} (PID: ${pid})`,
-					command,
+					message: `Background: ${fixedCommand} (PID: ${pid})`,
+					command: fixedCommand,
 					pid,
 					logFile,
 					timestamp: Date.now(),
@@ -4513,9 +4581,9 @@ async function executeAgentTool(
 	const timeout = timeout_ms || 300000 // 5 minutes default
 
 	// Society Agent start - Auto-prepend sudo for apt commands
-	let finalCommand = command
-	if (/^\s*(apt-get|apt|dpkg)\s/.test(command) && !command.includes("sudo")) {
-		finalCommand = `sudo ${command}`
+	let finalCommand = fixedCommand
+	if (/^\s*(apt-get|apt|dpkg)\s/.test(fixedCommand) && !fixedCommand.includes("sudo")) {
+		finalCommand = `sudo ${fixedCommand}`
 		log.info(`[Worker ${agentConfig.name}] Auto-prepending sudo: ${finalCommand}`)
 	}
 	// Society Agent end
@@ -4535,10 +4603,27 @@ async function executeAgentTool(
 			isStreaming: true,
 		})
 
-		const child = spawn("bash", ["-c", finalCommand], {
+		// Society Agent - Detect if command has backgrounding (&) and needs special handling
+		// When bash -c runs a command with &, it may still wait for background jobs
+		// We fix this by using 'set +m' to disable job control and adding 'disown'
+		const hasBackgrounding = /&\s*(&&|$|\|)/.test(finalCommand) || finalCommand.trim().endsWith('&')
+		let shellCommand = finalCommand
+		if (hasBackgrounding) {
+			// Wrap to truly detach background processes
+			shellCommand = `set +m; ${finalCommand}`
+			log.info(`[Worker ${agentConfig.name}] Command has backgrounding, using detached mode`)
+		}
+
+		const child = spawn("bash", ["-c", shellCommand], {
 			cwd: workingFolder, // Society Agent - Use workingFolder for commands
 			env: { ...process.env, FORCE_COLOR: "0" },
+			detached: hasBackgrounding, // Detach if command has backgrounding
 		})
+
+		// If detached, unref so node doesn't wait for it
+		if (hasBackgrounding) {
+			child.unref()
+		}
 
 		const streamOutput = (data: Buffer) => {
 			const text = data.toString()
@@ -4732,9 +4817,51 @@ If you don't know, say so. Be concise.`,
 
 		// Society Agent start - Allow workers to READ from project (other agents' folders)
 		case "read_project_file": {
-			const { path: filePath } = toolInput as { path: string }
+			let { path: filePath } = toolInput as { path: string }
 			const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 			const projectDir = path.join(workspacePath, "projects", project.folder || project.id)
+			
+			// Society Agent - Fix: Strip redundant "projects/<project>/" prefix if agent included it
+			// Agent might pass "projects/architect/frontend-specialist/file.ts" when they should just pass "frontend-specialist/file.ts"
+			const projectPrefix = `projects/${project.folder || project.id}/`
+			if (filePath.startsWith(projectPrefix)) {
+				filePath = filePath.substring(projectPrefix.length)
+				log.info(`[Worker ${agentConfig.name}] Stripped redundant prefix from path: ${toolInput.path} -> ${filePath}`)
+			}
+			// Also handle absolute paths
+			if (filePath.startsWith(workspacePath)) {
+				const relativePath = filePath.substring(workspacePath.length).replace(/^\//, "")
+				if (relativePath.startsWith(`projects/${project.folder || project.id}/`)) {
+					filePath = relativePath.substring(`projects/${project.folder || project.id}/`.length)
+					log.info(`[Worker ${agentConfig.name}] Converted absolute to relative path: ${toolInput.path} -> ${filePath}`)
+				}
+			}
+			
+			// Society Agent - Auto-correct partial folder names (e.g., "frontend" -> "frontend-specialist")
+			const pathParts = filePath.split("/")
+			if (pathParts.length > 0) {
+				const firstDir = pathParts[0]
+				const firstDirPath = path.join(projectDir, firstDir)
+				if (!fs.existsSync(firstDirPath) && firstDir.length > 2) {
+					// Look for a folder that contains this name
+					try {
+						const projectFolders = fs.readdirSync(projectDir, { withFileTypes: true })
+							.filter(d => d.isDirectory() && !d.name.startsWith(".") && d.name !== "node_modules")
+							.map(d => d.name)
+						// Generic matching: folder starts with input, or folder contains input
+						const matchingFolder = projectFolders.find(f => 
+							f.startsWith(firstDir) || f.toLowerCase().includes(firstDir.toLowerCase())
+						)
+						if (matchingFolder && matchingFolder !== firstDir) {
+							pathParts[0] = matchingFolder
+							const oldFilePath = filePath
+							filePath = pathParts.join("/")
+							log.warn(`[Worker ${agentConfig.name}] Auto-corrected folder name: ${oldFilePath} -> ${filePath}`)
+						}
+					} catch { /* ignore errors in folder listing */ }
+				}
+			}
+			
 			const fullPath = path.join(projectDir, filePath)
 			
 			// Security: ensure path is within project folder
@@ -4744,7 +4871,26 @@ If you don't know, say so. Be concise.`,
 			
 			try {
 				if (!fs.existsSync(fullPath)) {
-					return { result: `❌ File not found: ${filePath}`, filesCreated: 0 }
+					// Society Agent - Suggest similar folders if the first path segment doesn't exist
+					const pathParts = filePath.split("/")
+					const firstDir = pathParts[0]
+					const projectFolders = fs.readdirSync(projectDir, { withFileTypes: true })
+						.filter(d => d.isDirectory() && !d.name.startsWith(".") && d.name !== "node_modules")
+						.map(d => d.name)
+					
+					// Check if first segment is a partial match
+					const similarFolders = projectFolders.filter(f => 
+						f.toLowerCase().includes(firstDir.toLowerCase()) || firstDir.toLowerCase().includes(f.split("-")[0].toLowerCase())
+					)
+					
+					let suggestion = ""
+					if (similarFolders.length > 0 && !projectFolders.includes(firstDir)) {
+						suggestion = `\n\n💡 Did you mean one of these?\n${similarFolders.map(f => `  - ${f}/`).join("\n")}`
+					} else if (projectFolders.length > 0) {
+						suggestion = `\n\n📁 Available folders in project:\n${projectFolders.map(f => `  - ${f}/`).join("\n")}`
+					}
+					
+					return { result: `❌ File not found: ${filePath}${suggestion}`, filesCreated: 0 }
 				}
 				const content = fs.readFileSync(fullPath, "utf-8")
 				const truncated = content.length > 15000 
@@ -4757,9 +4903,49 @@ If you don't know, say so. Be concise.`,
 		}
 
 		case "list_project_files": {
-			const { path: dirPath } = toolInput as { path: string }
+			let { path: dirPath } = toolInput as { path: string }
 			const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 			const projectDir = path.join(workspacePath, "projects", project.folder || project.id)
+			
+			// Society Agent - Fix: Strip redundant "projects/<project>/" prefix if agent included it
+			const projectPrefix = `projects/${project.folder || project.id}/`
+			if (dirPath && dirPath.startsWith(projectPrefix)) {
+				dirPath = dirPath.substring(projectPrefix.length)
+				log.info(`[Worker ${agentConfig.name}] Stripped redundant prefix from dirPath: ${toolInput.path} -> ${dirPath}`)
+			}
+			if (dirPath && dirPath.startsWith(workspacePath)) {
+				const relativePath = dirPath.substring(workspacePath.length).replace(/^\//, "")
+				if (relativePath.startsWith(`projects/${project.folder || project.id}/`)) {
+					dirPath = relativePath.substring(`projects/${project.folder || project.id}/`.length)
+				}
+			}
+			
+			// Society Agent - Auto-correct partial folder names (e.g., "frontend" -> "frontend-specialist")
+			if (dirPath) {
+				const pathParts = dirPath.split("/")
+				if (pathParts.length > 0) {
+					const firstDir = pathParts[0]
+					const firstDirPath = path.join(projectDir, firstDir)
+					if (!fs.existsSync(firstDirPath) && firstDir.length > 2) {
+						try {
+							const projectFolders = fs.readdirSync(projectDir, { withFileTypes: true })
+								.filter(d => d.isDirectory() && !d.name.startsWith(".") && d.name !== "node_modules")
+								.map(d => d.name)
+							// Generic matching: folder starts with input, or folder contains input
+							const matchingFolder = projectFolders.find(f => 
+								f.startsWith(firstDir) || f.toLowerCase().includes(firstDir.toLowerCase())
+							)
+							if (matchingFolder && matchingFolder !== firstDir) {
+								pathParts[0] = matchingFolder
+								const oldDirPath = dirPath
+								dirPath = pathParts.join("/")
+								log.warn(`[Worker ${agentConfig.name}] Auto-corrected folder name: ${oldDirPath} -> ${dirPath}`)
+							}
+						} catch { /* ignore errors */ }
+					}
+				}
+			}
+			
 			const fullPath = path.join(projectDir, dirPath || ".")
 			
 			// Security: ensure path is within project folder
@@ -4769,7 +4955,15 @@ If you don't know, say so. Be concise.`,
 			
 			try {
 				if (!fs.existsSync(fullPath)) {
-					return { result: `❌ Directory not found: ${dirPath}`, filesCreated: 0 }
+					// Society Agent - Suggest available folders when directory not found
+					const projectFolders = fs.readdirSync(projectDir, { withFileTypes: true })
+						.filter(d => d.isDirectory() && !d.name.startsWith(".") && d.name !== "node_modules")
+						.map(d => d.name)
+					let suggestion = ""
+					if (projectFolders.length > 0) {
+						suggestion = `\n\n📁 Available folders in project:\n${projectFolders.map(f => `  - ${f}/`).join("\n")}`
+					}
+					return { result: `❌ Directory not found: ${dirPath}${suggestion}`, filesCreated: 0 }
 				}
 				const items = fs.readdirSync(fullPath, { withFileTypes: true })
 				// Filter out noise
@@ -5117,6 +5311,24 @@ If you don't know, say so. Be concise.`,
 		case "kill_process": {
 			const { pid, port, name } = toolInput as { pid?: number; port?: number; name?: string }
 			const { execSync } = await import("child_process")
+			
+			// Society Agent - CRITICAL: Block killing the system server
+			const SYSTEM_PORT = parseInt(process.env.PORT || "4000", 10)
+			if (port === SYSTEM_PORT) {
+				log.warn(`[BLOCKED] Agent ${agentConfig.name} tried to kill system port ${SYSTEM_PORT}`)
+				return { 
+					result: `🚨 **BLOCKED: Cannot kill port ${SYSTEM_PORT}!**\n\nThis is the Society Agent system server. Killing it would destroy yourself and all other agents.\n\n✅ Use a different port for YOUR server\n❌ Never kill port ${SYSTEM_PORT}`, 
+					filesCreated: 0 
+				}
+			}
+			if (name && (/society|tsx.*server/i.test(name) || name.includes("4000"))) {
+				log.warn(`[BLOCKED] Agent ${agentConfig.name} tried to kill system process: ${name}`)
+				return { 
+					result: `🚨 **BLOCKED: Cannot kill system processes!**\n\nThe Society Agent server must remain running.\n\n✅ Kill YOUR processes by name or port\n❌ Never kill society-server or port 4000`, 
+					filesCreated: 0 
+				}
+			}
+			// Society Agent end
 			
 			try {
 				if (pid) {

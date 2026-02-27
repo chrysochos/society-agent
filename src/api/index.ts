@@ -152,9 +152,17 @@ export class OpenAIHandler implements ApiHandler {
 	private providerName: string
 
 	constructor(options: OpenAIHandlerOptions) {
+		// Add OpenRouter-specific headers for app identification
+		const defaultHeaders: Record<string, string> = {}
+		if (options.providerName === "openrouter") {
+			defaultHeaders["HTTP-Referer"] = "https://github.com/chrysochos/society-agent"
+			defaultHeaders["X-Title"] = "Society Agent"
+		}
+
 		this.client = new OpenAI({ 
 			apiKey: options.apiKey,
 			baseURL: options.baseURL,
+			defaultHeaders: Object.keys(defaultHeaders).length > 0 ? defaultHeaders : undefined,
 		})
 		this.model = options.model
 		this.maxTokens = options.maxTokens || DEFAULT_MAX_TOKENS

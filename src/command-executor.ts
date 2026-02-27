@@ -26,6 +26,8 @@ export interface ExecuteCommandOptions {
 	cwd?: string // Working directory
 	env?: Record<string, string> // Environment variables
 	timeout?: number // Max execution time (ms)
+	background?: boolean // Run in background, return after initial output
+	backgroundWaitMs?: number // How long to wait for initial output (default 3000ms)
 	onOutput?: (data: string, type: "stdout" | "stderr") => void
 	onExit?: (code: number) => void
 }
@@ -134,6 +136,23 @@ export class CommandExecutor {
 
 				reject(error)
 			})
+
+			// Handle background mode - return early after collecting initial output
+			if (options.background) {
+				const waitMs = options.backgroundWaitMs ?? 3000
+				setTimeout(() => {
+					if (this.runningCommands.has(commandId)) {
+						// Don't kill the process, just detach and return
+						child.unref()
+						result.status = "success"
+						result.finishedAt = Date.now()
+						this.addToHistory(result)
+						// Keep in runningCommands so it can be killed later if needed
+						resolve(result)
+					}
+				}, waitMs)
+				return
+			}
 
 			// Handle timeout
 			if (options.timeout) {

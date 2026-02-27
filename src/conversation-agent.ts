@@ -463,8 +463,17 @@ Respond with ONLY the JSON object.`
 			if (parsed.backups && Array.isArray(parsed.backups) && this.backupsEnabled) {
 				this.historyBackups = parsed.backups
 			}
+			// Society Agent start - restore task state
+			if (parsed.currentTask) {
+				this.state.currentTask = parsed.currentTask
+			}
+			if (parsed.status && parsed.status !== "completed" && parsed.status !== "error") {
+				// Resume as "working" if it was in progress before restart
+				this.state.status = "idle" // Reset to idle - agent can resume via conversation
+			}
+			// Society Agent end
 
-			getLog().info(`${this.state.identity.id}: Loaded ${this.state.conversationHistory.length} messages from disk`)
+			getLog().info(`${this.state.identity.id}: Loaded ${this.state.conversationHistory.length} messages from disk${parsed.currentTask ? ` (had task: ${parsed.currentTask.substring(0, 50)}...)` : ""}`)
 		} catch (err: any) {
 			if (err.code !== "ENOENT") {
 				throw err
@@ -489,6 +498,10 @@ Respond with ONLY the JSON object.`
 				messages: this.state.conversationHistory,
 				summary: this.conversationSummary,
 				backups: this.backupsEnabled ? this.historyBackups : [],
+				// Society Agent start - persist task state for restart recovery
+				currentTask: this.state.currentTask,
+				status: this.state.status,
+				// Society Agent end
 			}
 
 			const filePath = this.getHistoryFilePath()
@@ -620,6 +633,14 @@ Respond with ONLY the JSON object.`
 		}
 		// Society Agent end
 
+		// Society Agent start - persist to disk after each message for restart recovery
+		if (this.persistHistory) {
+			this.saveHistoryToDisk().catch(err => {
+				getLog().warn(`${this.state.identity.id}: Failed to persist message: ${err}`)
+			})
+		}
+		// Society Agent end
+
 		return message
 		// Society Agent end
 	}
@@ -648,6 +669,14 @@ Respond with ONLY the JSON object.`
 			getLog().info(`${this.state.identity.id}: Triggering summarization (${tokenCount} tokens, ${contextPercent.toFixed(1)}% of context, ${this.state.conversationHistory.length} messages)`)
 			await this.summarizeOldMessages()
 		}
+
+		// Society Agent start - persist to disk after each message for restart recovery
+		if (this.persistHistory) {
+			this.saveHistoryToDisk().catch(err => {
+				getLog().warn(`${this.state.identity.id}: Failed to persist message: ${err}`)
+			})
+		}
+		// Society Agent end
 
 		return message
 	}
