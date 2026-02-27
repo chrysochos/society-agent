@@ -2525,6 +2525,13 @@ socket.on('task-claimed', () => refreshTasks());
 socket.on('task-completed', () => refreshTasks());
 socket.on('task-failed', () => refreshTasks());
 
+// Live diagnostics updates from background watchers
+socket.on('diagnostics-update', (data) => {
+  if (data.projectId === projectId) {
+    renderProblems(data.diagnostics || [], data.counts || {});
+  }
+});
+
 // Approval events
 socket.on('approval-requested', (data) => {
   if (data.projectId === projectId) {

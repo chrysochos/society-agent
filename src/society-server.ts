@@ -64,6 +64,9 @@ import { initMcpManager, getMcpManager } from "./mcp-client"
 // Society Agent start - git loader for project history
 import { initGitLoader, getGitLoader } from "./git-loader"
 // Society Agent end
+// Society Agent start - diagnostics watcher (tsc / ruff / pyright)
+import { DiagnosticsWatcher } from "./diagnostics-watcher"
+// Society Agent end
 
 const app = express()
 const server = http.createServer(app)
@@ -512,6 +515,14 @@ function buildFullSystemPrompt(agentSystemPrompt: string): string {
 const projectStore = new ProjectStore(getWorkspacePath())
 // Society Agent end
 
+// Society Agent start - diagnostics watcher
+const diagnosticsWatcher = new DiagnosticsWatcher(getWorkspacePath())
+diagnosticsWatcher.on("updated", (projectId: string) => {
+	const result = diagnosticsWatcher.getDiagnostics(projectId)
+	io.emit("diagnostics-update", { projectId, ...result })
+})
+// Society Agent end
+
 // Society Agent start - activity logging for visibility
 interface ActivityEntry {
 	id: string
@@ -599,6 +610,10 @@ function safeParseToolArgs(jsonStr: string | undefined): Record<string, any> {
 
 // Society Agent - Extract clean preview from tool results for UI tool cards
 function extractCleanPreview(result: string, maxLines = 2): { preview: string; lineCount: number } {
+	// Show more lines for errors so users can read them without expanding
+	const isError = result.startsWith("❌") || result.includes("Command failed") || result.includes("Process failed")
+	const effectiveMaxLines = isError ? 20 : maxLines
+
 	// Strip markdown formatting to get actual content
 	let content = result
 	// Remove markdown headers like "📄 **filename**:"
@@ -609,7 +624,7 @@ function extractCleanPreview(result: string, maxLines = 2): { preview: string; l
 	content = content.trim()
 	
 	const lines = content.split('\n').filter(l => l.trim() !== '')
-	const preview = lines.slice(0, maxLines).join('\n') + (lines.length > maxLines ? '...' : '')
+	const preview = lines.slice(0, effectiveMaxLines).join('\n') + (lines.length > effectiveMaxLines ? '...' : '')
 	
 	return { preview, lineCount: lines.length }
 }
@@ -2952,6 +2967,48 @@ app.get("/api/projects/:id", (req, res): void => {
 })
 
 /**
+ * GET /api/projects/:id/diagnostics - Return live diagnostics from background watchers.
+ * Falls back to on-demand tsc if no watcher has collected data yet.
+ */
+app.get("/api/projects/:id/diagnostics", async (req, res): Promise<void> => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+
+		// Ensure watcher is running (idempotent)
+		diagnosticsWatcher.startProject(project.id, project.folder || project.id)
+
+		// Return current in-memory diagnostics from watcher
+		const result = diagnosticsWatcher.getDiagnostics(project.id)
+		res.json(result)
+	} catch (err: any) {
+		res.status(500).json({ error: err.message })
+	}
+})
+
+/**
+ * POST /api/projects/:id/diagnostics/refresh - Force-refresh diagnostics by
+ * stopping and restarting the watchers for this project.
+ */
+app.post("/api/projects/:id/diagnostics/refresh", (req, res): void => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+		diagnosticsWatcher.stopProject(project.id)
+		diagnosticsWatcher.startProject(project.id, project.folder || project.id)
+		res.json({ success: true, message: "Watchers restarted" })
+	} catch (err: any) {
+		res.status(500).json({ error: err.message })
+	}
+})
+
+/**
  * GET /api/projects/:id/git/log - Get git commit history for a project
  */
 app.get("/api/projects/:id/git/log", (req, res): void => {
@@ -3152,6 +3209,8 @@ This way you (and future sessions) don't have to re-learn everything!`),
 		
 		const project = projectStore.create({ id, name, description: description || "", folder, knowledge, agents: projectAgents })
 		io.emit("system-event", { type: "project-created", projectId: id, name, timestamp: Date.now() })
+		// Society Agent - start diagnostics watchers for new project
+		diagnosticsWatcher.startProject(id, folder || id)
 		res.status(201).json(project)
 	} catch (error) {
 		res.status(400).json({ error: String(error) })
@@ -3182,6 +3241,8 @@ app.delete("/api/projects/:id", (req, res): void => {
 		const project = projectStore.get(req.params.id)
 		if (project) {
 			for (const a of project.agents) activeAgents.delete(a.id)
+			// Society Agent - stop diagnostics watchers
+			diagnosticsWatcher.stopProject(req.params.id)
 		}
 		const deleted = projectStore.delete(req.params.id)
 		if (!deleted) {
@@ -4260,6 +4321,10 @@ async function executeAgentTool(
 
 		case "write_file": {
 			const { path: filePath, content } = toolInput as { path: string; content: string }
+
+			if (content === undefined || content === null) {
+				return { result: `❌ Error writing file: 'content' parameter is missing or undefined. Call write_file with both 'path' and 'content' arguments.`, filesCreated: 0 }
+			}
 			
 			// Society Agent - Reject absolute paths
 			if (filePath && filePath.startsWith("/")) {
@@ -4560,7 +4625,7 @@ async function executeAgentTool(
 							})
 						} else {
 							resolve({
-								result: `❌ Process failed (exited immediately)!\n\nOutput/Error:\n${logContent || "(no output)"}`,
+								result: `❌ Process failed (exited immediately)!\n\nCommand: ${fixedCommand}\n\nOutput/Error:\n${logContent || "(no output)"}`,
 								filesCreated: 0,
 							})
 						}
@@ -4655,7 +4720,7 @@ async function executeAgentTool(
 		child.on("close", (code) => {
 			clearTimeout(timeoutId)
 			
-			// Close the code block in UI
+			// Close the streaming code block in UI
 			io.emit("agent-message", {
 				agentId: agentConfig.id,
 				agentName: agentConfig.name,
@@ -4664,10 +4729,6 @@ async function executeAgentTool(
 				timestamp: Date.now(),
 				isStreaming: true,
 			})
-
-			const truncated = output.length > 6000
-				? output.substring(0, 6000) + "\n...(truncated)"
-				: output
 
 			io.emit("system-event", {
 				type: code === 0 ? "command-complete" : "command-error",
@@ -4678,10 +4739,20 @@ async function executeAgentTool(
 				timestamp: Date.now(),
 			})
 
-			if (code === 0) {
-				resolve({ result: `✅ Command completed.\n\nOutput:\n${truncated || "(no output)"}`, filesCreated: 0 })
+			// For long output: keep first 4000 chars + last 2000 chars so the summary
+			// (e.g. Jest test results) at the END of output is always visible.
+			let displayOutput: string
+			if (output.length > 6000) {
+				const head = output.substring(0, 4000)
+				const tail = output.substring(output.length - 2000)
+				displayOutput = `${head}\n\n...(${output.length - 6000} bytes omitted)...\n\n${tail}`
 			} else {
-				resolve({ result: `❌ Command failed (exit ${code}).\n\nOutput:\n${truncated || "(no output)"}`, filesCreated: 0 })
+				displayOutput = output || "(no output)"
+			}
+			if (code === 0) {
+				resolve({ result: `✅ Command completed.\n\`\`\`\n$ ${fixedCommand}\n${displayOutput}\n\`\`\``, filesCreated: 0 })
+			} else {
+				resolve({ result: `❌ Command failed (exit ${code}).\n\`\`\`\n$ ${fixedCommand}\n${displayOutput}\n\`\`\``, filesCreated: 0 })
 			}
 		})
 
@@ -4820,13 +4891,35 @@ If you don't know, say so. Be concise.`,
 			let { path: filePath } = toolInput as { path: string }
 			const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 			const projectDir = path.join(workspacePath, "projects", project.folder || project.id)
+			const projectId = project.folder || project.id
 			
-			// Society Agent - Fix: Strip redundant "projects/<project>/" prefix if agent included it
-			// Agent might pass "projects/architect/frontend-specialist/file.ts" when they should just pass "frontend-specialist/file.ts"
-			const projectPrefix = `projects/${project.folder || project.id}/`
+			// Society Agent - Fix: Strip various incorrect "projects" prefixes
+			// Agent might pass: "projects/architect/...", "projects/...", or just "projects"
+			const projectPrefix = `projects/${projectId}/`
 			if (filePath.startsWith(projectPrefix)) {
 				filePath = filePath.substring(projectPrefix.length)
 				log.info(`[Worker ${agentConfig.name}] Stripped redundant prefix from path: ${toolInput.path} -> ${filePath}`)
+			} else if (filePath === `projects/${projectId}` || filePath === `projects/${projectId}/`) {
+				// Agent trying to read project root with full path
+				filePath = ""
+				log.info(`[Worker ${agentConfig.name}] Stripped project path to root: ${toolInput.path} -> (root)`)
+			} else if (filePath.startsWith("projects/")) {
+				// Might be "projects/somefile.ts" - strip "projects/" and see if it's a partial project name
+				const afterProjects = filePath.substring("projects/".length)
+				const parts = afterProjects.split("/")
+				// Check if first part matches or partially matches the project id
+				if (parts[0] === projectId || parts[0].toLowerCase() === projectId.toLowerCase()) {
+					filePath = parts.slice(1).join("/")
+					log.info(`[Worker ${agentConfig.name}] Stripped projects/project prefix: ${toolInput.path} -> ${filePath || "(root)"}`)
+				} else {
+					// Just strip "projects/" entirely - agent is confused
+					filePath = afterProjects
+					log.info(`[Worker ${agentConfig.name}] Stripped bare projects/ prefix: ${toolInput.path} -> ${filePath}`)
+				}
+			} else if (filePath === "projects") {
+				// Agent trying to use "projects" to mean project root
+				filePath = ""
+				log.info(`[Worker ${agentConfig.name}] Replaced 'projects' with root: ${toolInput.path} -> (root)`)
 			}
 			// Also handle absolute paths
 			if (filePath.startsWith(workspacePath)) {
@@ -4839,6 +4932,7 @@ If you don't know, say so. Be concise.`,
 			
 			// Society Agent - Auto-correct partial folder names (e.g., "frontend" -> "frontend-specialist")
 			const pathParts = filePath.split("/")
+			let folderCorrectionNote = "" // Track if we auto-corrected for error messages
 			if (pathParts.length > 0) {
 				const firstDir = pathParts[0]
 				const firstDirPath = path.join(projectDir, firstDir)
@@ -4856,6 +4950,7 @@ If you don't know, say so. Be concise.`,
 							pathParts[0] = matchingFolder
 							const oldFilePath = filePath
 							filePath = pathParts.join("/")
+							folderCorrectionNote = `\n📝 Note: "${firstDir}" was auto-corrected to "${matchingFolder}" (folder exists)`
 							log.warn(`[Worker ${agentConfig.name}] Auto-corrected folder name: ${oldFilePath} -> ${filePath}`)
 						}
 					} catch { /* ignore errors in folder listing */ }
@@ -4871,26 +4966,56 @@ If you don't know, say so. Be concise.`,
 			
 			try {
 				if (!fs.existsSync(fullPath)) {
-					// Society Agent - Suggest similar folders if the first path segment doesn't exist
+					// Society Agent - Suggest available files/folders when file not found
 					const pathParts = filePath.split("/")
-					const firstDir = pathParts[0]
-					const projectFolders = fs.readdirSync(projectDir, { withFileTypes: true })
-						.filter(d => d.isDirectory() && !d.name.startsWith(".") && d.name !== "node_modules")
-						.map(d => d.name)
-					
-					// Check if first segment is a partial match
-					const similarFolders = projectFolders.filter(f => 
-						f.toLowerCase().includes(firstDir.toLowerCase()) || firstDir.toLowerCase().includes(f.split("-")[0].toLowerCase())
-					)
+					const fileName = pathParts[pathParts.length - 1]
+					const parentPath = pathParts.length > 1 
+						? path.join(projectDir, ...pathParts.slice(0, -1))
+						: projectDir
 					
 					let suggestion = ""
-					if (similarFolders.length > 0 && !projectFolders.includes(firstDir)) {
-						suggestion = `\n\n💡 Did you mean one of these?\n${similarFolders.map(f => `  - ${f}/`).join("\n")}`
-					} else if (projectFolders.length > 0) {
-						suggestion = `\n\n📁 Available folders in project:\n${projectFolders.map(f => `  - ${f}/`).join("\n")}`
+					if (fs.existsSync(parentPath)) {
+						// Parent directory exists, show what's actually in it
+						const items = fs.readdirSync(parentPath, { withFileTypes: true })
+							.filter(d => !d.name.startsWith(".") && d.name !== "node_modules")
+						const folders = items.filter(d => d.isDirectory()).map(d => d.name)
+						const files = items.filter(d => d.isFile()).map(d => d.name)
+						
+						suggestion = `\n\n📁 Available in ${pathParts.length > 1 ? pathParts.slice(0, -1).join("/") : "project root"}:`
+						if (folders.length > 0) {
+							suggestion += `\n**Folders:** ${folders.map(f => f + "/").join(", ")}`
+						}
+						if (files.length > 0) {
+							suggestion += `\n**Files:** ${files.slice(0, 20).join(", ")}${files.length > 20 ? "..." : ""}`
+						}
+					} else {
+						// Parent doesn't exist - show project folders
+						const projectFolders = fs.readdirSync(projectDir, { withFileTypes: true })
+							.filter(d => d.isDirectory() && !d.name.startsWith(".") && d.name !== "node_modules")
+							.map(d => d.name)
+						const firstDir = pathParts[0]
+						const similarFolders = projectFolders.filter(f => 
+							f.toLowerCase().includes(firstDir.toLowerCase()) || firstDir.toLowerCase().includes(f.split("-")[0].toLowerCase())
+						)
+						
+						if (similarFolders.length > 0 && !projectFolders.includes(firstDir)) {
+							suggestion = `\n\n💡 Did you mean one of these?\n${similarFolders.map(f => "  - " + f + "/").join("\n")}`
+						} else if (projectFolders.length > 0) {
+							suggestion = `\n\n📁 Available folders in project:\n${projectFolders.map(f => "  - " + f + "/").join("\n")}`
+						}
 					}
 					
-					return { result: `❌ File not found: ${filePath}${suggestion}`, filesCreated: 0 }
+					return { result: `❌ File not found: ${filePath}${folderCorrectionNote}${suggestion}`, filesCreated: 0 }
+				}
+				// Detect directory and return a listing instead of an EISDIR error
+				const stat = fs.statSync(fullPath)
+				if (stat.isDirectory()) {
+					const items = fs.readdirSync(fullPath, { withFileTypes: true })
+						.filter(d => !d.name.startsWith(".") && d.name !== "node_modules")
+					const folders = items.filter(d => d.isDirectory()).map(d => d.name + "/")
+					const files = items.filter(d => d.isFile()).map(d => d.name)
+					const listing = [...folders, ...files].join("\n")
+					return { result: `📁 **${filePath}** is a directory. Use list_project_files to explore it, or specify a file path.\n\nContents:\n${listing || "(empty)"}`, filesCreated: 0 }
 				}
 				const content = fs.readFileSync(fullPath, "utf-8")
 				const truncated = content.length > 15000 
@@ -4906,17 +5031,34 @@ If you don't know, say so. Be concise.`,
 			let { path: dirPath } = toolInput as { path: string }
 			const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 			const projectDir = path.join(workspacePath, "projects", project.folder || project.id)
+			const projectId = project.folder || project.id
 			
-			// Society Agent - Fix: Strip redundant "projects/<project>/" prefix if agent included it
-			const projectPrefix = `projects/${project.folder || project.id}/`
+			// Society Agent - Fix: Strip various incorrect "projects" prefixes
+			const projectPrefix = `projects/${projectId}/`
 			if (dirPath && dirPath.startsWith(projectPrefix)) {
 				dirPath = dirPath.substring(projectPrefix.length)
 				log.info(`[Worker ${agentConfig.name}] Stripped redundant prefix from dirPath: ${toolInput.path} -> ${dirPath}`)
+			} else if (dirPath === `projects/${projectId}` || dirPath === `projects/${projectId}/`) {
+				dirPath = ""
+				log.info(`[Worker ${agentConfig.name}] Stripped project path to root: ${toolInput.path} -> (root)`)
+			} else if (dirPath && dirPath.startsWith("projects/")) {
+				const afterProjects = dirPath.substring("projects/".length)
+				const parts = afterProjects.split("/")
+				if (parts[0] === projectId || parts[0].toLowerCase() === projectId.toLowerCase()) {
+					dirPath = parts.slice(1).join("/")
+					log.info(`[Worker ${agentConfig.name}] Stripped projects/project prefix: ${toolInput.path} -> ${dirPath || "(root)"}`)
+				} else {
+					dirPath = afterProjects
+					log.info(`[Worker ${agentConfig.name}] Stripped bare projects/ prefix: ${toolInput.path} -> ${dirPath}`)
+				}
+			} else if (dirPath === "projects") {
+				dirPath = ""
+				log.info(`[Worker ${agentConfig.name}] Replaced 'projects' with root: ${toolInput.path} -> (root)`)
 			}
 			if (dirPath && dirPath.startsWith(workspacePath)) {
 				const relativePath = dirPath.substring(workspacePath.length).replace(/^\//, "")
-				if (relativePath.startsWith(`projects/${project.folder || project.id}/`)) {
-					dirPath = relativePath.substring(`projects/${project.folder || project.id}/`.length)
+				if (relativePath.startsWith(`projects/${projectId}/`)) {
+					dirPath = relativePath.substring(`projects/${projectId}/`.length)
 				}
 			}
 			
@@ -6457,6 +6599,11 @@ async function handleSupervisorChat(
 	let meaningfulActionsCount = 0
 	const PROGRESS_CHECK_INTERVAL = 10 // Check every 10 iterations
 	const STALL_THRESHOLD_MS = 300000 // 5 minutes without progress = stalled
+	
+	// Society Agent - Track if agent made changes (vs only reading)
+	let hasWrittenFiles = false
+	const READ_ONLY_TOOLS = new Set(["read_project_file", "list_project_files", "read_file", "list_dir", "get_team_info", "search_files", "grep_search"])
+	let consecutiveReadOnlyStops = 0
 
 	for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
 		iterationCount = iteration + 1
@@ -7098,6 +7245,24 @@ async function handleSupervisorChat(
 		// Society Agent start - Auto-continue on max_tokens for supervisor
 		if (toolBlocks.length === 0) {
 			if (finalMessage.stop_reason === "end_turn") {
+				// Society Agent - Auto-continue if agent only read files without making changes
+				if (!hasWrittenFiles && iteration > 0 && meaningfulActionsCount > 0) {
+					consecutiveReadOnlyStops++
+					if (consecutiveReadOnlyStops <= 2) {
+						log.info(`[Supervisor] Stopped after reading files without making changes, auto-continuing (attempt ${consecutiveReadOnlyStops})`)
+						io.emit("agent-message", {
+							agentId: supervisorConfig.id,
+							agentName: supervisorConfig.name,
+							projectId: project.id,
+							message: "\n*[You analyzed the problem but didn't implement changes. Continuing to fix the issue...]*\n",
+							timestamp: Date.now(),
+							isStreaming: false,
+						})
+						messages.push({ role: "assistant", content: finalMessage.content })
+						messages.push({ role: "user", content: "You've analyzed the problem but stopped without implementing a fix. Please continue and make the necessary code changes using write_file to fix the issue you identified. Don't just analyze - implement the solution." })
+						continue
+					}
+				}
 				// Model explicitly finished - done
 				break
 			} else if (finalMessage.stop_reason === "max_tokens") {
@@ -7226,6 +7391,12 @@ async function handleSupervisorChat(
 			const toolDuration = Date.now() - toolStartTime
 
 			totalFilesCreated += filesCreated
+			
+			// Society Agent - Track if agent made changes (vs only reading)
+			if (filesCreated > 0 || !READ_ONLY_TOOLS.has(toolBlock.name)) {
+				hasWrittenFiles = true
+				consecutiveReadOnlyStops = 0
+			}
 
 			// Society Agent - Emit tool-execution completed event for UI tool cards
 			const { preview, lineCount } = extractCleanPreview(result)
@@ -7422,6 +7593,9 @@ You will self-destruct after completing or failing. Focus on your task.`
 	let fullResponse = ""
 	const MAX_ITERATIONS = 20
 	let taskCompleted = false
+	let hasWrittenFiles = false // Track if agent made any modifications
+	const READ_ONLY_TOOLS = new Set(["read_project_file", "list_project_files", "read_file", "list_dir", "get_team_info"])
+	let consecutiveReadOnlyStops = 0 // Track consecutive stops after only reading
 	
 	for (let iteration = 0; iteration < MAX_ITERATIONS && !taskCompleted; iteration++) {
 		log.info(`[Worker ${workerName}] Iteration ${iteration + 1}`)
@@ -7493,6 +7667,24 @@ You will self-destruct after completing or failing. Focus on your task.`
 			}
 			
 			if (toolCalls.length === 0) {
+				// Society Agent - Auto-continue if agent only read files without making changes
+				if (!hasWrittenFiles && iteration > 0) {
+					consecutiveReadOnlyStops++
+					if (consecutiveReadOnlyStops <= 2) {
+						log.info(`[Worker ${workerName}] Stopped after reading files without making changes, auto-continuing (attempt ${consecutiveReadOnlyStops})`)
+						io.emit("agent-message", {
+							agentId: workerId,
+							agentName: workerName,
+							projectId: project.id,
+							message: "\n*[You analyzed the files but didn't implement changes. Continuing to implement the fix...]*\n",
+							timestamp: Date.now(),
+							isStreaming: false,
+						})
+						messages.push({ role: "assistant", content: textContent })
+						messages.push({ role: "user", content: "You've analyzed the problem but stopped without implementing a fix. Please continue and make the necessary code changes using write_file to fix the issue you identified. Don't just analyze - implement the solution." })
+						continue
+					}
+				}
 				messages.push({ role: "assistant", content: textContent })
 				break
 			}
@@ -7525,6 +7717,12 @@ You will self-destruct after completing or failing. Focus on your task.`
 					io,
 					apiKey,
 				)
+				
+				// Track if agent is making changes (not just reading)
+				if (filesCreated > 0 || !READ_ONLY_TOOLS.has(toolName)) {
+					hasWrittenFiles = true
+					consecutiveReadOnlyStops = 0
+				}
 				
 				// Emit tool execution complete
 				const { preview, lineCount } = extractCleanPreview(result)
@@ -7587,6 +7785,24 @@ You will self-destruct after completing or failing. Focus on your task.`
 			}
 			
 			if (response.stop_reason === "end_turn" && toolBlocks.length === 0) {
+				// Society Agent - Auto-continue if agent only read files without making changes
+				if (!hasWrittenFiles && iteration > 0) {
+					consecutiveReadOnlyStops++
+					if (consecutiveReadOnlyStops <= 2) {
+						log.info(`[Worker ${workerName}] Stopped after reading files without making changes, auto-continuing (attempt ${consecutiveReadOnlyStops})`)
+						io.emit("agent-message", {
+							agentId: workerId,
+							agentName: workerName,
+							projectId: project.id,
+							message: "\n*[You analyzed the files but didn't implement changes. Continuing to implement the fix...]*\n",
+							timestamp: Date.now(),
+							isStreaming: false,
+						})
+						messages.push({ role: "assistant", content: response.content })
+						messages.push({ role: "user", content: "You've analyzed the problem but stopped without implementing a fix. Please continue and make the necessary code changes using write_file to fix the issue you identified. Don't just analyze - implement the solution." })
+						continue
+					}
+				}
 				messages.push({ role: "assistant", content: response.content })
 				break
 			}
@@ -7622,6 +7838,12 @@ You will self-destruct after completing or failing. Focus on your task.`
 					io,
 					apiKey,
 				)
+				
+				// Track if agent is making changes (not just reading)
+				if (filesCreated > 0 || !READ_ONLY_TOOLS.has(toolName)) {
+					hasWrittenFiles = true
+					consecutiveReadOnlyStops = 0 // Reset counter when agent makes changes
+				}
 				
 				// Emit tool execution complete
 				const { preview, lineCount } = extractCleanPreview(result)
@@ -8686,7 +8908,15 @@ async function start() {
 		initGitLoader(workspacePath)
 		log.info(`Git loader initialized`)
 		// Society Agent end
-		
+
+		// Society Agent start - start diagnostics watchers for existing projects
+		const existingProjects = projectStore.getAll()
+		for (const p of existingProjects) {
+			diagnosticsWatcher.startProject(p.id, p.folder || p.id)
+		}
+		log.info(`Diagnostics watchers started for ${existingProjects.length} existing project(s)`)
+		// Society Agent end
+
 		log.info(`Society Agent Web Server | Environment: ${NODE_ENV} | Port: ${PORT}`)
 
 		// Don't initialize Society Manager at startup - wait for first request with API key
@@ -8709,6 +8939,7 @@ start()
 // Graceful shutdown
 process.on("SIGTERM", () => {
 	log.info("SIGTERM received, shutting down gracefully")
+	diagnosticsWatcher.stopAll()
 	server.close(() => {
 		log.info("Server closed")
 		process.exit(0)

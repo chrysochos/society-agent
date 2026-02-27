@@ -186,9 +186,12 @@
     color: var(--muted); white-space: pre-wrap; word-break: break-word; line-height: 1.4;
     max-height: 52px; overflow: hidden; }
   .tool-card-body { display: none; padding: 10px 12px; background: var(--bg); max-height: 300px; overflow: auto;
+  /* Error cards get taller body without height cap */
+
     font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; line-height: 1.5;
     border-top: 1px solid var(--border); }
   .tool-card.expanded .tool-card-body { display: block; }
+  .tool-card.error.expanded .tool-card-body { max-height: none; overflow: visible; }
   .tool-card-actions { display: flex; gap: 6px; padding: 8px 12px; background: rgba(88,166,255,0.08); border-top: 1px solid var(--border); }
   .tool-card-actions button { padding: 5px 12px; font-size: 12px; background: var(--surface); border: 1px solid var(--border);
     border-radius: 5px; color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
@@ -533,6 +536,11 @@
       </div>
       <div class="problems-list" id="problemsList">
         <div style="color:var(--green);padding:4px 0;">✓ No problems</div>
+      </div>
+      <div id="problemsFixBtn" style="display:none;margin-top:6px">
+        <button onclick="fixProblemsWithAgent()" style="width:100%;padding:5px 10px;background:rgba(248,81,73,0.15);border:1px solid var(--red);color:var(--red);border-radius:6px;cursor:pointer;font-size:11px;font-weight:600">
+          🔧 Fix with Agent
+        </button>
       </div>
     </div>
     <!-- Society Agent end - Problems Panel -->
@@ -960,7 +968,7 @@ socket.on('agent-message', (data) => {
       summaryHTML = `<div style="margin-top:8px;padding:12px;background:rgba(248,81,73,0.1);border:1px solid var(--red);border-radius:8px;text-align:left">
         <strong style="color:var(--red)">⚠️ ${sessionErrors.length} error(s) occurred:</strong>
         <ul style="margin:8px 0 0 0;padding-left:20px;color:var(--text);font-size:12px">
-          ${sessionErrors.slice(-5).map(e => `<li><code>${e.tool}</code>${e.detail ? ` (${e.detail.substring(0,30)}...)` : ''}: ${e.error.substring(0,100)}${e.error.length > 100 ? '...' : ''}</li>`).join('')}
+          ${sessionErrors.slice(-5).map(e => `<li><code>${e.tool}</code>${e.detail ? ` (${e.detail.substring(0,80)})` : ''}: <pre style="margin:4px 0;white-space:pre-wrap;word-break:break-all;font-size:11px;background:rgba(0,0,0,0.2);padding:6px;border-radius:4px">${e.error}</pre></li>`).join('')}
         </ul>
         <div style="margin-top:8px;font-size:11px;color:var(--muted)">
           💡 <strong>Tips:</strong> Check error details above. Common issues: missing files, syntax errors, or network problems.
@@ -979,6 +987,8 @@ socket.on('agent-message', (data) => {
     sessionToolCount = 0;
     
     scrollToBottom();
+    // Re-check problems after agent finishes (files may have changed)
+    setTimeout(refreshProblems, 1500);
     // Society Agent end
   }
 });
@@ -1094,7 +1104,7 @@ socket.on('tool-execution', (data) => {
       sessionErrors.push({
         tool: data.toolName,
         detail: data.toolInput ? (data.toolInput.path || data.toolInput.command || data.toolInput.query || '') : '',
-        error: data.result.substring(0, 200),
+        error: data.result,
         timestamp: Date.now()
       });
     }
@@ -1132,15 +1142,16 @@ function addToolCard(data, insertBeforeEl) {
     <div class="tool-card-header" onclick="toggleToolCard('${cardId}')">
       <span class="tool-card-icon">${config.icon}</span>
       <span class="tool-card-title">${config.title}</span>
-      <span class="tool-card-detail" title="${esc(detail)}">${esc(truncate(detail, 40))}</span>
+      <span class="tool-card-detail" title="${esc(detail)}">${esc(truncate(detail, 120))}</span>
       <span class="tool-card-meta">${linesText} ${durationText}</span>
       <span class="tool-card-chevron">&gt;</span>
     </div>
     <div class="tool-card-preview">${esc(data.preview || cleanedResult.substring(0, 100))}</div>
-    ${!isLong ? `<div class="tool-card-body">${esc(cleanedResult)}</div>` : ''}
+    ${(!isLong || isError) ? `<div class="tool-card-body">${esc(cleanedResult)}</div>` : ''}
     <div class="tool-card-actions">
       <button onclick="copyToolResult('${cardId}')">Copy Result</button>
-      ${isLong ? `<button onclick="openToolModal('${cardId}')">View Full Output</button>` : ''}
+      ${isLong && !isError ? `<button onclick="openToolModal('${cardId}')">View Full Output</button>` : ''}
+      ${isLong && isError ? `<button onclick="openToolModal('${cardId}')">Open in Modal</button>` : ''}
     </div>
   `;
   
@@ -1316,13 +1327,19 @@ async function refreshProblems() {
   }
 }
 
+let _lastDiagnostics = [];
+
 function renderProblems(diagnostics, counts) {
   const countEl = document.getElementById('problemsCount');
   const listEl = document.getElementById('problemsList');
+  const fixBtn = document.getElementById('problemsFixBtn');
+  _lastDiagnostics = diagnostics;
   
   const errors = counts.errors || 0;
   const warnings = counts.warnings || 0;
   const total = counts.total || 0;
+  
+  if (fixBtn) fixBtn.style.display = errors > 0 ? 'block' : 'none';
   
   if (total === 0) {
     countEl.textContent = '✓ OK';
@@ -1360,6 +1377,28 @@ function renderProblems(diagnostics, counts) {
   if (diagnostics.length > 20) {
     listEl.innerHTML += `<div style="color:var(--muted);padding:4px 6px;font-size:10px;">...and ${diagnostics.length - 20} more</div>`;
   }
+}
+
+async function fixProblemsWithAgent() {
+  if (!_lastDiagnostics || _lastDiagnostics.length === 0) return;
+  const errors = _lastDiagnostics.filter(d => d.severity === 'error');
+  if (errors.length === 0) return;
+
+  // Format errors into a message for the agent
+  const errorLines = errors.slice(0, 30).map(d =>
+    `  ${d.file}:${d.line}:${d.column} [${d.code}] ${d.message}`
+  ).join('\n');
+  const more = errors.length > 30 ? `\n  ...and ${errors.length - 30} more errors` : '';
+
+  const message = `Fix these TypeScript errors in the project:\n\`\`\`\n${errorLines}${more}\n\`\`\`\nPlease fix all of them.`;
+
+  // Put the message in the input and send
+  const input = document.getElementById('input');
+  if (input) {
+    input.value = message;
+    input.dispatchEvent(new Event('input'));
+  }
+  await sendMessage();
 }
 
 socket.on('worker-spawned', (data) => {
@@ -1431,6 +1470,13 @@ socket.on('task-claimed', (data) => {
 
 socket.on('file-deleted', () => { refreshFiles(); refreshProblems(); });
 socket.on('file-moved', () => { refreshFiles(); refreshProblems(); });
+
+// Live diagnostics updates from background watchers
+socket.on('diagnostics-update', (data) => {
+  if (agentProfile && data.projectId === agentProfile.projectId) {
+    renderProblems(data.diagnostics || [], data.counts || {});
+  }
+});
 
 // Auto-refresh problems when files are created/modified by agent
 socket.on('system-event', (data) => {
