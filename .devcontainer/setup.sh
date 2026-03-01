@@ -13,7 +13,7 @@ sudo apt-get update
 sudo apt-get install -y build-essential python3 make g++
 
 # Git and common utilities (usually present, but ensure)
-sudo apt-get install -y git curl wget jq
+sudo apt-get install -y git curl wget jq sqlite3
 
 # Network utilities
 sudo apt-get install -y iputils-ping net-tools dnsutils

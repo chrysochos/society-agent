@@ -333,6 +333,34 @@
   /* Log panel */
   .log-panel { height: 140px; border-top: 1px solid var(--border); background: var(--bg);
     overflow-y: auto; padding: 6px 14px; font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 11px; }
+
+  /* Activity Log tab */
+  .activity-toolbar { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--border); background:var(--surface); flex-shrink:0; }
+  .activity-toolbar select, .activity-toolbar input { background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:3px 8px; font-size:12px; }
+  .activity-feed { flex:1; overflow-y:auto; padding:10px 14px; display:flex; flex-direction:column; gap:3px; font-family:'SF Mono','Consolas',monospace; font-size:12px; }
+  .act-event { display:grid; grid-template-columns:68px 100px 1fr; gap:6px; align-items:baseline; padding:3px 6px; border-radius:4px; line-height:1.5; }
+  .act-event:hover { background:rgba(255,255,255,0.04); }
+  .act-time { color:var(--muted); font-size:11px; white-space:nowrap; }
+  .act-badge { font-size:10px; font-weight:700; padding:1px 6px; border-radius:10px; text-align:center; white-space:nowrap; }
+  .badge-chat_in    { background:rgba(56,139,253,0.2); color:#388bfd; }
+  .badge-chat_in.from-agent { background:rgba(210,153,34,0.2); color:#d9a520; }
+  .badge-chat_out   { background:rgba(63,185,80,0.2);  color:#3fb950; }
+  .badge-tool_call  { background:rgba(210,153,34,0.2); color:#d2991a; }
+  .badge-tool_result{ background:rgba(210,153,34,0.15);color:#b08000; }
+  .badge-inbox_msg  { background:rgba(188,140,255,0.2);color:#bc8cff; }
+  .badge-loop_exit  { background:rgba(248,81,73,0.2);  color:#f85149; }
+  .badge-agent_start{ background:rgba(100,100,100,0.2);color:#aaa; }
+  .badge-agent_stop { background:rgba(248,81,73,0.15); color:#f85149; }
+  .badge-api_error  { background:rgba(248,81,73,0.3);  color:#f85149; }
+  .act-body { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .act-body .dim { color:var(--muted); }
+  .act-body .ok  { color:#3fb950; }
+  .act-body .err { color:#f85149; }
+  .act-body .dur { color:var(--muted); font-size:11px; margin-left:6px; }
+  .act-event.expandable { cursor:pointer; }
+  .act-detail { display:none; grid-column:1/-1; background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:8px 10px; white-space:pre-wrap; word-break:break-all; color:var(--text); font-size:11px; margin:2px 0 4px; max-height:300px; overflow-y:auto; }
+  .act-event.open .act-detail { display:block; }
+  .act-sep { border:none; border-top:1px solid var(--border); margin:6px 0; opacity:0.5; }
   .log-entry { color: var(--muted); padding: 1px 0; }
   .log-entry.info { color: var(--accent); }
   .log-entry.warn { color: var(--yellow); }
@@ -566,6 +594,7 @@
     <div class="tab-bar">
       <div class="tab active" onclick="switchTab('chat')" id="tabChat">&#128172; Chat</div>
       <div class="tab" onclick="switchTab('terminal')" id="tabTerminal">&#9000; Terminal</div>
+      <div class="tab" onclick="switchTab('activity')" id="tabActivity">&#128203; Activity</div>
       <div style="flex:1"></div>
       <button class="btn btn-secondary" id="clearChatBtn" onclick="clearChat()" style="font-size:11px;padding:3px 10px;margin:4px 8px" title="Clear conversation history">&#128465; Clear Chat</button>
     </div>
@@ -640,6 +669,36 @@
       </div>
       <div class="terminal-container" id="terminalContainer"></div>
     </div>
+
+    <!-- Activity Log pane -->
+    <div class="tab-content" id="paneActivity">
+      <div class="activity-toolbar">
+        <span style="color:var(--muted);font-size:12px">Show last</span>
+        <select id="actLimit" onchange="loadActivityLog()">
+          <option value="50">50 events</option>
+          <option value="200" selected>200 events</option>
+          <option value="500">500 events</option>
+          <option value="2000">2000 events</option>
+        </select>
+        <select id="actFilter" onchange="renderActivity()">
+          <option value="">All types</option>
+          <option value="chat_in">chat_in</option>
+          <option value="chat_out">chat_out</option>
+          <option value="tool_call">tool_call</option>
+          <option value="tool_result">tool_result</option>
+          <option value="inbox_msg">inbox_msg</option>
+          <option value="loop_exit">loop_exit</option>
+          <option value="api_error">api_error</option>
+          <option value="agent_start">agent_start</option>
+        </select>
+        <input id="actSearch" placeholder="Search..." oninput="renderActivity()" style="width:160px">
+        <div style="flex:1"></div>
+        <span id="actCount" style="color:var(--muted);font-size:11px"></span>
+        <button class="btn btn-secondary" onclick="loadActivityLog()" style="font-size:11px;padding:3px 10px">&#8635; Refresh</button>
+        <button class="btn" onclick="clearActivityLog()" style="font-size:11px;padding:3px 10px;background:rgba(248,81,73,0.15);color:#f85149;border:1px solid rgba(248,81,73,0.3)" title="Clear log file">&#128465; Clear</button>
+      </div>
+      <div class="activity-feed" id="activityFeed"><span style="color:var(--muted);padding:20px">Loading...</span></div>
+    </div>
   </div>
 </div>
 
@@ -669,16 +728,25 @@ const socket = io(API, {
 });
 
 // Reconnection handling
+let _isFirstConnect = true;
+let _disconnectTime = 0;
+
 socket.on('connect', () => {
   console.log('[socket] Connected to server, socket.id:', socket.id);
   document.body.classList.remove('disconnected');
   // Reload agent data after reconnect
   if (AGENT_ID) loadAgent();
+  // On reconnect (not initial load), replay missed events
+  if (!_isFirstConnect && _disconnectTime > 0 && AGENT_ID) {
+    replayMissedEvents(_disconnectTime);
+  }
+  _isFirstConnect = false;
 });
 
 socket.on('disconnect', (reason) => {
   console.log('[socket] Disconnected:', reason);
   document.body.classList.add('disconnected');
+  _disconnectTime = Date.now();
 });
 
 socket.on('reconnect_attempt', (attempt) => {
@@ -877,6 +945,40 @@ async function loadAgent() {
 }
 
 // ============================================================================
+// Society Agent - Replay events missed during disconnection/reload
+async function replayMissedEvents(since) {
+  try {
+    const res = await fetch(`${API}/api/agent/${AGENT_ID}/recent-events?since=${since}`);
+    if (!res.ok) return;
+    const { events } = await res.json();
+    if (!events || events.length === 0) return;
+
+    // Show replay banner
+    const banner = document.createElement('div');
+    banner.style.cssText = 'text-align:center;margin:10px 0;padding:6px 12px;background:rgba(56,139,253,0.12);border:1px solid rgba(56,139,253,0.3);border-radius:8px;font-size:12px;color:#58a6ff;';
+    banner.textContent = `↩ Replaying ${events.length} event(s) missed during disconnection`;
+    document.getElementById('messages').appendChild(banner);
+
+    for (const ev of events) {
+      if (ev.type === 'agent-message') {
+        const d = ev.data;
+        if (d._replayed && d.isDone && d.message) {
+          // Show full assembled message
+          addMessage('assistant', d.message, agentProfile?.name || 'Agent');
+        } else if (d.message && !d.isStreaming) {
+          addMessage('system', d.message, 'System');
+        }
+      } else if (ev.type === 'tool-execution') {
+        addToolCard(ev.data, null);
+      }
+    }
+    scrollToBottom();
+    addLog('info', `Replayed ${events.length} missed event(s)`);
+  } catch (e) {
+    console.warn('[replay] Failed to replay missed events:', e);
+  }
+}
+
 // Socket.IO
 // ============================================================================
 socket.on('connect', () => {
@@ -1307,6 +1409,23 @@ function toggleProblemsPanel() {
   panel.classList.toggle('collapsed');
 }
 
+// Return only diagnostics that belong to this agent's home folder.
+// Agents should only see (and try to fix) errors in their own files.
+function filterDiagnosticsForAgent(diagnostics) {
+  if (!agentProfile?.workspaceFolder) return diagnostics;
+  const prefix = 'projects/' + agentProfile.workspaceFolder + '/';
+  return diagnostics.filter(d => d.file && d.file.startsWith(prefix));
+}
+
+// Recompute counts from a (possibly filtered) diagnostics array.
+function diagCounts(diagnostics) {
+  return {
+    errors: diagnostics.filter(d => d.severity === 'error').length,
+    warnings: diagnostics.filter(d => d.severity === 'warning').length,
+    total: diagnostics.length,
+  };
+}
+
 async function refreshProblems() {
   const countEl = document.getElementById('problemsCount');
   const listEl = document.getElementById('problemsList');
@@ -1320,7 +1439,8 @@ async function refreshProblems() {
       return;
     }
     const data = await res.json();
-    renderProblems(data.diagnostics || [], data.counts || {});
+    const filtered = filterDiagnosticsForAgent(data.diagnostics || []);
+    renderProblems(filtered, diagCounts(filtered));
   } catch (e) {
     console.error('Failed to load diagnostics:', e);
     listEl.innerHTML = '<div style="color:var(--muted);padding:4px 0;">Error checking</div>';
@@ -1471,10 +1591,24 @@ socket.on('task-claimed', (data) => {
 socket.on('file-deleted', () => { refreshFiles(); refreshProblems(); });
 socket.on('file-moved', () => { refreshFiles(); refreshProblems(); });
 
-// Live diagnostics updates from background watchers
+// Live diagnostics updates from background watchers — scoped to agent's own folder
 socket.on('diagnostics-update', (data) => {
   if (agentProfile && data.projectId === agentProfile.projectId) {
-    renderProblems(data.diagnostics || [], data.counts || {});
+    const filtered = filterDiagnosticsForAgent(data.diagnostics || []);
+    renderProblems(filtered, diagCounts(filtered));
+  }
+});
+
+// Real-time Activity log — agentActivityLogger emits 'agent-activity' via Socket.IO
+// so the Activity tab updates live without requiring a manual refresh.
+socket.on('agent-activity', (event) => {
+  if (event.agentId === AGENT_ID) {
+    activityEvents.push(event);
+    const countEl = document.getElementById('actCount');
+    if (countEl) countEl.textContent = `${activityEvents.length} events`;
+    // Only re-render if the Activity tab is currently visible to avoid unnecessary work
+    const actPane = document.getElementById('paneActivity');
+    if (actPane && actPane.classList.contains('active')) renderActivity();
   }
 });
 
@@ -3374,10 +3508,139 @@ function switchTab(tab) {
     document.getElementById('paneTerminal').classList.add('active');
     if (!term) initTerminal();
     else fitAddon.fit();
+  } else if (tab === 'activity') {
+    document.getElementById('tabActivity').classList.add('active');
+    document.getElementById('paneActivity').classList.add('active');
+    loadActivityLog();
   } else {
     document.getElementById('tabChat').classList.add('active');
     document.getElementById('paneChat').classList.add('active');
   }
+}
+
+// ============================================================================
+// Activity Log
+// ============================================================================
+let activityEvents = [];
+
+async function loadActivityLog() {
+  const projectId = agentProfile?.projectId || PROJECT_ID;
+  if (!projectId) return;
+  const limit = document.getElementById('actLimit')?.value || 200;
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/agents/${AGENT_ID}/activity?last=${limit}`);
+    if (!res.ok) { showActivityError('No activity log yet (agent has not run since this feature was added)'); return; }
+    const data = await res.json();
+    activityEvents = data.events || [];
+    document.getElementById('actCount').textContent = `${activityEvents.length} events`;
+    renderActivity();
+  } catch (e) {
+    showActivityError('Failed to load: ' + e.message);
+  }
+}
+
+async function clearActivityLog() {
+  if (!confirm('Clear all activity log entries for this agent? This cannot be undone.')) return;
+  const projectId = agentProfile?.projectId || PROJECT_ID;
+  if (!projectId) return;
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/agents/${AGENT_ID}/activity`, { method: 'DELETE' });
+    if (!res.ok) { alert('Failed to clear log'); return; }
+    activityEvents = [];
+    document.getElementById('actCount').textContent = '0 events';
+    document.getElementById('activityFeed').innerHTML = '<span style="color:var(--muted);padding:20px">Log cleared.</span>';
+  } catch (e) {
+    alert('Failed to clear: ' + e.message);
+  }
+}
+
+function showActivityError(msg) {
+  document.getElementById('activityFeed').innerHTML = `<span style="color:var(--muted);padding:20px">${msg}</span>`;
+}
+
+function renderActivity() {
+  const feed = document.getElementById('activityFeed');
+  const filter = document.getElementById('actFilter')?.value || '';
+  const search = (document.getElementById('actSearch')?.value || '').toLowerCase();
+
+  let events = activityEvents;
+  if (filter) events = events.filter(e => e.type === filter);
+  if (search) events = events.filter(e => JSON.stringify(e).toLowerCase().includes(search));
+
+  if (!events.length) { feed.innerHTML = '<span style="color:var(--muted);padding:20px">No events match filter.</span>'; return; }
+
+  feed.innerHTML = events.map((e, i) => {
+    const time = new Date(e.t).toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const date = new Date(e.t).toLocaleDateString('en-GB', {month:'short',day:'numeric'});
+    const timeStr = `<span class="act-time" title="${date}">${time}</span>`;
+    const badge = `<span class="act-badge badge-${e.type}">${e.type}</span>`;
+    let body = '', detail = '', expandable = false;
+
+    if (e.type === 'agent_start') {
+      body = `<span class="dim">model:</span> ${e.model} <span class="dim">trigger:</span> ${e.trigger}`;
+    } else if (e.type === 'chat_in') {
+      const preview = (e.content || '').replace(/\n/g,' ').substring(0, 120);
+      const roleLabel = e.role === 'agent'
+        ? `<span class="dim">from agent</span> <b>${escHtml(e.fromAgent || 'agent')}</b>  `
+        : e.role === 'system' ? '<span class="dim">[system]</span>  ' : '';
+      body = `${roleLabel}<span>${escHtml(preview)}${e.content?.length > 120 ? '…' : ''}</span>`;
+      if (e.hasAttachments) body += ' <span class="dim">[+attachments]</span>';
+      if (e.content) { detail = escHtml(e.content); expandable = true; }
+    } else if (e.type === 'chat_out') {
+      const preview = (e.content || '').replace(/\n/g,' ').substring(0, 100);
+      body = `<span class="dim">stop:</span> <span class="${e.stopReason==='end_turn'?'ok':'err'}">${e.stopReason}</span>`;
+      body += `<span class="dur">${e.durationMs}ms</span>`;
+      if (e.inputTokens) body += ` <span class="dim">in:${e.inputTokens} out:${e.outputTokens}</span>`;
+      if (preview) body += `  ${escHtml(preview)}${e.content?.length > 100 ? '…' : ''}`;
+      if (e.content) { detail = escHtml(e.content); expandable = true; }
+    } else if (e.type === 'tool_call') {
+      const argPreview = JSON.stringify(e.args || {}).substring(0, 100);
+      body = `<span class="dim">iter ${e.iteration}·${e.callIndex}</span> <b>${escHtml(e.tool)}</b>  <span class="dim">${escHtml(argPreview)}${argPreview.length >= 100 ? '…' : ''}</span>`;
+      detail = escHtml(JSON.stringify(e.args, null, 2)); expandable = true;
+    } else if (e.type === 'tool_result') {
+      const success = e.success;
+      body = `<span class="dim">iter ${e.iteration}·${e.callIndex}</span> <b>${escHtml(e.tool)}</b>`;
+      body += ` <span class="${success?'ok':'err'}">${success?'✓':'✗'}</span>`;
+      body += `<span class="dur">${e.durationMs}ms</span>`;
+      if (e.outputLength != null) body += ` <span class="dim">${e.outputLength} chars</span>`;
+      const outPreview = (e.output || '').substring(0, 120);
+      if (outPreview) body += `  <span class="dim">${escHtml(outPreview)}${(e.output||'').length > 120 ? '…' : ''}</span>`;
+      if (e.output) { detail = escHtml(e.output); expandable = true; }
+    } else if (e.type === 'inbox_msg') {
+      const preview = (e.content || '').replace(/\n/g,' ').substring(0, 100);
+      body = `<span class="dim">from:</span> ${escHtml(e.from)}  ${escHtml(preview)}${e.content?.length > 100 ? '…' : ''}`;
+      if (e.content) { detail = escHtml(e.content); expandable = true; }
+    } else if (e.type === 'loop_exit') {
+      const color = e.reason === 'end_turn' ? 'ok' : e.reason === 'user_stopped' ? 'dim' : 'err';
+      body = `<span class="${color}">${e.reason}</span>`;
+      body += ` <span class="dim">iters:</span>${e.iterations} <span class="dim">tools:</span>${e.totalToolCalls} <span class="dur">${e.durationMs}ms</span>`;
+      if (e.detail) body += ` <span class="dim">${escHtml(e.detail)}</span>`;
+    } else if (e.type === 'api_error') {
+      body = `<span class="err">${e.statusCode ? e.statusCode + ' ' : ''}${escHtml(e.message)}</span>`;
+      body += ` <span class="dim">iter:${e.iteration} retryable:${e.retryable}</span>`;
+    } else if (e.type === 'agent_stop') {
+      body = `<span class="dim">${e.reason}</span>`;
+    }
+
+    // Insert separator before agent_start (new session)
+    const sep = (e.type === 'agent_start' && i > 0) ? '<hr class="act-sep">' : '';
+
+    return `${sep}<div class="act-event${expandable?' expandable':''}" onclick="toggleActDetail(this)">
+      ${timeStr}${badge}<div class="act-body">${body}</div>
+      ${expandable ? `<div class="act-detail">${detail}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  // Scroll to bottom
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function toggleActDetail(el) {
+  if (el.querySelector('.act-detail')) el.classList.toggle('open');
+}
+
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 // ============================================================================

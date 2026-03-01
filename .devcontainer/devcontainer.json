@@ -2,9 +2,16 @@
   "name": "Society Agent",
   "image": "mcr.microsoft.com/devcontainers/typescript-node:20",
   "forwardPorts": [4000],
+
+  // Bind port 4000 at the Docker level so the browser can reach it directly
+  // on http://localhost:4000 even when VS Code is disconnected (no SSH tunnel needed).
+  "runArgs": ["--publish", "4000:4000"],
   
   // Run setup script which installs system dependencies + npm packages
   "postCreateCommand": "chmod +x .devcontainer/setup.sh && .devcontainer/setup.sh",
+
+  // Auto-start the Society Agent server every time the container starts (including after VS Code reconnects)
+  "postStartCommand": "cd /workspaces/society-agent && npm start > /tmp/society-server.log 2>&1 &",
   
   // Features add common dev tools that persist across rebuilds
   "features": {

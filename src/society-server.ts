@@ -67,6 +67,9 @@ import { initGitLoader, getGitLoader } from "./git-loader"
 // Society Agent start - diagnostics watcher (tsc / ruff / pyright)
 import { DiagnosticsWatcher } from "./diagnostics-watcher"
 // Society Agent end
+// Society Agent start - per-agent activity logger
+import { AgentActivityLogger } from "./agent-activity-logger"
+// Society Agent end
 
 const app = express()
 const server = http.createServer(app)
@@ -81,6 +84,46 @@ const io = new SocketIOServer(server, {
 const PORT = parseInt(process.env.PORT || "4000", 10)
 const NODE_ENV = process.env.NODE_ENV || "development"
 const log = getLog()
+
+// Society Agent - Reconnect event buffer: survives client disconnections
+// Buffers the last 400 events per agent so clients can replay missed events on reconnect.
+const RECONNECT_BUFFER_MAX = 400
+const agentEventBuffer = new Map<string, { t: number; type: string; data: any }[]>()
+const agentStreamAccum = new Map<string, string>() // accumulate streaming text per agent
+
+function bufferEvent(agentId: string, type: string, data: any) {
+	const buf = agentEventBuffer.get(agentId) || []
+	buf.push({ t: Date.now(), type, data })
+	if (buf.length > RECONNECT_BUFFER_MAX) buf.splice(0, buf.length - RECONNECT_BUFFER_MAX)
+	agentEventBuffer.set(agentId, buf)
+}
+
+// Wrap io.emit to automatically buffer agent-specific events
+const _ioEmit = io.emit.bind(io)
+;(io as any).emit = (event: string, data: any, ...rest: any[]) => {
+	if (data && typeof data === "object" && data.agentId) {
+		const id: string = data.agentId
+		if (event === "agent-message") {
+			if (data.isStreaming) {
+				// Accumulate streaming chunks; don't buffer fragments individually
+				agentStreamAccum.set(id, (agentStreamAccum.get(id) || "") + (data.message || ""))
+			} else if (data.isDone) {
+				// Flush accumulated stream as a single buffered message
+				const fullText = agentStreamAccum.get(id) || ""
+				agentStreamAccum.delete(id)
+				if (fullText) bufferEvent(id, "agent-message", { ...data, message: fullText, isStreaming: false, isDone: true, _replayed: true })
+			} else if (data.message) {
+				// Plain (non-streaming) system notice or injection message
+				bufferEvent(id, "agent-message", { ...data, _replayed: true })
+			}
+		} else if (event === "tool-execution" && (data.status === "completed" || data.status === "error")) {
+			bufferEvent(id, "tool-execution", data)
+		} else if (event === "agent-activity") {
+			bufferEvent(id, "agent-activity", data)
+		}
+	}
+	return _ioEmit(event, data, ...rest)
+}
 
 // Society Agent start - centralized workspace path with stable default
 function getWorkspacePath(): string {
@@ -517,6 +560,11 @@ const projectStore = new ProjectStore(getWorkspacePath())
 
 // Society Agent start - diagnostics watcher
 const diagnosticsWatcher = new DiagnosticsWatcher(getWorkspacePath())
+// Society Agent start - per-agent activity logger
+const agentActivityLogger = new AgentActivityLogger(path.join(getWorkspacePath(), "projects"))
+// Wire real-time Socket.IO so the Activity panel updates live without manual refresh
+agentActivityLogger.setEmitter((event) => io.emit("agent-activity", event))
+// Society Agent end
 diagnosticsWatcher.on("updated", (projectId: string) => {
 	const result = diagnosticsWatcher.getDiagnostics(projectId)
 	io.emit("diagnostics-update", { projectId, ...result })
@@ -809,6 +857,15 @@ function sendToInbox(projectId: string, fromAgent: { id: string; name: string },
 		read: false,
 	})
 	log.info(`[Inbox] ${fromAgent.name} → ${toAgentId}: ${message.substring(0, 60)}...`)
+	// Society Agent start - activity log: record inbox message
+	try {
+		const _inboxProj = projectStore.get(projectId)
+		const _inboxAgent = _inboxProj?.agents?.find(a => a.id === toAgentId)
+		if (_inboxProj && _inboxAgent) {
+			agentActivityLogger.logInboxMsg(projectId, toAgentId, _inboxProj.folder, _inboxAgent.homeFolder || "/", fromAgent.name || fromAgent.id, message)
+		}
+	} catch (_) { /* non-fatal */ }
+	// Society Agent end
 }
 
 function readInbox(projectId: string, agentId: string, markRead: boolean = true): InboxMessage[] {
@@ -842,24 +899,25 @@ let currentProviderSettings: ProviderSettings | null = null
 function getApiHandlerFromConfig(): ApiHandler {
 	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 
-	// Society Agent start - Check standalone settings first (supports OpenRouter)
+	// Society Agent start - Check standalone settings first (supports OpenRouter and all providers)
 	if (standaloneSettings.isInitialized() && standaloneSettings.hasApiKey()) {
 		const providerConfig = standaloneSettings.getProvider()
-		// For non-Anthropic providers, return a dummy handler (actual API calls are handled in chat functions)
-		if (providerConfig.type !== "anthropic") {
-			log.info(`[getApiHandlerFromConfig] Using ${providerConfig.type} (chat functions handle API calls)`)
-			// Return a minimal handler that won't be used for actual API calls
-			return {
-				createMessage: () => {
-					throw new Error(`Direct API handler not supported for ${providerConfig.type}. Use chat endpoints.`)
-				},
-			} as any
+		// For Anthropic, use the standard handler directly
+		if (providerConfig.type === "anthropic") {
+			return buildApiHandler({
+				apiKey: providerConfig.apiKey,
+				model: providerConfig.model,
+			})
 		}
-		// For Anthropic, we can use the standard handler
-		return buildApiHandler({
-			apiKey: providerConfig.apiKey,
-			model: providerConfig.model,
-		})
+		// For all other providers (OpenRouter, OpenAI, etc.) build a real handler.
+		// Previously a dummy was returned here, but that breaks summarization and any
+		// other code that calls handler.createMessage() directly.
+		try {
+			const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
+			return buildSocietyApiHandler(workspacePath)
+		} catch {
+			// Fall through to legacy methods below
+		}
 	}
 	// Society Agent end
 
@@ -3008,6 +3066,48 @@ app.post("/api/projects/:id/diagnostics/refresh", (req, res): void => {
 	}
 })
 
+// Society Agent start - per-agent activity log endpoint
+/**
+ * GET /api/projects/:id/agents/:agentId/activity?last=200
+ * Returns the last N activity log events for an agent.
+ */
+app.get("/api/projects/:id/agents/:agentId/activity", (req, res): void => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+		const agentConfig = project.agents.find(a => a.id === req.params.agentId)
+		if (!agentConfig) {
+			res.status(404).json({ error: "Agent not found" })
+			return
+		}
+		const last = Math.min(parseInt(req.query.last as string) || 200, 2000)
+		const events = agentActivityLogger.readLog(project.folder, agentConfig.homeFolder || "/", req.params.agentId, last)
+		res.json({ agentId: req.params.agentId, projectId: project.id, events, count: events.length })
+	} catch (err: any) {
+		res.status(500).json({ error: err.message })
+	}
+})
+/**
+ * DELETE /api/projects/:id/agents/:agentId/activity
+ * Clears (truncates) the activity log file for an agent.
+ */
+app.delete("/api/projects/:id/agents/:agentId/activity", (req, res): void => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) { res.status(404).json({ error: "Project not found" }); return }
+		const agentConfig = project.agents.find(a => a.id === req.params.agentId)
+		if (!agentConfig) { res.status(404).json({ error: "Agent not found" }); return }
+		const existed = agentActivityLogger.clearLog(project.folder, agentConfig.homeFolder || "/", req.params.agentId)
+		res.json({ cleared: true, existed })
+	} catch (err: any) {
+		res.status(500).json({ error: err.message })
+	}
+})
+// Society Agent end
+
 /**
  * GET /api/projects/:id/git/log - Get git commit history for a project
  */
@@ -3472,6 +3572,19 @@ app.get("/api/agent/:agentId/context-stats", (req, res): void => {
 })
 
 /**
+ * GET /api/agent/:agentId/recent-events?since=<ms>
+ * Returns buffered events that arrived after `since` timestamp.
+ * Used by the UI to replay events missed during a disconnection/reload.
+ */
+app.get("/api/agent/:agentId/recent-events", (req, res): void => {
+	const { agentId } = req.params
+	const since = parseInt(String(req.query.since || "0"), 10)
+	const buf = agentEventBuffer.get(agentId) || []
+	const events = since > 0 ? buf.filter(e => e.t > since) : buf.slice(-50)
+	res.json({ events })
+})
+
+/**
  * GET /api/agent/:agentId/examination-context - Get context for summary examination
  * Returns current summary, messages, and last backup for comparison
  */
@@ -3632,7 +3745,7 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			properties: {
 				command: { type: "string", description: "The shell command to execute (e.g. 'npm install', 'npm start', 'pkill -f node')" },
 				background: { type: "boolean", description: "If true, run in background (for servers). Default false." },
-				timeout_ms: { type: "number", description: "Timeout in milliseconds. Default 60000 (60s)." },
+				timeout_ms: { type: "number", description: "Timeout in milliseconds. Default 300000 (5 minutes). Use a higher value for slow builds or test suites." },
 			},
 			required: ["command"],
 		},
@@ -4339,7 +4452,18 @@ async function executeAgentTool(
 				return { result: `❌ Error: Cannot write files outside your working directory`, filesCreated: 0 }
 			}
 			
-			try {
+			// Society Agent - Guard: reject empty or no-op writes
+		if (!content || content.trim() === "") {
+			return { result: `⚠️ Empty write: write_file called with empty content for "${filePath}". Please provide the actual content you intend to write.`, filesCreated: 0 }
+		}
+		if (fs.existsSync(fullPath)) {
+			const existing = fs.readFileSync(fullPath, "utf-8")
+			if (existing === content) {
+				return { result: `⚠️ No-op write: "${filePath}" already has identical content. Apply your actual code changes before calling write_file.`, filesCreated: 0 }
+			}
+		}
+
+		try {
 				// Create directory if needed
 				const dir = path.dirname(fullPath)
 				if (!fs.existsSync(dir)) {
@@ -4503,27 +4627,60 @@ async function executeAgentTool(
 			}
 			// Society Agent end
 			
-			// CRITICAL: Block commands that would kill the system server
+			// CRITICAL: Block commands that would kill the system server or its runner
+			// Test each semicolon/&&-separated segment individually to avoid false positives
+			// (e.g. "kill 123; cd /workspaces/society-agent/..." must NOT be blocked)
 			const dangerousPatterns = [
 				/kill.*4000/i,
 				/pkill.*4000/i,
 				/fuser.*-k.*4000/i,
 				/lsof.*-t.*4000.*\|.*kill/i,
-				/kill.*society/i,
-				/pkill.*society/i,
-				/pkill.*tsx.*society/i,
-				/kill.*-9.*$(.*4000)/i,
+				/kill.*society.{0,30}server/i,   // kill society-server process
+				/pkill.*society/i,               // pkill targeting society
+				/pkill.*-f.*["']?tsx["']?/i,     // pkill -f "tsx" kills the agent runner itself
+				/pkill.*tsx/i,                   // any tsx pkill
 			]
 			
-			const isDangerous = dangerousPatterns.some(pattern => pattern.test(fixedCommand))
-			if (isDangerous) {
-				log.warn(`[BLOCKED] Agent ${agentConfig.name} tried to run dangerous command: ${fixedCommand}`)
+			// Split compound commands and test each segment independently
+			const commandSegments = fixedCommand.split(/;|&&/).map(s => s.trim())
+			const blockedBy = commandSegments
+				.flatMap(seg => dangerousPatterns.filter(p => p.test(seg)).map(p => ({ seg, p })))
+				[0]
+			if (blockedBy) {
+				log.warn(`[BLOCKED] Agent ${agentConfig.name} dangerous segment: ${blockedBy.seg}`)
 				return { 
-					result: `🚨 **BLOCKED: This command would kill the system server!**\n\nPort 4000 is the Society Agent system - killing it would destroy yourself and all other agents.\n\n✅ Use a different port for YOUR server (6001, 8080, 3000, etc.)\n❌ Never try to kill processes on port 4000`, 
+					result: `🚨 **BLOCKED: This command would kill the system server or its process runner!**\n\nBlocked segment: \`${blockedBy.seg}\`\n\n✅ To restart your project server: use kill_process({ port: YOUR_PORT }) then run_command to start it.\n✅ Use a different port for YOUR server (6001, 8080, 3000, etc.)\n❌ Never pkill tsx or kill port 4000 — that destroys the agent framework.`, 
 					filesCreated: 0 
 				}
 			}
 			// Society Agent end
+
+			// Society Agent - Normalize test runner commands to non-interactive / single-run mode
+			// vitest, jest, and mocha all default to watch mode which never exits.
+			// Auto-append the appropriate flag so the command resolves cleanly.
+			if (
+				// npm test / yarn test / pnpm test — without explicit --run or --watchAll=false
+				(/(?:^|&&|;)\s*(?:npm|yarn|pnpm)\s+test(?:\s|$|\s+--\s)/.test(fixedCommand) &&
+					!/--run(?:\s|$)/.test(fixedCommand) &&
+					!/--watchAll=false/.test(fixedCommand) &&
+					!/CI=true/.test(fixedCommand))
+			) {
+				// Vitest uses `-- --run`; Jest uses `--watchAll=false`.
+				// We can't know which runner is used, so we check package.json if possible,
+				// but it's safe to always use `-- --run` since jest ignores unknown vitest flags
+				// via the `--` separator. Simpler: set CI=true which both runners respect.
+				fixedCommand = `CI=true ${fixedCommand}`
+				log.info(`[Worker ${agentConfig.name}] Auto-prepended CI=true to prevent watch mode: ${fixedCommand}`)
+			} else if (
+				// npx vitest / vitest directly — without --run flag
+				(/(?:^|&&|;)\s*(?:npx\s+)?vitest(?:\s+run)?\s/.test(fixedCommand) || /(?:^|&&|;)\s*(?:npx\s+)?vitest$/.test(fixedCommand)) &&
+				!/\brun\b/.test(fixedCommand.replace(/.*vitest/, '')) &&  // 'run' subcommand already present
+				!/--reporter/.test(fixedCommand)
+			) {
+				// Insert 'run' subcommand after 'vitest'
+				fixedCommand = fixedCommand.replace(/((?:npx\s+)?vitest)(?!\s+run)/, '$1 run')
+				log.info(`[Worker ${agentConfig.name}] Auto-inserted 'run' into vitest command: ${fixedCommand}`)
+			}
 
 			// Society Agent - Auto-detect commands that should run in background
 			// These patterns indicate long-running servers that will never exit on their own
@@ -4569,75 +4726,182 @@ async function executeAgentTool(
 			})
 
 	if (autoBackground) {
-		const { exec } = await import("child_process")
+		const { exec, execSync: execSyncBg } = await import("child_process")
+
+		// ── Helpers ────────────────────────────────────────────────────────────
+
+		/** Extract the first port number mentioned in a command string. */
+		const extractPort = (cmd: string): number | null => {
+			const patterns = [
+				/(?:^|\s)PORT=(\d{3,5})(?:\s|$)/,           // PORT=3000 npm start
+				/(?:-p|--port)[=\s](\d{3,5})(?:\s|$)/i,     // -p 3000 / --port=3000
+				/:(\d{3,5})(?:\s|$|\/)/,                     // :3000
+			]
+			for (const re of patterns) {
+				const m = cmd.match(re)
+				if (m) return parseInt(m[1], 10)
+			}
+			return null
+		}
+
+		/** True if something is already listening on `port`. */
+		const isPortInUse = (port: number): boolean => {
+			try {
+				execSyncBg(`fuser ${port}/tcp 2>/dev/null`, { stdio: "pipe" })
+				return true
+			} catch { return false }
+		}
+
+		/** Kill whatever is on `port`, wait up to 2 s for it to die. */
+		const freePort = (port: number, label: string): string => {
+			try {
+				execSyncBg(`fuser -k ${port}/tcp 2>/dev/null || true`, { stdio: "pipe" })
+				// brief wait for OS to release the port
+				execSyncBg(`sleep 0.5`, { stdio: "pipe" })
+				log.info(`[Worker ${label}] Freed port ${port} before start`)
+				return `🔄 Auto-killed existing process on port ${port}\n`
+			} catch { return "" }
+		}
+
+		/** Try curling common health endpoints; return first successful body (truncated). */
+		const httpHealthCheck = (port: number): string | null => {
+			const paths = ["/health", "/api/health", "/api/status", "/", "/ping"]
+			for (const p of paths) {
+				try {
+					const body = execSyncBg(
+						`curl -s --max-time 2 http://localhost:${port}${p}`,
+						{ stdio: "pipe", encoding: "utf-8" }
+					) as string
+					if (body && body.trim().length > 0) {
+						return body.trim().substring(0, 300)
+					}
+				} catch { /* try next */ }
+			}
+			return null
+		}
+
+		// ── Strip trailing & / 2>&1 & the agent may have added ─────────────────
+		// If left in, "nohup cmd 2>&1 & > log 2>&1 & echo $!" keeps bash's stdout
+		// pipe open, so exec() never calls back.
+		const strippedCommand = fixedCommand
+			.replace(/\s*2>&1\s*&?\s*$/, '')
+			.replace(/\s*&\s*$/, '')
+			.trim()
+
+		// ── Pre-flight: kill any process already on the target port ─────────────
+		const targetPort = extractPort(strippedCommand)
+		let preflightNote = ""
+		if (targetPort && targetPort !== 4000 && isPortInUse(targetPort)) {
+			preflightNote = freePort(targetPort, agentConfig.name)
+		}
+
 		const logFile = `/tmp/worker-${agentConfig.id}-${Date.now()}.log`
-		const bgCommand = `nohup ${fixedCommand} > ${logFile} 2>&1 & echo $!`
+		const bgCommand = `nohup ${strippedCommand} > ${logFile} 2>&1 & echo $!`
 
 		const cleanEnv = { ...process.env }
 		delete cleanEnv.PORT
 
-		return new Promise((resolve) => {
-			exec(bgCommand, { cwd: workingFolder, shell: "/bin/bash", env: cleanEnv }, (err, stdout) => {
-				const pid = stdout.trim()
-
-				io.emit("system-event", {
-					type: "command-background",
-					agentId: agentConfig.id,
-					projectId: project.id,
-					message: `Background: ${fixedCommand} (PID: ${pid})`,
-					command: fixedCommand,
-					pid,
-					logFile,
-					timestamp: Date.now(),
-				})
-
-				if (err) {
-					resolve({ result: `Failed to start: ${err.message}`, filesCreated: 0 })
-					return
+		/** Spawn once; optionally retry after killing EADDRINUSE port. */
+		const spawnBg = (): Promise<{ result: string; filesCreated: number }> =>
+			new Promise((resolve) => {
+				let resolved = false
+				const safeResolve = (val: { result: string; filesCreated: number }) => {
+					if (!resolved) { resolved = true; resolve(val) }
 				}
 
-				// Wait 3 seconds and check status
-				setTimeout(async () => {
-					try {
-						const { execSync } = await import("child_process")
+				// Safety net: exec() hangs if the shell never exits (should not happen
+				// after our strip above, but kept as belt-and-suspenders).
+				const execTimeout = setTimeout(() => {
+					log.warn(`[Worker ${agentConfig.name}] exec() timed out: ${strippedCommand.substring(0, 80)}`)
+					safeResolve({
+						result: `⚠️ Background start timed out (15s).\nCommand: ${strippedCommand}\nLog: ${logFile}\n\nCheck with: get_processes()`,
+						filesCreated: 0,
+					})
+				}, 15000)
+
+				exec(bgCommand, { cwd: workingFolder, shell: "/bin/bash", env: cleanEnv }, (err, stdout) => {
+					clearTimeout(execTimeout)
+					const pid = stdout.trim()
+
+					io.emit("system-event", {
+						type: "command-background",
+						agentId: agentConfig.id,
+						projectId: project.id,
+						message: `Background: ${strippedCommand} (PID: ${pid})`,
+						command: strippedCommand,
+						pid,
+						logFile,
+						timestamp: Date.now(),
+					})
+
+					if (err) {
+						safeResolve({ result: `Failed to start: ${err.message}`, filesCreated: 0 })
+						return
+					}
+
+					// ── Wait 3 s, then check process + log + health ──────────────
+					setTimeout(async () => {
 						let isRunning = false
 						try {
-							execSync(`kill -0 ${pid} 2>/dev/null`)
+							execSyncBg(`kill -0 ${pid} 2>/dev/null`, { stdio: "pipe" })
 							isRunning = true
-						} catch {
-							isRunning = false
-						}
+						} catch { isRunning = false }
 
 						let logContent = ""
 						try {
 							logContent = fs.readFileSync(logFile, "utf-8")
-							if (logContent.length > 3000) {
-								logContent = logContent.substring(0, 3000) + "\n...(truncated)"
+							if (logContent.length > 3000) logContent = logContent.substring(0, 3000) + "\n...(truncated)"
+						} catch { logContent = "(no output yet)" }
+
+						// ── EADDRINUSE auto-retry ────────────────────────────────
+						// If the process died AND the log mentions address-in-use, we
+						// extract the port, kill it, and resolve with a clear message
+						// telling the agent a retry is happening automatically.
+						if (!isRunning && /EADDRINUSE|address already in use/i.test(logContent)) {
+							const portMatch = logContent.match(/EADDRINUSE[^:]*:+\s*(\d+)/) ||
+							                  logContent.match(/address already in use.*?:(\d+)/i) ||
+							                  logContent.match(/:(\d{3,5})/)
+							const busyPort = portMatch ? parseInt(portMatch[1], 10) : targetPort
+							if (busyPort && busyPort !== 4000) {
+								log.warn(`[Worker ${agentConfig.name}] EADDRINUSE on port ${busyPort} — auto-killing and retrying`)
+								freePort(busyPort, agentConfig.name)
+								// Re-run and return that result
+								const retryResult = await spawnBg()
+								safeResolve({
+									result: `🔄 Port ${busyPort} was busy — auto-killed it and retried.\n\n${retryResult.result}`,
+									filesCreated: retryResult.filesCreated,
+								})
+								return
 							}
-						} catch {
-							logContent = "(no output yet)"
+						}
+
+						// ── Health check on detected port ────────────────────────
+						let healthNote = ""
+						if (isRunning && targetPort) {
+							const body = httpHealthCheck(targetPort)
+							if (body) {
+								healthNote = `\n\n🩺 Health check passed (port ${targetPort}):\n\`\`\`\n${body}\n\`\`\``
+							} else {
+								healthNote = `\n\n🩺 Health check: port ${targetPort} not yet responding (server may still be starting up)`
+							}
 						}
 
 						if (isRunning) {
-							resolve({
-								result: `✅ Background process running!\nPID: ${pid}\nLog: ${logFile}\n\nOutput:\n${logContent || "(no output yet)"}`,
+							safeResolve({
+								result: `${preflightNote}✅ Background process running!\nPID: ${pid}\nLog: ${logFile}\n\nStartup output:\n\`\`\`\n${logContent || "(no output yet)"}\n\`\`\`${healthNote}`,
 								filesCreated: 0,
 							})
 						} else {
-							resolve({
-								result: `❌ Process failed (exited immediately)!\n\nCommand: ${fixedCommand}\n\nOutput/Error:\n${logContent || "(no output)"}`,
+							safeResolve({
+								result: `${preflightNote}❌ Process failed (exited immediately)!\n\nCommand: ${strippedCommand}\n\nOutput/Error:\n\`\`\`\n${logContent || "(no output)"}\n\`\`\``,
 								filesCreated: 0,
 							})
 						}
-					} catch (checkErr: any) {
-						resolve({
-							result: `✅ Started (PID: ${pid})\nLog: ${logFile}\n(Could not verify: ${checkErr.message})`,
-							filesCreated: 0,
-						})
-					}
-				}, 3000)
+					}, 3000)
+				})
 			})
-		})
+
+		return spawnBg()
 	}
 
 	// Foreground execution with real-time streaming
@@ -4669,26 +4933,69 @@ async function executeAgentTool(
 		})
 
 		// Society Agent - Detect if command has backgrounding (&) and needs special handling
-		// When bash -c runs a command with &, it may still wait for background jobs
-		// We fix this by using 'set +m' to disable job control and adding 'disown'
-		const hasBackgrounding = /&\s*(&&|$|\|)/.test(finalCommand) || finalCommand.trim().endsWith('&')
-		let shellCommand = finalCommand
-		if (hasBackgrounding) {
-			// Wrap to truly detach background processes
-			shellCommand = `set +m; ${finalCommand}`
-			log.info(`[Worker ${agentConfig.name}] Command has backgrounding, using detached mode`)
+		// Root cause: when bash forks a background process, that child inherits ALL of bash's
+		// open FDs, including our stdout/stderr pipes AND any Node.js internal pipes (fd 3+).
+		// Even with >/dev/null redirects, bash may not exit cleanly in all cases.
+		//
+		// The only 100% reliable fix: extract background lines, spawn them as truly detached
+		// Node.js children (stdio:'ignore', detached:true, unref()), and run the rest with
+		// clean bash -c. This completely severs any FD connection between our pipes and the
+		// background process.
+		const bgLineRe = /^(.*[^&])&\s*$/   // matches "cmd &" but not "cmd &&"
+		const lines = finalCommand.split('\n')
+		const bgCommands: string[] = []
+		const fgLines: string[] = []
+		for (const line of lines) {
+			const trimmed = line.trim()
+			if (!trimmed) continue
+			// Strip 2>&1 redirect + trailing & to get the bare command
+			const m = trimmed.match(/^(.*?)\s*(?:2>&1\s*)?&\s*$/)
+			if (m && !/&&\s*$/.test(trimmed)) {
+				// Background command — collect it
+				bgCommands.push(m[1].trim())
+				fgLines.push(`echo "[bg started: ${m[1].trim().substring(0, 60)}]"`)
+			} else {
+				fgLines.push(line)
+			}
 		}
+		const hasBackgrounding = bgCommands.length > 0
+		const bgPids: number[] = []
+		const bgLogFiles: string[] = []
+		if (hasBackgrounding) {
+			for (let i = 0; i < bgCommands.length; i++) {
+				const bgCmd = bgCommands[i]
+				// Society Agent - Write bg output to a temp log so agent can inspect startup
+				const bgLogPath = `/tmp/bg-${agentConfig.id}-${Date.now()}-${i}.log`
+				try {
+					const bgLogFd = fs.openSync(bgLogPath, "w")
+					const bgChild = spawn("bash", ["-c", bgCmd], {
+						cwd: workingFolder,
+						env: { ...process.env, FORCE_COLOR: "0" },
+						stdio: ["ignore", bgLogFd, bgLogFd], // stdout+stderr → log file, no pipe to us
+						detached: true,     // Own process group — survives bash exit
+					})
+					fs.closeSync(bgLogFd)   // Parent closes its copy; child keeps its inherited fd
+					bgChild.unref()         // Don't keep Node event loop alive for it
+					bgPids.push(bgChild.pid ?? -1)
+					bgLogFiles.push(bgLogPath)
+					// Replace the echo placeholder with one that includes the log path
+					const idx = fgLines.indexOf(`echo "[bg started: ${bgCmd.substring(0, 60)}]"`)
+					if (idx !== -1) {
+						fgLines[idx] = `echo "[bg started PID=${bgChild.pid}: ${bgCmd.substring(0, 50)} → log: ${bgLogPath}]"`
+					}
+					log.info(`[Worker ${agentConfig.name}] Spawned detached bg process (PID ${bgChild.pid}): ${bgCmd.substring(0, 80)} → ${bgLogPath}`)
+				} catch (err: any) {
+					log.warn(`[Worker ${agentConfig.name}] Failed to spawn bg command: ${err.message}`)
+					fgLines.push(`echo "[bg launch failed: ${err.message}]"`)
+				}
+			}
+		}
+		const shellCommand = fgLines.join('\n') || 'echo "(no foreground commands)"'
 
 		const child = spawn("bash", ["-c", shellCommand], {
 			cwd: workingFolder, // Society Agent - Use workingFolder for commands
 			env: { ...process.env, FORCE_COLOR: "0" },
-			detached: hasBackgrounding, // Detach if command has backgrounding
 		})
-
-		// If detached, unref so node doesn't wait for it
-		if (hasBackgrounding) {
-			child.unref()
-		}
 
 		const streamOutput = (data: Buffer) => {
 			const text = data.toString()
@@ -4714,7 +5021,15 @@ async function executeAgentTool(
 
 		const timeoutId = setTimeout(() => {
 			child.kill("SIGTERM")
-			resolve({ result: `❌ Command timed out after ${timeout / 1000}s.\n\nPartial output:\n${output.substring(0, 4000)}`, filesCreated: 0 })
+			// Society Agent - include bg log content even on timeout
+			let bgTimeoutSection = ''
+			if (bgLogFiles.length > 0) {
+				bgTimeoutSection = '\n\n' + bgLogFiles.map((lp, i) => {
+					try { return `⚡ BG PID=${bgPids[i]}: ${bgCommands[i]?.substring(0,50)}\n\`\`\`\n${fs.readFileSync(lp,'utf8').substring(0,2000)}\n\`\`\`` }
+					catch { return `⚡ BG PID=${bgPids[i]}: ${bgCommands[i]?.substring(0,50)} log not readable` }
+				}).join('\n\n')
+			}
+			resolve({ result: `❌ Command timed out after ${timeout / 1000}s.\n\nPartial output:\n${output.substring(0, 4000)}${bgTimeoutSection}`, filesCreated: 0 })
 		}, timeout)
 
 		child.on("close", (code) => {
@@ -4749,10 +5064,35 @@ async function executeAgentTool(
 			} else {
 				displayOutput = output || "(no output)"
 			}
+			// Society Agent - Append bg process startup output so agent can see errors/status
+			let bgSection = ''
+			if (bgLogFiles.length > 0) {
+				const bgParts: string[] = []
+				for (let i = 0; i < bgLogFiles.length; i++) {
+					const logPath = bgLogFiles[i]
+					const pid = bgPids[i] ?? '?'
+					const cmd = bgCommands[i]?.substring(0, 50) ?? ''
+					try {
+						const logContent = fs.readFileSync(logPath, 'utf8')
+						const lines = logContent.split('\n')
+						// Show up to 80 lines; if more, show first 40 + last 40
+						let preview: string
+						if (lines.length > 80) {
+							preview = [...lines.slice(0, 40), `...(${lines.length - 80} lines omitted)...`, ...lines.slice(-40)].join('\n')
+						} else {
+							preview = logContent || '(no output yet)'
+						}
+						bgParts.push(`⚡ BG process PID=${pid}: ${cmd}\n   log: ${logPath}\n\`\`\`\n${preview.substring(0, 3000)}\n\`\`\``)
+					} catch {
+						bgParts.push(`⚡ BG process PID=${pid}: ${cmd}\n   log: ${logPath} (not readable yet)`)
+					}
+				}
+				bgSection = '\n\n' + bgParts.join('\n\n')
+			}
 			if (code === 0) {
-				resolve({ result: `✅ Command completed.\n\`\`\`\n$ ${fixedCommand}\n${displayOutput}\n\`\`\``, filesCreated: 0 })
+				resolve({ result: `✅ Command completed.\n\`\`\`\n$ ${fixedCommand}\n${displayOutput}\n\`\`\`${bgSection}`, filesCreated: 0 })
 			} else {
-				resolve({ result: `❌ Command failed (exit ${code}).\n\`\`\`\n$ ${fixedCommand}\n${displayOutput}\n\`\`\``, filesCreated: 0 })
+				resolve({ result: `❌ Command failed (exit ${code}).\n\`\`\`\n$ ${fixedCommand}\n${displayOutput}\n\`\`\`${bgSection}`, filesCreated: 0 })
 			}
 		})
 
@@ -5265,18 +5605,34 @@ If you don't know, say so. Be concise.`,
 			const { execSync } = await import("child_process")
 			
 			let searchDir = agentFolder
+			let singleFile: string | null = null
 			if (searchPath?.startsWith("project:")) {
 				const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 				searchDir = path.join(workspacePath, "projects", project.folder || project.id)
 			} else if (searchPath) {
-				searchDir = path.join(agentFolder, searchPath)
+				const resolved = path.join(agentFolder, searchPath)
+				// Society Agent - Fix ENOTDIR: if path points to a file, use parent dir + target the file
+				if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
+					searchDir = path.dirname(resolved)
+					singleFile = path.basename(resolved)
+				} else {
+					searchDir = resolved
+				}
+			}
+			
+			// Society Agent - Guard against non-existent searchDir (e.g. agent passed wrong path)
+			if (!fs.existsSync(searchDir)) {
+				return { result: `❌ Directory not found: ${searchDir}`, filesCreated: 0 }
 			}
 			
 			try {
-				const fileGlob = file_pattern || "*"
+				const fileGlob = singleFile || file_pattern || "*"
+				const searchTarget = singleFile ? singleFile : "."
 				// Society Agent - Exclude node_modules, .git, dist, build, coverage from search
 				const excludeDirs = "--exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist --exclude-dir=build --exclude-dir=coverage --exclude-dir=.next --exclude-dir=.cache"
-				const cmd = `grep -rn ${excludeDirs} --include="${fileGlob}" "${pattern}" . 2>/dev/null | head -50`
+				const cmd = singleFile
+					? `grep -n "${pattern}" ${searchTarget} 2>/dev/null | head -50`
+					: `grep -rn ${excludeDirs} --include="${fileGlob}" "${pattern}" . 2>/dev/null | head -50`
 				const output = execSync(cmd, { cwd: searchDir, encoding: "utf-8", timeout: 30000 })
 				return { result: output ? `🔍 **Search results for "${pattern}":**\n\`\`\`\n${output}\n\`\`\`` : `🔍 No matches found for "${pattern}"`, filesCreated: 0 }
 			} catch (err: any) {
@@ -5571,6 +5927,18 @@ If you don't know, say so. Be concise.`,
 				timestamp: Date.now(),
 				isStreaming: true,
 			})
+
+			// Log incoming message in the TARGET agent's Activity log
+			agentActivityLogger.logChatIn(
+				project.id,
+				targetAgent.id,
+				project.folder || project.id,
+				targetAgent.homeFolder || "/",
+				`[Message from ${agentConfig.name}]\n\n${message}`,
+				"agent",
+				false,
+				agentConfig.name,
+			)
 
 			// Execute the message via handleSupervisorChat for the target agent
 			log.info(`[${agentConfig.name}] Sending message to ${targetAgent.name}: ${message.substring(0, 100)}...`)
@@ -6519,6 +6887,9 @@ async function handleSupervisorChat(
 		}
 	}
 	// Society Agent end
+	// Society Agent start - activity log: agent session begins
+	agentActivityLogger.logAgentStart(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", "user_chat", model)
+	// Society Agent end
 	const agent = getOrCreateProjectAgent(supervisorConfig, project, apiKey)
 
 	// Access the agent's system prompt (private field, accessed via cast)
@@ -6573,8 +6944,8 @@ async function handleSupervisorChat(
 	let totalFilesCreated = 0
 	
 	// Society Agent - Autonomous mode: much higher limit for long-running tasks
-	// Agents can run up to 100 iterations, but smart loop detection will stop them if stuck
-	const MAX_TOOL_ITERATIONS = 100
+	// Agents can run up to 200 iterations, but smart loop detection will stop them if stuck
+	const MAX_TOOL_ITERATIONS = 200
 	let lastActionDescription = "" // Society Agent - Track what the last step did
 	let iterationCount = 0 // Track actual iterations for summary
 	
@@ -6587,6 +6958,14 @@ async function handleSupervisorChat(
 	let lastCommandRuns: string[] = []
 	const MAX_COMMAND_HISTORY = 5
 	const COMMAND_REPEAT_THRESHOLD = 3 // Same command 3 times in last 5 = loop
+
+	// Society Agent - Modification-without-verification detection
+	// Catches agents that keep editing files without ever checking if errors decreased
+	let modsSinceLastVerification = 0
+	const VERIFY_AFTER_MODS_THRESHOLD = 5
+	const MODIFICATION_CMD_RE = /\bsed\s+.*-i\b|\bsed\s+-i\b|\bpatch\b/
+	const MODIFICATION_TOOL_NAMES = new Set(["write_file", "create_file", "edit_file", "patch_file", "append_file"])
+	const VERIFICATION_CMD_RE = /\btsc\b|\bnpm\s+(run\s+)?(build|test|type.?check)\b|\bpnpm\s+(run\s+)?(build|test|type.?check)\b|\bpytest\b|\bpy\.test\b|\bpython\s+-m\s+(pytest|mypy|pyright|py_compile|flake8|ruff|pylint|unittest)\b|\bpyright\b|\bmypy\b|\bruff\s+check\b|\bflake8\b|\bpylint\b|\bcargo\s+(build|test|check)\b|\bng\s+build\b|\bgo\s+(build|test|vet)\b|\bruby\s+-c\b|\bbundle\s+exec\s+rspec\b|\bmvn\s+(compile|test|verify|package)\b|\bgradle\s+(build|test|check)\b/i
 	
 	// Society Agent - Text loop detection
 	let lastTextOutput = ""
@@ -6605,8 +6984,27 @@ async function handleSupervisorChat(
 	const READ_ONLY_TOOLS = new Set(["read_project_file", "list_project_files", "read_file", "list_dir", "get_team_info", "search_files", "grep_search"])
 	let consecutiveReadOnlyStops = 0
 
+	// Society Agent - Ensure agents always summarize when they did meaningful work.
+	// After end_turn, if ≥5 tools were called and we haven't injected the summary
+	// prompt yet, continue for one final iteration with a summary request.
+	let summaryRequested = false
+	const MIN_TOOLS_FOR_SUMMARY = 5
+	let hallucinationWarned = false
+	let fakeImplWarned = false        // Guard: agent described without writing/executing
+	let prematureWarned = false       // Guard: agent stopped with suspiciously few write actions
+	let verificationRequested = false // Guard: ask agent to verify before requesting summary
+	let writeActionsCount = 0         // Successful write_file / patch_file calls
+	let executeActionsCount = 0       // Successful run_command calls
+	const actLoopStartTime = Date.now()
+	let actLoopExitReason = "end_turn"
+	let actTotalToolCalls = 0
+	let actCallIndex = 0
+	// Society Agent end
+
 	for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
 		iterationCount = iteration + 1
+		actCallIndex = 0 // reset per-iteration call index
+		const actIterationStartTime = Date.now()
 		log.info(`[Supervisor] ${supervisorConfig.name} iteration ${iteration + 1}, ${messages.length} messages, useOpenRouter=${useOpenRouter}`)
 
 		// Society Agent start - Check if agent was stopped
@@ -6622,6 +7020,7 @@ async function handleSupervisorChat(
 				isStreaming: false,
 				isDone: true,
 			})
+			actLoopExitReason = "user_stopped"
 			break
 		}
 		// Society Agent end
@@ -6855,7 +7254,12 @@ async function handleSupervisorChat(
 				})
 			}
 			// Society Agent end
-			
+			// Society Agent start - activity log: LLM response complete (OpenRouter)
+			if (textContent.trim()) {
+				agentActivityLogger.logChatOut(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", textContent, finishReason || "end_turn", iteration, actIterationStartTime, { input: streamUsage?.prompt_tokens, output: streamUsage?.completion_tokens })
+			}
+			// Society Agent end
+
 			// Society Agent - Detect repeated text output (model stuck in loop)
 			const normalizedText = textContent.trim().toLowerCase().replace(/\s+/g, ' ').substring(0, 100)
 			if (normalizedText.length > 20 && normalizedText === lastTextOutput) {
@@ -6884,6 +7288,48 @@ async function handleSupervisorChat(
 					log.info(`[Supervisor] OpenRouter hit length limit, auto-continuing`)
 					messages.push({ role: "assistant", content: textContent || "" })
 					messages.push({ role: "user", content: "Continue from where you left off." })
+					continue
+				}
+				// Society Agent - Hallucination guard: agent made claims without using any tools
+				if (!hallucinationWarned && actTotalToolCalls === 0 && iteration === 0) {
+					hallucinationWarned = true
+					log.warn(`[Supervisor] ${supervisorConfig.name} responded with 0 tool calls — pushing back`)
+					messages.push({ role: "assistant", content: textContent || "" })
+					messages.push({ role: "user", content: "You haven't used any tools yet. If you made claims about files, processes, or the state of the system, you must verify them with tools first. Please actually check using read_file, run_command, http_request, or get_processes — then implement any needed fix." })
+					continue
+				}
+				// Society Agent - Fake Implementation Guard: many reads, zero writes/executes
+				if (!fakeImplWarned && actTotalToolCalls >= 2 && writeActionsCount === 0 && executeActionsCount === 0 && iteration > 0) {
+					fakeImplWarned = true
+					log.warn(`[Supervisor] ${supervisorConfig.name} end_turn after ${actTotalToolCalls} reads with 0 writes/executes — fake implementation suspected`)
+					messages.push({ role: "assistant", content: textContent || "" })
+					messages.push({ role: "user", content: "You described a solution but did not implement it. You have read files but made no actual changes. Please use write_file or run_command to implement your solution now." })
+					continue
+				}
+				// Society Agent - Premature Success Guard: stopped with very few total tool calls
+				if (!prematureWarned && actTotalToolCalls > 0 && actTotalToolCalls < 3 && iteration >= 1) {
+					prematureWarned = true
+					log.warn(`[Supervisor] ${supervisorConfig.name} stopped after only ${actTotalToolCalls} tool calls — premature success suspected`)
+					messages.push({ role: "assistant", content: textContent || "" })
+					messages.push({ role: "user", content: "The task appears incomplete — you stopped after very few actions. Please verify your implementation actually works, check for remaining errors, and ensure the task is fully done." })
+					continue
+				}
+				// Society Agent - Inject summary request if agent did real work without summarising.
+				// Skip if the response already looks like a summary (avoids double-summary with models that summarise naturally).
+				const looksLikeSummary = /#{1,3}\s*(summary|what was built|what i (did|built|completed)|here.{0,10}(what|summary))/i.test(textContent || "")
+				// Society Agent - Verification Phase Guard: verify before summarising
+				if (!verificationRequested && actTotalToolCalls >= MIN_TOOLS_FOR_SUMMARY && !looksLikeSummary) {
+					verificationRequested = true
+					log.info(`[Supervisor] ${supervisorConfig.name} requesting verification pass before summary`)
+					messages.push({ role: "assistant", content: textContent || "" })
+					messages.push({ role: "user", content: "Before summarizing, please verify your implementation: run the compiler, linter, or tests to confirm everything works. Check for any remaining errors or broken functionality." })
+					continue
+				}
+				if (!summaryRequested && actTotalToolCalls >= MIN_TOOLS_FOR_SUMMARY && !looksLikeSummary) {
+					summaryRequested = true
+					log.info(`[Supervisor] ${supervisorConfig.name} end_turn after ${actTotalToolCalls} tools — requesting summary`)
+					messages.push({ role: "assistant", content: textContent || "" })
+					messages.push({ role: "user", content: "Please give a concise summary of everything you accomplished: what was built/changed, what is now running and on which ports, any issues found, and what the user should know or do next." })
 					continue
 				}
 				break
@@ -6998,6 +7444,7 @@ async function handleSupervisorChat(
 				// io.emit("agent-message", { ... toolDisplay ... })
 
 				const toolStartTime = Date.now()
+				agentActivityLogger.logToolCall(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", toolName, toolInput, iteration, actCallIndex)
 				const { result, filesCreated } = await executeSupervisorTool(
 					toolName,
 					toolInput,
@@ -7007,7 +7454,12 @@ async function handleSupervisorChat(
 					io,
 				)
 				const toolDuration = Date.now() - toolStartTime
+				agentActivityLogger.logToolResult(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", toolName, result, !result.startsWith("❌"), iteration, actCallIndex++, toolStartTime)
+				actTotalToolCalls++
 				totalFilesCreated += filesCreated
+				// Society Agent - Track write/execute counts for fake-impl and premature-success guards
+				if ((toolName === "write_file" || toolName === "patch_file") && !result.startsWith("❌") && !result.startsWith("⚠️")) writeActionsCount++
+				if ((toolName === "run_command" || toolName === "execute_command") && !result.startsWith("❌")) executeActionsCount++
 
 				// Society Agent - Emit tool-execution completed event for UI tool cards
 				const { preview, lineCount } = extractCleanPreview(result)
@@ -7037,6 +7489,28 @@ async function handleSupervisorChat(
 				}
 
 				toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result })
+
+				// Society Agent - Track modifications vs verifications for stall detection
+				if (toolName === "run_command" && toolInput.command) {
+					if (VERIFICATION_CMD_RE.test(toolInput.command)) {
+						modsSinceLastVerification = 0
+					} else if (MODIFICATION_CMD_RE.test(String(toolInput.command))) {
+						modsSinceLastVerification++
+					}
+				} else if (MODIFICATION_TOOL_NAMES.has(toolName)) {
+					modsSinceLastVerification++
+				}
+			}
+
+			// Society Agent - Inject forced verification reminder after too many mods with no check
+			if (modsSinceLastVerification >= VERIFY_AFTER_MODS_THRESHOLD && toolResults.length > 0) {
+				const lastResult = toolResults[toolResults.length - 1] as any
+				const verifyWarning = `\n\n⚠️ **SYSTEM NOTICE – VERIFY BEFORE CONTINUING**: You have made ${modsSinceLastVerification} code/file modifications without running a compilation or type check. You MUST stop making changes and run the compiler/linter now:\n- TypeScript: \`tsc --noEmit 2>&1 | head -30\`\n- JavaScript: \`npm run build 2>&1 | head -30\`\n- Python (type check): \`python -m mypy . 2>&1 | head -30\` or \`pyright 2>&1 | head -30\`\n- Python (lint): \`ruff check . 2>&1 | head -30\` or \`flake8 . 2>&1 | head -30\`\n- Python (tests): \`python -m pytest 2>&1 | tail -20\`\n- Rust: \`cargo check 2>&1 | head -30\`\n- Go: \`go build ./... 2>&1 | head -30\`\n\nDo NOT edit any more files until you have confirmed the error count has actually decreased. If errors remain, diagnose the root cause from the compiler output — do NOT keep guessing at fixes blindly.`
+				if (typeof lastResult.content === 'string') {
+					lastResult.content += verifyWarning
+				}
+				modsSinceLastVerification = 0
+				log.warn(`[Supervisor] ${supervisorConfig.name} forced verification reminder after ${VERIFY_AFTER_MODS_THRESHOLD} mods without check`)
 			}
 
 			// Society Agent start - Track what tools were used for progress message
@@ -7214,6 +7688,11 @@ async function handleSupervisorChat(
 			})
 		}
 		// Society Agent end
+		// Society Agent start - activity log: LLM response complete (Anthropic)
+		if (textContent.trim()) {
+			agentActivityLogger.logChatOut(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", textContent, finalMessage.stop_reason || "end_turn", iteration, actIterationStartTime, { input: finalMessage.usage?.input_tokens, output: finalMessage.usage?.output_tokens })
+		}
+		// Society Agent end
 
 		// Note: text was already streamed via stream.on('text') above
 		
@@ -7245,6 +7724,22 @@ async function handleSupervisorChat(
 		// Society Agent start - Auto-continue on max_tokens for supervisor
 		if (toolBlocks.length === 0) {
 			if (finalMessage.stop_reason === "end_turn") {
+				// Society Agent - Hallucination guard: model answered with 0 tools on first iteration
+				if (!hallucinationWarned && actTotalToolCalls === 0 && iteration === 0) {
+					hallucinationWarned = true
+					log.warn(`[Supervisor] ${supervisorConfig.name} end_turn with 0 tool calls on iteration 0 — suspected hallucination, pushing back`)
+					io.emit("agent-message", {
+						agentId: supervisorConfig.id,
+						agentName: supervisorConfig.name,
+						projectId: project.id,
+						message: "\n*[You haven't used any tools yet. Please use the available tools to complete the task rather than just describing what you would do.]*\n",
+						timestamp: Date.now(),
+						isStreaming: false,
+					})
+					messages.push({ role: "assistant", content: finalMessage.content })
+					messages.push({ role: "user", content: "You haven't used any tools yet. Please actually use the tools available to you (read_file, write_file, execute_command, etc.) to complete the task. Don't just describe what you would do — do it." })
+					continue
+				}
 				// Society Agent - Auto-continue if agent only read files without making changes
 				if (!hasWrittenFiles && iteration > 0 && meaningfulActionsCount > 0) {
 					consecutiveReadOnlyStops++
@@ -7262,6 +7757,43 @@ async function handleSupervisorChat(
 						messages.push({ role: "user", content: "You've analyzed the problem but stopped without implementing a fix. Please continue and make the necessary code changes using write_file to fix the issue you identified. Don't just analyze - implement the solution." })
 						continue
 					}
+				}
+				// Society Agent - Fake Implementation Guard: many reads, zero writes/executes
+				if (!fakeImplWarned && actTotalToolCalls >= 2 && writeActionsCount === 0 && executeActionsCount === 0 && iteration > 0) {
+					fakeImplWarned = true
+					log.warn(`[Supervisor] ${supervisorConfig.name} end_turn after ${actTotalToolCalls} reads with 0 writes/executes — fake implementation suspected`)
+					io.emit("agent-message", { agentId: supervisorConfig.id, agentName: supervisorConfig.name, projectId: project.id, message: "\n*[You described a solution but made no file changes. Implement it now.]*\n", timestamp: Date.now(), isStreaming: false })
+					messages.push({ role: "assistant", content: finalMessage.content })
+					messages.push({ role: "user", content: "You described a solution but did not implement it. You have read files but made no actual changes. Please use write_file or run_command to implement your solution now." })
+					continue
+				}
+				// Society Agent - Premature Success Guard: stopped with very few total tool calls
+				if (!prematureWarned && actTotalToolCalls > 0 && actTotalToolCalls < 3 && iteration >= 1) {
+					prematureWarned = true
+					log.warn(`[Supervisor] ${supervisorConfig.name} stopped after only ${actTotalToolCalls} tool calls — premature success suspected`)
+					io.emit("agent-message", { agentId: supervisorConfig.id, agentName: supervisorConfig.name, projectId: project.id, message: "\n*[Task appears incomplete — very few actions taken. Verifying...]*\n", timestamp: Date.now(), isStreaming: false })
+					messages.push({ role: "assistant", content: finalMessage.content })
+					messages.push({ role: "user", content: "The task appears incomplete — you stopped after very few actions. Please verify your implementation actually works, check for remaining errors, and ensure the task is fully done." })
+					continue
+				}
+				// Society Agent - Inject summary request if agent did real work without summarising
+				const lastText = finalMessage.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map(b => b.text).join("\n")
+				const looksLikeSummary = /#{1,3}\s*(summary|what was built|what I built|what was done|completed|accomplished|implemented|changes made|work done)/i.test(lastText)
+				// Society Agent - Verification Phase Guard: verify before summarising
+				if (!verificationRequested && actTotalToolCalls >= MIN_TOOLS_FOR_SUMMARY && !looksLikeSummary) {
+					verificationRequested = true
+					log.info(`[Supervisor] ${supervisorConfig.name} requesting verification pass before summary`)
+					io.emit("agent-message", { agentId: supervisorConfig.id, agentName: supervisorConfig.name, projectId: project.id, message: "\n*[Requesting verification before summary...]*\n", timestamp: Date.now(), isStreaming: false })
+					messages.push({ role: "assistant", content: finalMessage.content })
+					messages.push({ role: "user", content: "Before summarizing, please verify your implementation: run the compiler, linter, or tests to confirm everything works. Check for any remaining errors or broken functionality." })
+					continue
+				}
+				if (!summaryRequested && actTotalToolCalls >= MIN_TOOLS_FOR_SUMMARY && !looksLikeSummary) {
+					summaryRequested = true
+					log.info(`[Supervisor] ${supervisorConfig.name} end_turn after ${actTotalToolCalls} tools — requesting summary`)
+					messages.push({ role: "assistant", content: finalMessage.content })
+					messages.push({ role: "user", content: "Please give a concise summary of everything you accomplished: what was built/changed, what is now running and on which ports, any issues found, and what the user should know or do next." })
+					continue
 				}
 				// Model explicitly finished - done
 				break
@@ -7380,6 +7912,7 @@ async function handleSupervisorChat(
 			// io.emit("agent-message", { ... toolDisplay ... })
 
 			const toolStartTime = Date.now()
+			agentActivityLogger.logToolCall(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", toolBlock.name, toolBlock.input as Record<string, unknown>, iteration, actCallIndex)
 			const { result, filesCreated } = await executeSupervisorTool(
 				toolBlock.name,
 				toolBlock.input,
@@ -7389,6 +7922,11 @@ async function handleSupervisorChat(
 				io,
 			)
 			const toolDuration = Date.now() - toolStartTime
+			agentActivityLogger.logToolResult(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", toolBlock.name, result, !result.startsWith("❌"), iteration, actCallIndex++, toolStartTime)
+			actTotalToolCalls++
+			// Society Agent - Track write/execute counts for fake-impl and premature-success guards
+			if ((toolBlock.name === "write_file" || toolBlock.name === "patch_file") && !result.startsWith("❌") && !result.startsWith("⚠️")) writeActionsCount++
+			if ((toolBlock.name === "run_command" || toolBlock.name === "execute_command") && !result.startsWith("❌")) executeActionsCount++
 
 			totalFilesCreated += filesCreated
 			
@@ -7430,6 +7968,29 @@ async function handleSupervisorChat(
 				tool_use_id: toolBlock.id,
 				content: result,
 			})
+
+			// Society Agent - Track modifications vs verifications for stall detection (Anthropic path)
+			const tbInput = toolBlock.input as Record<string, any>
+			if (toolBlock.name === "run_command" && tbInput.command) {
+				if (VERIFICATION_CMD_RE.test(String(tbInput.command))) {
+					modsSinceLastVerification = 0
+				} else if (MODIFICATION_CMD_RE.test(String(tbInput.command))) {
+					modsSinceLastVerification++
+				}
+			} else if (MODIFICATION_TOOL_NAMES.has(toolBlock.name)) {
+				modsSinceLastVerification++
+			}
+		}
+
+		// Society Agent - Inject forced verification reminder after too many mods with no check (Anthropic path)
+		if (modsSinceLastVerification >= VERIFY_AFTER_MODS_THRESHOLD && toolResults.length > 0) {
+			const lastResult = toolResults[toolResults.length - 1] as any
+			const verifyWarning = `\n\n⚠️ **SYSTEM NOTICE – VERIFY BEFORE CONTINUING**: You have made ${modsSinceLastVerification} code/file modifications without running a compilation or type check. You MUST stop making changes and run the compiler/linter now:\n- TypeScript: \`tsc --noEmit 2>&1 | head -30\`\n- JavaScript: \`npm run build 2>&1 | head -30\`\n- Python (type check): \`python -m mypy . 2>&1 | head -30\` or \`pyright 2>&1 | head -30\`\n- Python (lint): \`ruff check . 2>&1 | head -30\` or \`flake8 . 2>&1 | head -30\`\n- Python (tests): \`python -m pytest 2>&1 | tail -20\`\n- Rust: \`cargo check 2>&1 | head -30\`\n- Go: \`go build ./... 2>&1 | head -30\`\n\nDo NOT edit any more files until you have confirmed the error count has actually decreased. If errors remain, diagnose the root cause from the compiler output — do NOT keep guessing at fixes blindly.`
+			if (typeof lastResult.content === 'string') {
+				lastResult.content += verifyWarning
+			}
+			modsSinceLastVerification = 0
+			log.warn(`[Supervisor] ${supervisorConfig.name} forced verification reminder after ${VERIFY_AFTER_MODS_THRESHOLD} mods without check`)
 		}
 
 		// Society Agent start - Track what tools were used for progress message  
@@ -7522,6 +8083,10 @@ async function handleSupervisorChat(
 			totalFilesCreated += supervisorFiles
 		}
 	} catch (_) { /* ignore */ }
+
+	// Society Agent start - activity log: loop finished
+	agentActivityLogger.logLoopExit(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", actLoopExitReason as any, iterationCount, actTotalToolCalls, actLoopStartTime)
+	// Society Agent end
 
 	return { fullResponse, delegationResults, totalFilesCreated }
 }
@@ -8197,6 +8762,9 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 			
 			projectStore.recordActivity(found.project.id, agentId)
 			log.info(`[${found.agent.name}@${found.project.name}] chat: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
+			// Society Agent start - activity log: incoming user message
+			agentActivityLogger.logChatIn(found.project.id, agentId, found.project.folder, found.agent.homeFolder || "/", description || "[attachment only]", "user", !!(attachments && attachments.length > 0))
+			// Society Agent end
 
 			// Society Agent start - All agents use tool-based agentic loop
 			const result = await handleSupervisorChat(
