@@ -4,10 +4,10 @@ services:
     ports:
       - "4000:4000"
     volumes:
-      # Persist project data (agent workspaces, files, knowledge)
-      - ./projects:/app/projects
-      # Skills directory (optional - for global skills)
-      - ./skills:/app/skills
+      # Mount entire workspace
+      - .:/app
+      # Exclude node_modules to use container's version
+      - /app/node_modules
     env_file:
       - .env
     restart: unless-stopped

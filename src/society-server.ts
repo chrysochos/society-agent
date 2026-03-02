@@ -3745,7 +3745,7 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			properties: {
 				command: { type: "string", description: "The shell command to execute (e.g. 'npm install', 'npm start', 'pkill -f node')" },
 				background: { type: "boolean", description: "If true, run in background (for servers). Default false." },
-				timeout_ms: { type: "number", description: "Timeout in milliseconds. Default 300000 (5 minutes). Use a higher value for slow builds or test suites." },
+				timeout_ms: { type: "number", description: "Timeout in milliseconds. Default 600000 (10 min) for test commands, 300000 (5 min) otherwise. Use a higher value for slow builds." },
 			},
 			required: ["command"],
 		},
@@ -4031,13 +4031,13 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 	},
 	{
 		name: "kill_process",
-		description: "Kill a process by PID or by port. Useful to stop servers or hung processes.",
+		description: "Kill a process by port, PID, or name. Use get_processes to find what's running first. Port 4000 is protected (system server).",
 		input_schema: {
 			type: "object" as const,
 			properties: {
+				port: { type: "number", description: "Kill process on this port (recommended)" },
 				pid: { type: "number", description: "Process ID to kill" },
-				port: { type: "number", description: "Kill process on this port" },
-				name: { type: "string", description: "Kill processes matching this name (use carefully!)" },
+				name: { type: "string", description: "Kill processes matching this name (be specific, e.g. 'my-app', not 'node')" },
 			},
 			required: [],
 		},
@@ -4639,6 +4639,12 @@ async function executeAgentTool(
 				/pkill.*society/i,               // pkill targeting society
 				/pkill.*-f.*["']?tsx["']?/i,     // pkill -f "tsx" kills the agent runner itself
 				/pkill.*tsx/i,                   // any tsx pkill
+				/pkill\s+-f\s+["']?node["']?/i,  // pkill -f "node" kills all node including system
+				/pkill\s+["']?node["']?/i,       // pkill node (without -f)
+				/killall\s+node/i,               // killall node
+				/killall\s+tsx/i,                // killall tsx
+				/kill.*\$\(pgrep.*node/i,        // kill $(pgrep node)
+				/pgrep.*node.*\|.*xargs.*kill/i, // pgrep node | xargs kill
 			]
 			
 			// Split compound commands and test each segment independently
@@ -4907,7 +4913,15 @@ async function executeAgentTool(
 	// Foreground execution with real-time streaming
 	// Society Agent start - Use spawn instead of execSync to stream output
 	const { spawn } = await import("child_process")
-	const timeout = timeout_ms || 300000 // 5 minutes default
+	
+	// Auto-increase timeout for test commands (enforce minimum for tests)
+	const isTestCommand = /\b(test|vitest|jest|mocha|pytest|npm\s+test|npx\s+vitest)\b/i.test(fixedCommand)
+	const minTestTimeout = 600000 // 10 min minimum for tests
+	const defaultTimeout = isTestCommand ? minTestTimeout : 300000
+	// For test commands, enforce minimum even if agent passed a shorter timeout
+	const timeout = isTestCommand 
+		? Math.max(timeout_ms || defaultTimeout, minTestTimeout)
+		: (timeout_ms || defaultTimeout)
 
 	// Society Agent start - Auto-prepend sudo for apt commands
 	let finalCommand = fixedCommand
@@ -5812,6 +5826,17 @@ If you don't know, say so. Be concise.`,
 			
 			// Society Agent - CRITICAL: Block killing the system server
 			const SYSTEM_PORT = parseInt(process.env.PORT || "4000", 10)
+			const SYSTEM_PID = process.pid
+			
+			// Need at least one parameter
+			if (!port && !pid && !name) {
+				return { 
+					result: `❌ **Specify port, pid, or name!**\n\nUse get_processes to see what's running:\n\n✅ kill_process({ port: 3000 })\n✅ kill_process({ name: "my-server" })`, 
+					filesCreated: 0 
+				}
+			}
+			
+			// Block killing the system port
 			if (port === SYSTEM_PORT) {
 				log.warn(`[BLOCKED] Agent ${agentConfig.name} tried to kill system port ${SYSTEM_PORT}`)
 				return { 
@@ -5819,27 +5844,53 @@ If you don't know, say so. Be concise.`,
 					filesCreated: 0 
 				}
 			}
-			if (name && (/society|tsx.*server/i.test(name) || name.includes("4000"))) {
-				log.warn(`[BLOCKED] Agent ${agentConfig.name} tried to kill system process: ${name}`)
+			
+			// Block killing the system's own PID
+			if (pid === SYSTEM_PID) {
+				log.warn(`[BLOCKED] Agent ${agentConfig.name} tried to kill system PID ${SYSTEM_PID}`)
 				return { 
-					result: `🚨 **BLOCKED: Cannot kill system processes!**\n\nThe Society Agent server must remain running.\n\n✅ Kill YOUR processes by name or port\n❌ Never kill society-server or port 4000`, 
+					result: `🚨 **BLOCKED: Cannot kill the system process itself!**\n\nPID ${SYSTEM_PID} is the Society Agent server.\n\n✅ Kill YOUR processes by their specific port\n❌ Never kill the system process`, 
 					filesCreated: 0 
+				}
+			}
+			
+			// Block overly broad or system-targeting names
+			if (name) {
+				const dangerousNamePatterns = [
+					/^node$/i,            // "node" alone matches everything including system
+					/^npm$/i,             // npm processes
+					/^tsx$/i,             // tsx is our runner
+					/^ts-node$/i,         // ts-node processes
+					/society/i,           // society-server
+					/tsx.*server/i,       // tsx server patterns
+					/4000/,               // port 4000 in name
+					/society-server/i,    // explicit society-server
+					/society-agent/i,     // society-agent folder/process
+				]
+				
+				const nameBlocked = dangerousNamePatterns.some(p => p.test(name))
+				if (nameBlocked) {
+					log.warn(`[BLOCKED] Agent ${agentConfig.name} tried to kill with dangerous name pattern: "${name}"`)
+					return { 
+						result: `🚨 **BLOCKED: Cannot use "${name}" as process name!**\n\nThis pattern is too broad and would kill the Society Agent system.\n\n✅ Be specific: use your app's unique name like "my-server" or "express-app"\n✅ Or use kill_process({ port: YOUR_PORT })\n❌ Never use "node", "npm", "tsx", or "society"`, 
+						filesCreated: 0 
+					}
 				}
 			}
 			// Society Agent end
 			
 			try {
-				if (pid) {
-					execSync(`kill ${pid}`, { encoding: "utf-8" })
-					return { result: `✅ Killed process ${pid}`, filesCreated: 0 }
-				} else if (port) {
+				if (port) {
 					const output = execSync(`lsof -ti :${port} | xargs kill 2>/dev/null && echo "Killed process on port ${port}" || echo "Nothing on port ${port}"`, { encoding: "utf-8" })
 					return { result: output.trim(), filesCreated: 0 }
+				} else if (pid) {
+					execSync(`kill ${pid}`, { encoding: "utf-8" })
+					return { result: `✅ Killed process ${pid}`, filesCreated: 0 }
 				} else if (name) {
 					const output = execSync(`pkill -f "${name}" && echo "Killed processes matching ${name}" || echo "No process found matching ${name}"`, { encoding: "utf-8" })
 					return { result: output.trim(), filesCreated: 0 }
 				} else {
-					return { result: `❌ Specify pid, port, or name`, filesCreated: 0 }
+					return { result: `❌ Specify port, pid, or name`, filesCreated: 0 }
 				}
 			} catch (err: any) {
 				return { result: `❌ Error: ${err.message}`, filesCreated: 0 }
@@ -5951,6 +6002,20 @@ If you don't know, say so. Be concise.`,
 					project,
 					messageApiKey,
 					io,
+				)
+				
+				// Log the response back in the SENDER's Activity log
+				// This completes the message flow: send → receive → answer → answer_back
+				const responsePreview = result.fullResponse.substring(0, 2000) + (result.fullResponse.length > 2000 ? '...(truncated)' : '')
+				agentActivityLogger.logChatIn(
+					project.id,
+					agentConfig.id,  // Log in SENDER's activity
+					project.folder || project.id,
+					agentConfig.homeFolder || "/",
+					`[Response from ${targetAgent.name}]\n\n${responsePreview}`,
+					"agent",
+					false,
+					targetAgent.name,  // From the target agent
 				)
 				
 				if (wait_for_response) {
@@ -6999,6 +7064,7 @@ async function handleSupervisorChat(
 	let actLoopExitReason = "end_turn"
 	let actTotalToolCalls = 0
 	let actCallIndex = 0
+	let actChatOutLogged = false      // Track if any chat_out was logged during iterations
 	// Society Agent end
 
 	for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
@@ -7257,6 +7323,7 @@ async function handleSupervisorChat(
 			// Society Agent start - activity log: LLM response complete (OpenRouter)
 			if (textContent.trim()) {
 				agentActivityLogger.logChatOut(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", textContent, finishReason || "end_turn", iteration, actIterationStartTime, { input: streamUsage?.prompt_tokens, output: streamUsage?.completion_tokens })
+				actChatOutLogged = true
 			}
 			// Society Agent end
 
@@ -7691,6 +7758,7 @@ async function handleSupervisorChat(
 		// Society Agent start - activity log: LLM response complete (Anthropic)
 		if (textContent.trim()) {
 			agentActivityLogger.logChatOut(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", textContent, finalMessage.stop_reason || "end_turn", iteration, actIterationStartTime, { input: finalMessage.usage?.input_tokens, output: finalMessage.usage?.output_tokens })
+			actChatOutLogged = true
 		}
 		// Society Agent end
 
@@ -8084,6 +8152,39 @@ async function handleSupervisorChat(
 		}
 	} catch (_) { /* ignore */ }
 
+	// Society Agent start - activity log: ensure final response is logged
+	// If the agent only used tools without text output, log a summary response
+	// This ensures the Activity log shows what the agent accomplished
+	// Only log if no chat_out was logged during iterations (avoid double-logging)
+	if (!actChatOutLogged && actTotalToolCalls > 0) {
+		if (fullResponse.trim()) {
+			// Log the accumulated fullResponse as a final chat_out
+			agentActivityLogger.logChatOut(
+				project.id,
+				supervisorConfig.id,
+				project.folder,
+				supervisorConfig.homeFolder || "/",
+				fullResponse.substring(0, 5000), // Cap at 5000 chars to avoid huge logs
+				actLoopExitReason,
+				iterationCount,
+				actLoopStartTime,
+			)
+		} else {
+			// Agent used tools but produced no text - log a placeholder
+			agentActivityLogger.logChatOut(
+				project.id,
+				supervisorConfig.id,
+				project.folder,
+				supervisorConfig.homeFolder || "/",
+				`[Completed ${actTotalToolCalls} tool calls, created ${totalFilesCreated} file(s)]`,
+				actLoopExitReason,
+				iterationCount,
+				actLoopStartTime,
+			)
+		}
+	}
+	// Society Agent end
+	
 	// Society Agent start - activity log: loop finished
 	agentActivityLogger.logLoopExit(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", actLoopExitReason as any, iterationCount, actTotalToolCalls, actLoopStartTime)
 	// Society Agent end

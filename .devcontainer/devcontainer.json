@@ -5,7 +5,7 @@
 
   // Bind port 4000 at the Docker level so the browser can reach it directly
   // on http://localhost:4000 even when VS Code is disconnected (no SSH tunnel needed).
-  "runArgs": ["--publish", "4000:4000"],
+  "runArgs": ["--publish", "4001:4000"],
   
   // Run setup script which installs system dependencies + npm packages
   "postCreateCommand": "chmod +x .devcontainer/setup.sh && .devcontainer/setup.sh",
@@ -18,7 +18,8 @@
     "ghcr.io/devcontainers/features/common-utils:2": {},
     "ghcr.io/devcontainers/features/git:1": {}
   },
-  
+  "workspaceFolder": "/workspaces/society-agent",
+"workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/society-agent,type=bind",
   "customizations": {
     "vscode": {
       "extensions": [

@@ -6,7 +6,8 @@
       "command": "npx",
       "args": [
         "-y",
-        "@anthropic/mcp-playwright"
+        "@playwright/mcp",
+        "--no-sandbox"
       ],
       "description": "Browser automation - navigate, click, screenshot, fill forms",
       "enabled": true
