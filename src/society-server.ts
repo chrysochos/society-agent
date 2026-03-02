@@ -4345,6 +4345,12 @@ async function executeAgentTool(
 	
 	// Also keep agentFolder for tools that need it (like memory files)
 	const agentFolder = projectStore.agentHomeDir(project.id, agentConfig.id)
+	
+	// Society Agent - Defensive check for undefined paths
+	if (!workingFolder || !agentFolder) {
+		log.error(`[executeAgentTool] Path undefined - workingFolder=${workingFolder}, agentFolder=${agentFolder}, project.id=${project.id}, agent.id=${agentConfig.id}`)
+		return { result: `❌ Internal error: Could not resolve agent working directory`, filesCreated: 0 }
+	}
 
 	// Ensure directories exist
 	if (!fs.existsSync(workingFolder)) {
@@ -5597,9 +5603,27 @@ If you don't know, say so. Be concise.`,
 				return { result: rateCheck.message!, filesCreated: 0 }
 			}
 			
+			// Society Agent - Redirect Playwright screenshot/snapshot filenames to agent's folder
+			let adjustedParams = params || {}
+			if (server_name === "playwright" && (tool_name === "browser_take_screenshot" || tool_name === "browser_snapshot")) {
+				const screenshotDir = path.join(agentFolder, "screenshots")
+				if (!fs.existsSync(screenshotDir)) {
+					fs.mkdirSync(screenshotDir, { recursive: true })
+				}
+				if (adjustedParams.filename) {
+					// Redirect provided filename to agent's screenshots folder
+					adjustedParams = { ...adjustedParams, filename: path.join(screenshotDir, path.basename(adjustedParams.filename)) }
+				} else {
+					// Provide default filename in agent's folder
+					const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
+					adjustedParams = { ...adjustedParams, filename: path.join(screenshotDir, `${tool_name}-${timestamp}.png`) }
+				}
+				log.info(`[MCP] Screenshot path: ${adjustedParams.filename}`)
+			}
+			
 			try {
 				const mcpManager = getMcpManager()
-				const result = await mcpManager.useMcp(server_name, tool_name, params || {}, project.id)
+				const result = await mcpManager.useMcp(server_name, tool_name, adjustedParams, project.id)
 				resetMcpErrors(agentConfig.id, server_name) // Success - reset error count
 				return { result, filesCreated: 0 }
 			} catch (err: any) {
@@ -8208,6 +8232,11 @@ async function runEphemeralWorker(
 	
 	log.info(`[Worker ${workerName}] Starting execution loop`)
 	
+	// Activity logging setup
+	const workerHomeFolder = workerConfig.homeFolder || "/"
+	const workerStartTime = Date.now()
+	let totalToolCalls = 0
+	
 	// Emit worker started event
 	io.emit("worker-started", {
 		projectId: project.id,
@@ -8242,6 +8271,9 @@ async function runEphemeralWorker(
 		throw new Error("No API key configured for worker")
 	}
 	
+	// Log worker start (after model is determined)
+	agentActivityLogger.logAgentStart(project.id, workerId, project.folder, workerHomeFolder, "task_claim", model)
+	
 	// Build worker system prompt
 	const systemPrompt = workerConfig.systemPrompt || `You are an ephemeral worker agent.
 Your job is to:
@@ -8262,9 +8294,11 @@ You will self-destruct after completing or failing. Focus on your task.`
 	let hasWrittenFiles = false // Track if agent made any modifications
 	const READ_ONLY_TOOLS = new Set(["read_project_file", "list_project_files", "read_file", "list_dir", "get_team_info"])
 	let consecutiveReadOnlyStops = 0 // Track consecutive stops after only reading
+	let actualIterations = 0 // Track actual iterations for activity logging
 	
 	for (let iteration = 0; iteration < MAX_ITERATIONS && !taskCompleted; iteration++) {
-		log.info(`[Worker ${workerName}] Iteration ${iteration + 1}`)
+		actualIterations = iteration + 1
+		log.info(`[Worker ${workerName}] Iteration ${actualIterations}`)
 		
 		// Emit progress
 		io.emit("worker-progress", {
@@ -8364,6 +8398,10 @@ You will self-destruct after completing or failing. Focus on your task.`
 				const toolName = tcAny.function?.name || tcAny.name
 				const toolInput = safeParseToolArgs(tcAny.function?.arguments || tcAny.arguments)
 				
+				// Activity logging: log tool call
+				agentActivityLogger.logToolCall(project.id, workerId, project.folder, workerHomeFolder, toolName, toolInput, iteration, totalToolCalls)
+				const toolStartTime = Date.now()
+				
 				// Emit tool execution start
 				io.emit("tool-execution", {
 					agentId: workerId,
@@ -8383,6 +8421,10 @@ You will self-destruct after completing or failing. Focus on your task.`
 					io,
 					apiKey,
 				)
+				
+				// Activity logging: log tool result
+				agentActivityLogger.logToolResult(project.id, workerId, project.folder, workerHomeFolder, toolName, result, !result.startsWith("❌"), iteration, totalToolCalls, toolStartTime)
+				totalToolCalls++
 				
 				// Track if agent is making changes (not just reading)
 				if (filesCreated > 0 || !READ_ONLY_TOOLS.has(toolName)) {
@@ -8485,6 +8527,10 @@ You will self-destruct after completing or failing. Focus on your task.`
 				const toolName = toolBlock.name
 				const toolInput = toolBlock.input as Record<string, any>
 				
+				// Activity logging: log tool call
+				agentActivityLogger.logToolCall(project.id, workerId, project.folder, workerHomeFolder, toolName, toolInput, iteration, totalToolCalls)
+				const toolStartTime = Date.now()
+				
 				// Emit tool execution start
 				io.emit("tool-execution", {
 					agentId: workerId,
@@ -8504,6 +8550,10 @@ You will self-destruct after completing or failing. Focus on your task.`
 					io,
 					apiKey,
 				)
+				
+				// Activity logging: log tool result
+				agentActivityLogger.logToolResult(project.id, workerId, project.folder, workerHomeFolder, toolName, result, !result.startsWith("❌"), iteration, totalToolCalls, toolStartTime)
+				totalToolCalls++
 				
 				// Track if agent is making changes (not just reading)
 				if (filesCreated > 0 || !READ_ONLY_TOOLS.has(toolName)) {
@@ -8573,6 +8623,10 @@ You will self-destruct after completing or failing. Focus on your task.`
 			}
 		}
 	}
+	
+	// Activity logging: log loop exit
+	const exitReason = taskCompleted ? "end_turn" : "max_iterations"
+	agentActivityLogger.logLoopExit(project.id, workerId, project.folder, workerHomeFolder, exitReason, actualIterations, totalToolCalls, workerStartTime, taskCompleted ? "Task completed" : "Worker loop ended")
 	
 	// Emit worker finished
 	io.emit("worker-finished", {

@@ -309,8 +309,25 @@ class McpClientManager extends EventEmitter {
 				return `- **${tool.name}**${params ? `(${params})` : ""}: ${tool.description || "(no description)"}`
 			})
 			
-			return `🔧 **Tools from "${serverName}":**\n\n${lines.join("\n")}\n\n` +
-				`Use \`use_mcp("${serverName}", "tool_name", { param: value })\` to call.`
+			// Add Playwright-specific usage guidance
+			let guidance = `Use \`use_mcp("${serverName}", "tool_name", { param: value })\` to call.`
+			if (serverName === "playwright") {
+				guidance = `**Playwright Usage:**
+1. First call \`browser_navigate({ url: "..." })\` to open a page
+2. Call \`browser_snapshot()\` to get element refs (e.g., ref="e7")
+3. Use refs for actions: \`browser_click({ ref: "e7" })\`
+
+⚠️ **Important:** Don't use CSS selectors - use \`ref\` values from snapshot!
+
+Example:
+\`\`\`
+use_mcp("playwright", "browser_navigate", { url: "http://localhost:5173" })
+use_mcp("playwright", "browser_snapshot", {})  // Get refs
+use_mcp("playwright", "browser_click", { ref: "e7" })  // Click using ref
+\`\`\``
+			}
+			
+			return `🔧 **Tools from "${serverName}":**\n\n${lines.join("\n")}\n\n` + guidance
 		} catch (err: any) {
 			return `❌ Failed to list tools for "${serverName}": ${err.message}`
 		}
