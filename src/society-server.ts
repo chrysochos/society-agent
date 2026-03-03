@@ -340,6 +340,25 @@ Update these files when you:
 
 This is YOUR memory - if you don't write it down, you'll forget it next session!
 
+### 🐛 ERRORS.md - LEARN FROM MISTAKES
+**Tool errors are automatically logged to ERRORS.md in your project folder for learning.**
+
+When you encounter a tool error:
+1. The system automatically records it to ERRORS.md under that tool's section
+2. Check ERRORS.md if you keep hitting the same error - there may be a solution recorded
+3. **When you solve an error, UPDATE the Solution field in ERRORS.md!**
+
+The file is organized by tool name:
+\`\`\`markdown
+## run_command
+**Solution:** Use subshell for background processes: (cd /path && npm start) &
+
+### Occurrences
+- 2026-03-02 20:25:35 | Args: "cd foo && npm..." | Error: No such file or directory
+\`\`\`
+
+**Your job:** When you solve a recurring error, write the solution so future sessions benefit!
+
 ### � File Location Rules - CRITICAL
 **You are a persistent agent. By design, you ONLY write files in YOUR project folder.**
 
@@ -437,7 +456,36 @@ Each object type (backend code, frontend code, types, configs, tests) has ONE ca
 ✅ Check if binary exists: \`which npm\`, \`ls node_modules/.bin/\`
 ✅ Report the ACTUAL error message to the user
 
-### 🔄 Re-Verify After Fixes
+### � Directory Verification - CHECK BEFORE cd
+**Always verify directories exist before changing into them.**
+
+- \`ls -la\` to see what folders actually exist
+- Directory names are case-sensitive
+- Don't assume naming conventions - CHECK
+
+❌ NEVER cd into a directory you haven't verified exists
+❌ NEVER guess directory names like "backend-specialist" - LIST and CHECK
+✅ \`ls -la\` first to see actual subdirectories
+✅ Use tab-completion mentally: if "back<TAB>" what would complete?
+
+### 🐚 Shell Syntax - Background Processes
+**Correct syntax for background commands with environment variables:**
+
+\`\`\`bash
+# WRONG - env var doesn't apply to cd
+PORT=3001 cd /path && npm run dev &
+
+# CORRECT - subshell with env var
+(cd /path && PORT=3001 npm run dev) &
+
+# CORRECT - env var in subshell (alternative)
+(cd /path && export PORT=3001 && npm run dev) &
+
+# For running and verifying:
+(cd /path && npm run dev &) && sleep 2 && curl localhost:3001
+\`\`\`
+
+### �🔄 Re-Verify After Fixes
 **After fixing an error, you MUST re-run the verification command.**
 
 - Fixed TypeScript errors? Run \`tsc --noEmit\` again and show the output
@@ -664,6 +712,8 @@ function extractCleanPreview(result: string, maxLines = 2): { preview: string; l
 
 	// Strip markdown formatting to get actual content
 	let content = result
+	// Remove ANSI escape codes (terminal colors like \x1b[32m, \x1b[39m, etc.)
+	content = content.replace(/\x1b\[[0-9;]*m/g, '')
 	// Remove markdown headers like "📄 **filename**:"
 	content = content.replace(/^[📄📝✅❌🔍🔎📁💻📨💬🎯✏️📖][^\n]*\*\*[^*]+\*\*:?\s*\n?/gm, '')
 	// Remove code block markers
@@ -6576,19 +6626,27 @@ You report to ${parentName}.`),
 				agent_id, 
 				task, 
 				desired_state, 
-				acceptance_criteria, 
-				constraints, 
+				acceptance_criteria: rawCriteria, 
+				constraints: rawConstraints, 
 				context, 
 				priority 
 			} = toolInput as { 
 				agent_id: string
 				task: string
 				desired_state?: string
-				acceptance_criteria?: string[]
-				constraints?: string[]
+				acceptance_criteria?: string[] | string
+				constraints?: string[] | string
 				context?: string
 				priority?: string
 			}
+			
+			// Normalize arrays - models sometimes send strings instead
+			const acceptance_criteria = Array.isArray(rawCriteria) ? rawCriteria 
+				: typeof rawCriteria === 'string' ? rawCriteria.split('\n').map(s => s.trim()).filter(Boolean)
+				: undefined
+			const constraints = Array.isArray(rawConstraints) ? rawConstraints
+				: typeof rawConstraints === 'string' ? rawConstraints.split('\n').map(s => s.trim()).filter(Boolean)
+				: undefined
 			
 			// Debug: log what we have
 			log.info(`[delegate_task] project.id=${project?.id}, agent_id=${agent_id}`)
@@ -7546,6 +7604,10 @@ async function handleSupervisorChat(
 				)
 				const toolDuration = Date.now() - toolStartTime
 				agentActivityLogger.logToolResult(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", toolName, result, !result.startsWith("❌"), iteration, actCallIndex++, toolStartTime)
+				// Record error to ERRORS.md for learning
+				if (result.startsWith("❌")) {
+					agentActivityLogger.recordToolError(project.folder, supervisorConfig.homeFolder || "/", toolName, toolInput, result)
+				}
 				actTotalToolCalls++
 				totalFilesCreated += filesCreated
 				// Society Agent - Track write/execute counts for fake-impl and premature-success guards
@@ -8015,6 +8077,10 @@ async function handleSupervisorChat(
 			)
 			const toolDuration = Date.now() - toolStartTime
 			agentActivityLogger.logToolResult(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", toolBlock.name, result, !result.startsWith("❌"), iteration, actCallIndex++, toolStartTime)
+			// Record error to ERRORS.md for learning
+			if (result.startsWith("❌")) {
+				agentActivityLogger.recordToolError(project.folder, supervisorConfig.homeFolder || "/", toolBlock.name, toolBlock.input as Record<string, unknown>, result)
+			}
 			actTotalToolCalls++
 			// Society Agent - Track write/execute counts for fake-impl and premature-success guards
 			if ((toolBlock.name === "write_file" || toolBlock.name === "patch_file") && !result.startsWith("❌") && !result.startsWith("⚠️")) writeActionsCount++
@@ -8424,6 +8490,10 @@ You will self-destruct after completing or failing. Focus on your task.`
 				
 				// Activity logging: log tool result
 				agentActivityLogger.logToolResult(project.id, workerId, project.folder, workerHomeFolder, toolName, result, !result.startsWith("❌"), iteration, totalToolCalls, toolStartTime)
+				// Record error to ERRORS.md for learning
+				if (result.startsWith("❌")) {
+					agentActivityLogger.recordToolError(project.folder, workerHomeFolder, toolName, toolInput, result)
+				}
 				totalToolCalls++
 				
 				// Track if agent is making changes (not just reading)
@@ -8553,6 +8623,10 @@ You will self-destruct after completing or failing. Focus on your task.`
 				
 				// Activity logging: log tool result
 				agentActivityLogger.logToolResult(project.id, workerId, project.folder, workerHomeFolder, toolName, result, !result.startsWith("❌"), iteration, totalToolCalls, toolStartTime)
+				// Record error to ERRORS.md for learning
+				if (result.startsWith("❌")) {
+					agentActivityLogger.recordToolError(project.folder, workerHomeFolder, toolName, toolInput, result)
+				}
 				totalToolCalls++
 				
 				// Track if agent is making changes (not just reading)

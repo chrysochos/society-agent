@@ -5,10 +5,13 @@
 
 set -e
 
-echo "� Configuring git safe directory..."
+echo "🔧 Installing network utilities..."
+apt-get update && apt-get install -y lsof iproute2
+
+echo "🔧 Configuring git safe directory..."
 git config --global --add safe.directory /home/john/projects/society-agent
 
-echo "�📦 Installing npm dependencies..."
+echo "📦 Installing npm dependencies..."
 npm install
 
 echo "🎭 Ensuring Playwright browsers are installed..."

@@ -121,19 +121,21 @@
   .tab-content.active { display: flex; }
 
   /* Chat */
-  .messages { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
-  .message { max-width: 80%; min-width: 40px; padding: 10px 14px; border-radius: 12px; font-size: 14px;
-    line-height: 1.5; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; }
-  .message.user { background: #1f6feb; border-bottom-right-radius: 4px; }
+  .messages { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+  .message { max-width: 75%; min-width: 40px; padding: 14px 18px; border-radius: 16px; font-size: 15px;
+    line-height: 1.65; white-space: normal; overflow-wrap: break-word; word-wrap: break-word; }
+  .message.user { background: #1f6feb; border-bottom-right-radius: 4px; align-self: flex-end; }
   .message.assistant { background: var(--surface); border: 1px solid var(--border);
-    border-bottom-left-radius: 4px; }
-  .message.system { align-self: center; color: var(--muted); font-size: 12px; font-style: italic; }
-  .message.assistant .sender { font-size: 11px; color: var(--accent); margin-bottom: 4px; font-weight: 500; }
+    border-bottom-left-radius: 4px; align-self: flex-start; }
+  .message.system { align-self: center; color: var(--muted); font-size: 12px; font-style: italic; max-width: 90%; }
+  .message.assistant .sender { font-size: 11px; color: var(--accent); margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
   .message .content { display: block; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; }
-  .message code { background: rgba(110,118,129,0.2); padding: 1px 5px; border-radius: 3px; font-size: 13px; }
-  .message pre { background: var(--bg); padding: 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; position: relative; }
+  .message .content p { margin: 0 0 12px 0; }
+  .message .content p:last-child { margin-bottom: 0; }
+  .message code { background: rgba(110,118,129,0.25); padding: 2px 6px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono', 'Cascadia Code', monospace; }
+  .message pre { background: var(--bg); padding: 12px 14px; border-radius: 8px; overflow-x: auto; margin: 10px 0; position: relative; }
   .message pre code { background: none; padding: 0; }
-  .message pre .code-copy-btn { position: absolute; top: 6px; right: 6px; padding: 4px 8px; font-size: 11px;
+  .message pre .code-copy-btn { position: absolute; top: 8px; right: 8px; padding: 4px 10px; font-size: 11px;
     background: var(--surface); border: 1px solid var(--border); border-radius: 4px; color: var(--muted);
     cursor: pointer; opacity: 0; transition: opacity 0.2s; }
   .message pre:hover .code-copy-btn { opacity: 1; }
@@ -166,36 +168,25 @@
   .typing::after { content: '...'; animation: dots 1.5s steps(3) infinite; }
   @keyframes dots { 0% { content: '.'; } 33% { content: '..'; } 66% { content: '...'; } }
 
-  /* Tool Cards */
-  .tool-card { align-self: flex-start; max-width: 85%; background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; font-size: 13px; margin: 4px 0; transition: border-color 0.2s; }
-  .tool-card:hover { border-color: var(--accent); }
-  .tool-card.error { border-color: var(--red); border-width: 2px; }
-  .tool-card-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; 
-    background: rgba(88,166,255,0.05); border-bottom: 1px solid var(--border); cursor: pointer; }
-  .tool-card.error .tool-card-header { background: rgba(248,81,73,0.15); }
-  .tool-card.error .tool-card-title { color: var(--red); }
-  .tool-card.error .tool-card-preview { color: var(--red); max-height: none; font-weight: 500; }
-  .tool-card-icon { font-size: 16px; flex-shrink: 0; }
-  .tool-card-title { font-weight: 600; color: var(--text); }
-  .tool-card-detail { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; flex: 1; }
-  .tool-card-meta { font-size: 10px; color: var(--muted); white-space: nowrap; }
-  .tool-card-chevron { color: var(--muted); font-size: 12px; transition: transform 0.2s; margin-left: 4px; }
-  .tool-card.expanded .tool-card-chevron { transform: rotate(90deg); }
-  .tool-card-preview { padding: 8px 12px; font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 12px;
-    color: var(--muted); white-space: pre-wrap; word-break: break-word; line-height: 1.4;
-    max-height: 52px; overflow: hidden; }
-  .tool-card-body { display: none; padding: 10px 12px; background: var(--bg); max-height: 300px; overflow: auto;
-  /* Error cards get taller body without height cap */
-
-    font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; line-height: 1.5;
-    border-top: 1px solid var(--border); }
-  .tool-card.expanded .tool-card-body { display: block; }
-  .tool-card.error.expanded .tool-card-body { max-height: none; overflow: visible; }
-  .tool-card-actions { display: flex; gap: 6px; padding: 8px 12px; background: rgba(88,166,255,0.08); border-top: 1px solid var(--border); }
-  .tool-card-actions button { padding: 5px 12px; font-size: 12px; background: var(--surface); border: 1px solid var(--border);
-    border-radius: 5px; color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
-  .tool-card-actions button:hover { border-color: var(--accent); background: rgba(88,166,255,0.15); }
+  /* Tool Cards - Minimal inline style */
+  .tool-card { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 12px; font-size: 12px; margin: 4px 0; cursor: pointer;
+    transition: all 0.15s; max-width: 90%; }
+  .tool-card:hover { background: rgba(88,166,255,0.08); border-color: var(--accent); }
+  .tool-card.error { border-color: var(--red); background: rgba(248,81,73,0.08); }
+  .tool-card-icon { font-size: 14px; flex-shrink: 0; }
+  .tool-card-title { color: var(--muted); font-size: 11px; }
+  .tool-card-detail { color: var(--text); font-family: 'SF Mono', monospace; font-size: 11px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+  .tool-card-meta { font-size: 11px; color: var(--green); font-weight: 500; margin-left: auto; }
+  .tool-card.error .tool-card-meta { color: var(--red); }
+  .tool-card-chevron { display: none; }
+  .tool-card-preview { display: none; }
+  .tool-card-body { display: none; }
+  .tool-card-actions { display: none; }
+  /* Hidden elements shown in modal instead */
+  .tool-card-header { display: contents; }
 
   /* Thinking Blocks */
   .thinking-block { margin: 8px 0; border: 1px solid var(--border); border-radius: 8px; background: rgba(139,92,246,0.05); overflow: hidden; }
@@ -1155,6 +1146,51 @@ const TOOL_CONFIG = {
 };
 const INLINE_EXPAND_THRESHOLD = 8; // Lines - expand inline if <= this, else popup
 
+// Generate semantic summary for tool execution
+function getToolSummary(data) {
+  const { toolName, status, lineCount, durationMs, toolInput, result } = data;
+  const isError = status === 'error';
+  const icon = isError ? '❌' : '✅';
+  
+  if (isError) {
+    // Extract short error message
+    const errorMatch = result?.match(/Error:?\s*(.{1,50})/i);
+    return `${icon} ${errorMatch ? errorMatch[1] : 'Failed'}`;
+  }
+  
+  switch(toolName) {
+    case 'read_file':
+    case 'read_project_file':
+      return `${icon} Read ${lineCount || 0} lines`;
+    case 'write_file':
+      return `${icon} File written`;
+    case 'patch_file':
+      return `${icon} File updated`;
+    case 'list_files':
+      const fileCount = result?.split('\n').filter(l => l.trim()).length || 0;
+      return `${icon} Found ${fileCount} items`;
+    case 'find_files':
+    case 'search_files':
+      const matchCount = result?.split('\n').filter(l => l.trim()).length || 0;
+      return `${icon} ${matchCount} matches`;
+    case 'run_command':
+      const cmd = toolInput?.command?.split(' ')[0] || 'command';
+      return `${icon} ${cmd} completed`;
+    case 'ask_agent':
+    case 'send_message':
+      const agent = toolInput?.agent_id || 'agent';
+      return `${icon} Sent to ${agent}`;
+    case 'claim_task':
+      return `${icon} Task claimed`;
+    case 'complete_task':
+      return `${icon} Task completed`;
+    case 'fail_task':
+      return `${icon} Task failed`;
+    default:
+      return `${icon} Done${durationMs ? ` (${durationMs}ms)` : ''}`;
+  }
+}
+
 let pendingToolCards = new Map(); // Track tool cards by their ID for updates
 
 // Handle API-level thinking blocks (Claude extended thinking)
@@ -1221,7 +1257,6 @@ function addToolCard(data, insertBeforeEl) {
   const config = TOOL_CONFIG[data.toolName] || { icon: '🔧', title: data.toolName, detailKey: null };
   const detail = data.toolInput && config.detailKey ? data.toolInput[config.detailKey] : '';
   const isError = data.status === 'error';
-  const isLong = data.lineCount > INLINE_EXPAND_THRESHOLD;
   
   const cardId = `tool-card-${Date.now()}-${Math.random().toString(36).substr(2,9)}`;
   
@@ -1229,32 +1264,22 @@ function addToolCard(data, insertBeforeEl) {
   const cleanedResult = cleanToolResult(data.result);
   
   const card = document.createElement('div');
-  // Auto-expand error cards so users can see what went wrong
-  card.className = `tool-card${isError ? ' error expanded' : ''}`;
+  card.className = `tool-card${isError ? ' error' : ''}`;
   card.id = cardId;
-  card.dataset.result = cleanedResult; // Store cleaned version for copy
+  card.dataset.result = cleanedResult;
   card.dataset.toolName = data.toolName;
   card.dataset.detail = detail;
-  card.dataset.isLong = isLong;
+  card.onclick = () => openToolModal(cardId);
   
-  const durationText = data.durationMs ? `${data.durationMs}ms` : '';
-  const linesText = data.lineCount ? `${data.lineCount} lines` : '';
+  const summaryText = getToolSummary(data);
+  // Shorten detail for inline display
+  const shortDetail = detail.length > 40 ? '...' + detail.slice(-35) : detail;
   
   card.innerHTML = `
-    <div class="tool-card-header" onclick="toggleToolCard('${cardId}')">
-      <span class="tool-card-icon">${config.icon}</span>
-      <span class="tool-card-title">${config.title}</span>
-      <span class="tool-card-detail" title="${esc(detail)}">${esc(truncate(detail, 120))}</span>
-      <span class="tool-card-meta">${linesText} ${durationText}</span>
-      <span class="tool-card-chevron">&gt;</span>
-    </div>
-    <div class="tool-card-preview">${esc(data.preview || cleanedResult.substring(0, 100))}</div>
-    ${(!isLong || isError) ? `<div class="tool-card-body">${esc(cleanedResult)}</div>` : ''}
-    <div class="tool-card-actions">
-      <button onclick="copyToolResult('${cardId}')">Copy Result</button>
-      ${isLong && !isError ? `<button onclick="openToolModal('${cardId}')">View Full Output</button>` : ''}
-      ${isLong && isError ? `<button onclick="openToolModal('${cardId}')">Open in Modal</button>` : ''}
-    </div>
+    <span class="tool-card-icon">${config.icon}</span>
+    <span class="tool-card-title">${config.title}</span>
+    <span class="tool-card-detail" title="${esc(detail)}">${esc(shortDetail)}</span>
+    <span class="tool-card-meta">${summaryText}</span>
   `;
   
   // Insert before current streaming element (inline with conversation) or append at end
@@ -1335,6 +1360,9 @@ function truncate(str, len) {
 function cleanToolResult(result) {
   if (!result) return '';
   let content = result;
+  // Remove ANSI escape codes (terminal colors like [32m, [39m, etc.)
+  content = content.replace(/\x1b\[[0-9;]*m/g, '');
+  content = content.replace(/\[([0-9;]*)m/g, ''); // Also handle when \x1b is already stripped
   // Remove markdown headers like "📄 **filename**:"
   content = content.replace(/^[📄📝✅❌🔍🔎📁💻📨💬🎯✏️📖][^\n]*\*\*[^*]+\*\*:?\s*\n?/gm, '');
   // Remove code block markers
@@ -3893,7 +3921,14 @@ function formatMarkdown(text) {
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  
+  // Convert double newlines to paragraph breaks for cleaner reading
+  html = html.replace(/\n\n+/g, '</p><p>');
   html = html.replace(/\n/g, '<br>');
+  html = '<p>' + html + '</p>';
+  // Clean up empty paragraphs
+  html = html.replace(/<p>\s*<\/p>/g, '');
+  html = html.replace(/<p><br>/g, '<p>');
   
   // Restore code blocks with copy button
   codeBlocks.forEach((block, i) => {
