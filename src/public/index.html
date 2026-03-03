@@ -2809,7 +2809,8 @@ function addMessage(role, content, sender) {
   const el = document.createElement('div');
   el.className = `message ${role}`;
   if (role === 'assistant') {
-    el.innerHTML = `<div class="sender">${sender || 'Agent'}</div><div class="content">${formatMarkdown(content)}</div>`;
+    // Escape sender to prevent XSS (CodeQL js/xss-through-dom)
+    el.innerHTML = `<div class="sender">${escapeHtml(sender || 'Agent')}</div><div class="content">${formatMarkdown(content)}</div>`;
   } else {
     el.innerHTML = `<div class="content">${escapeHtml(content)}</div>`;
   }

@@ -19,6 +19,7 @@ import * as path from "path"
 import { execSync, spawn } from "child_process"
 import * as crypto from "crypto"
 import { getLog } from "./logger"
+import { sanitizeGitRef, escapeShellArg, sanitizeCommitMessage, sanitizeFilename } from "./security-utils"
 
 const log = getLog()
 
@@ -295,6 +296,15 @@ export class GitLoader {
 	}
 
 	/**
+	 * Get the validated repository directory for a project.
+	 * Sanitizes projectId to prevent path traversal (CodeQL js/path-injection)
+	 */
+	private getRepoDir(projectId: string): string {
+		const safeProjectId = sanitizeFilename(projectId)
+		return path.join(this.projectsDir, safeProjectId)
+	}
+
+	/**
 	 * Clone a repository to a workspace
 	 */
 	async cloneRepo(
@@ -303,7 +313,7 @@ export class GitLoader {
 		ref: string = "main",
 		credentialId?: string
 	): Promise<GitResult> {
-		const repoDir = path.join(this.projectsDir, projectId)
+		const repoDir = this.getRepoDir(projectId)
 		
 		// Check if already exists
 		if (fs.existsSync(repoDir)) {
@@ -377,7 +387,7 @@ export class GitLoader {
 		projectId: string,
 		credentialId?: string
 	): Promise<GitResult> {
-		const repoDir = path.join(this.projectsDir, projectId)
+		const repoDir = this.getRepoDir(projectId)
 		
 		if (!fs.existsSync(path.join(repoDir, ".git"))) {
 			return {
@@ -447,7 +457,7 @@ export class GitLoader {
 		ref: string,
 		credentialId?: string
 	): Promise<GitResult> {
-		const repoDir = path.join(this.projectsDir, projectId)
+		const repoDir = this.getRepoDir(projectId)
 		
 		if (!fs.existsSync(path.join(repoDir, ".git"))) {
 			return {
@@ -513,7 +523,7 @@ export class GitLoader {
 		behind?: number
 		changedFiles?: string[]
 	} {
-		const repoDir = path.join(this.projectsDir, projectId)
+		const repoDir = this.getRepoDir(projectId)
 		
 		if (!fs.existsSync(path.join(repoDir, ".git"))) {
 			return { isGitRepo: false }
@@ -571,7 +581,7 @@ export class GitLoader {
 		commitMessage: string,
 		credentialId?: string
 	): Promise<GitResult> {
-		const repoDir = path.join(this.projectsDir, projectId)
+		const repoDir = this.getRepoDir(projectId)
 		
 		if (!fs.existsSync(path.join(repoDir, ".git"))) {
 			return {
@@ -596,8 +606,9 @@ export class GitLoader {
 				}
 			}
 			
-			// Create and checkout branch
-			execSync(`git checkout -b "${branchName}"`, {
+			// Create and checkout branch (sanitize branch name for shell safety)
+			const safeBranch = sanitizeGitRef(branchName)
+			execSync(`git checkout -b ${escapeShellArg(safeBranch)}`, {
 				cwd: repoDir,
 				encoding: "utf-8",
 			})
@@ -608,8 +619,9 @@ export class GitLoader {
 				encoding: "utf-8",
 			})
 			
-			// Commit
-			execSync(`git commit -m "${commitMessage.replace(/"/g, '\\"')}"`, {
+			// Commit (use -m with escaped message for shell safety)
+			const safeMessage = sanitizeCommitMessage(commitMessage)
+			execSync(`git commit -m ${escapeShellArg(safeMessage)}`, {
 				cwd: repoDir,
 				env: {
 					...env,
@@ -622,7 +634,7 @@ export class GitLoader {
 			})
 			
 			// Push
-			execSync(`git push -u origin "${branchName}"`, {
+			execSync(`git push -u origin ${escapeShellArg(safeBranch)}`, {
 				cwd: repoDir,
 				env,
 				stdio: "pipe",
@@ -646,7 +658,7 @@ export class GitLoader {
 	 * Get list of branches for a project
 	 */
 	listBranches(projectId: string): { local: string[]; remote: string[] } {
-		const repoDir = path.join(this.projectsDir, projectId)
+		const repoDir = this.getRepoDir(projectId)
 		
 		if (!fs.existsSync(path.join(repoDir, ".git"))) {
 			return { local: [], remote: [] }
@@ -681,7 +693,7 @@ export class GitLoader {
 	 * Generate a diff/patch of local changes
 	 */
 	getDiff(projectId: string): string | null {
-		const repoDir = path.join(this.projectsDir, projectId)
+		const repoDir = this.getRepoDir(projectId)
 		
 		if (!fs.existsSync(path.join(repoDir, ".git"))) {
 			return null
@@ -716,14 +728,15 @@ export class GitLoader {
 		currentBranch: string | null
 		error?: string
 	} {
-		const repoDir = path.join(this.projectsDir, projectId)
+		const repoDir = this.getRepoDir(projectId)
 		
 		if (!fs.existsSync(path.join(repoDir, ".git"))) {
 			return { commits: [], currentBranch: null, error: "Not a git repository" }
 		}
 		
 		const limit = options?.limit || 50
-		const branch = options?.branch || ""
+		// Sanitize branch to prevent command injection (CodeQL js/command-line-injection)
+		const branch = options?.branch ? sanitizeGitRef(options.branch) : ""
 		
 		try {
 			// Get current branch
@@ -738,7 +751,10 @@ export class GitLoader {
 			// Get log with custom format
 			// Format: hash|shortHash|author|email|date|refs|subject
 			const format = "%H|%h|%an|%ae|%aI|%D|%s"
-			const logCmd = `git log ${branch} --format="${format}" -n ${limit}`
+			// Use escapeShellArg for safe shell interpolation (CodeQL js/command-line-injection)
+			const logCmd = branch 
+				? `git log ${escapeShellArg(branch)} --format="${format}" -n ${limit}`
+				: `git log --format="${format}" -n ${limit}`
 			const logOutput = execSync(logCmd, {
 				cwd: repoDir,
 				encoding: "utf-8",
@@ -906,7 +922,7 @@ export class GitLoader {
 			branch?: string
 		} = {}
 	): Promise<GitResult> {
-		const repoDir = path.join(this.projectsDir, projectId)
+		const repoDir = this.getRepoDir(projectId)
 		
 		if (!fs.existsSync(repoDir)) {
 			return { success: false, message: `Project folder not found: ${repoDir}` }
@@ -975,8 +991,9 @@ node_modules/
 			const status = execSync("git status --porcelain", { cwd: repoDir, encoding: "utf-8" }).trim()
 			
 			if (status || !isGitRepo) {
-				// Commit
-				execSync(`git commit -m "${commitMessage.replace(/"/g, '\\"')}" --allow-empty`, {
+				// Commit (use escaped message for shell safety)
+				const safeMsg = sanitizeCommitMessage(commitMessage)
+				execSync(`git commit -m ${escapeShellArg(safeMsg)} --allow-empty`, {
 					cwd: repoDir,
 					env: {
 						...env,
@@ -997,7 +1014,8 @@ node_modules/
 
 			if (currentBranch !== branch && currentBranch === "master") {
 				// Rename master to main (or specified branch)
-				execSync(`git branch -M ${branch}`, { cwd: repoDir, encoding: "utf-8" })
+				const safeBranchName = sanitizeGitRef(branch)
+				execSync(`git branch -M ${escapeShellArg(safeBranchName)}`, { cwd: repoDir, encoding: "utf-8" })
 			}
 
 			// Check if remote already exists

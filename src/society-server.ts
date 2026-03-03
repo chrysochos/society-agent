@@ -70,6 +70,9 @@ import { DiagnosticsWatcher } from "./diagnostics-watcher"
 // Society Agent start - per-agent activity logger
 import { AgentActivityLogger } from "./agent-activity-logger"
 // Society Agent end
+// Society Agent start - security utilities
+import { safeObjectEntries, sanitizeGitRef, validatePath } from "./security-utils"
+// Society Agent end
 
 const app = express()
 const server = http.createServer(app)
@@ -1282,7 +1285,8 @@ app.get("/api/mcps", (req, res): void => {
 		}
 		const content = fs.readFileSync(configPath, "utf-8")
 		const config = JSON.parse(content)
-		const mcps = Object.entries(config.servers || {}).map(([name, cfg]: [string, any]) => ({
+		// Use safeObjectEntries to prevent prototype pollution (CodeQL js/prototype-polluting-assignment)
+		const mcps = safeObjectEntries(config.servers).map(([name, cfg]: [string, any]) => ({
 			name,
 			description: cfg.description || "(no description)",
 			command: cfg.command,
@@ -1385,7 +1389,8 @@ app.get("/api/project/:projectId/mcps", (req, res): void => {
 		}
 		const content = fs.readFileSync(configPath, "utf-8")
 		const config = JSON.parse(content)
-		const mcps = Object.entries(config.servers || {}).map(([name, cfg]: [string, any]) => ({
+		// Use safeObjectEntries to prevent prototype pollution (CodeQL js/prototype-polluting-assignment)
+		const mcps = safeObjectEntries(config.servers).map(([name, cfg]: [string, any]) => ({
 			name,
 			description: cfg.description || "(no description)",
 			command: cfg.command,
@@ -3774,15 +3779,36 @@ function agentWorkspaceDir(agentId: string): string {
 
 /**
  * Helper: security check — ensure resolved path is within agent's workspace
+ * Validates user-provided paths to prevent path traversal attacks.
+ * 
+ * @param agentDir - The allowed base directory (agent's workspace)
+ * @param relativePath - User-provided relative path
+ * @returns Object with validation result and full path if valid
+ * 
+ * NOTE: CodeQL may flag uses of fullPath as js/path-injection, but this function
+ * ensures the path stays within agentDir boundaries. The validation is:
+ * 1. Resolves to absolute path
+ * 2. Checks that resolved path starts with agentDir + path separator
+ * 3. Returns validated path only if check passes
  */
 function securePath(agentDir: string, relativePath: string): { ok: boolean; fullPath: string; error?: string } {
+	// Validate inputs
+	if (!relativePath || typeof relativePath !== "string") {
+		return { ok: false, fullPath: "", error: "Invalid path: must be a non-empty string" }
+	}
+	
 	const fullPath = path.join(agentDir, relativePath)
 	const resolved = path.resolve(fullPath)
 	const dirResolved = path.resolve(agentDir)
-	if (!resolved.startsWith(dirResolved)) {
-		return { ok: false, fullPath, error: "Access denied: path outside agent workspace" }
+	
+	// lgtm[js/path-injection] - this IS the validation function
+	// Must check with path separator to prevent partial matches (e.g., /agent vs /agent-backup)
+	if (!resolved.startsWith(dirResolved + path.sep) && resolved !== dirResolved) {
+		return { ok: false, fullPath: resolved, error: "Access denied: path outside agent workspace" }
 	}
-	return { ok: true, fullPath }
+	
+	// Return the validated resolved path
+	return { ok: true, fullPath: resolved }
 }
 
 // Society Agent start - Unified agent tools (all agents have the same capabilities)

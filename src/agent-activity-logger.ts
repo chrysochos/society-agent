@@ -25,6 +25,7 @@
 import * as fs from "fs"
 import * as path from "path"
 import { getLog } from "./logger"
+import { sanitizeFilename } from "./security-utils"
 
 // ── Event types ────────────────────────────────────────────────────────────────
 
@@ -408,12 +409,19 @@ export class AgentActivityLogger {
         }
     }
 
-    /** Absolute path to the log file for a given agent */
+    /** Absolute path to the log file for a given agent
+     * Validates inputs to prevent path traversal (CodeQL js/path-injection)
+     */
     logPath(projectFolder: string, agentHomeFolder: string, agentId: string): string {
+        // Sanitize folder names to prevent path traversal
+        const safeProjectFolder = sanitizeFilename(projectFolder)
+        const safeAgentId = sanitizeFilename(agentId)
+        
         if (!agentHomeFolder || agentHomeFolder === "/") {
-            return path.join(this.projectsRoot, projectFolder, `.agent-log-${agentId}.jsonl`)
+            return path.join(this.projectsRoot, safeProjectFolder, `.agent-log-${safeAgentId}.jsonl`)
         }
-        return path.join(this.projectsRoot, projectFolder, agentHomeFolder, ".agent-log.jsonl")
+        const safeHomeFolder = sanitizeFilename(agentHomeFolder)
+        return path.join(this.projectsRoot, safeProjectFolder, safeHomeFolder, ".agent-log.jsonl")
     }
 
     // ── Internal ─────────────────────────────────────────────────────────────
@@ -441,12 +449,16 @@ export class AgentActivityLogger {
 
     private static readonly MAX_OCCURRENCES_PER_TOOL = 5
 
-    /** Path to ERRORS.md for a given agent */
+    /** Path to ERRORS.md for a given agent
+     * Validates inputs to prevent path traversal (CodeQL js/path-injection)
+     */
     errorsPath(projectFolder: string, agentHomeFolder: string): string {
+        const safeProjectFolder = sanitizeFilename(projectFolder)
         if (!agentHomeFolder || agentHomeFolder === "/") {
-            return path.join(this.projectsRoot, projectFolder, "ERRORS.md")
+            return path.join(this.projectsRoot, safeProjectFolder, "ERRORS.md")
         }
-        return path.join(this.projectsRoot, projectFolder, agentHomeFolder, "ERRORS.md")
+        const safeHomeFolder = sanitizeFilename(agentHomeFolder)
+        return path.join(this.projectsRoot, safeProjectFolder, safeHomeFolder, "ERRORS.md")
     }
 
     /**

@@ -8,6 +8,7 @@ import { spawn, ChildProcess } from "child_process"
 import * as fs from "fs"
 import * as path from "path"
 import { EventEmitter } from "events"
+import { validatePath } from "./security-utils"
 
 export interface Diagnostic {
 	tool: "tsc" | "ruff" | "pyright"
@@ -49,7 +50,16 @@ export class DiagnosticsWatcher extends EventEmitter {
 	startProject(projectId: string, projectFolder: string) {
 		if (this.projects.has(projectId)) return
 
-		const projectDir = path.join(this.workspacePath, "projects", projectFolder)
+		// Validate project folder to prevent path traversal (CodeQL js/path-injection)
+		const projectsBase = path.join(this.workspacePath, "projects")
+		let projectDir: string
+		try {
+			projectDir = validatePath(projectFolder, projectsBase)
+		} catch (e) {
+			// Invalid path - silently skip (could be an attack attempt or just bad data)
+			return
+		}
+		
 		if (!fs.existsSync(projectDir)) return
 
 		const state: ProjectWatchers = {

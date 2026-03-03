@@ -14,6 +14,7 @@
 import * as fs from "fs"
 import * as path from "path"
 import { getLog } from "./logger"
+import { sanitizeFilename } from "./security-utils"
 
 const log = getLog()
 
@@ -650,7 +651,9 @@ export class ProjectStore {
 		}
 
 		const now = new Date().toISOString()
-		const folder = input.folder || input.id
+		// Sanitize folder name to prevent path traversal (CodeQL js/path-injection)
+		const rawFolder = input.folder || input.id
+		const folder = sanitizeFilename(rawFolder)
 
 		// Create project folder
 		const dir = path.join(this.projectsBaseDir, folder)
@@ -978,7 +981,9 @@ When learning organically → add to KNOWLEDGE.md as playbook
 		return path.join(this.projectsBaseDir, folder)
 	}
 
-	/** Get the resolved home directory for an agent within a project */
+	/** Get the resolved home directory for an agent within a project
+	 * Sanitizes inputs to prevent path traversal (CodeQL js/path-injection)
+	 */
 	agentHomeDir(projectId: string, agentId: string): string {
 		// Defensive checks
 		if (!projectId) {
@@ -992,13 +997,15 @@ When learning organically → add to KNOWLEDGE.md as playbook
 		
 		const project = this.get(projectId)
 		const agent = project?.agents.find((a) => a.id === agentId)
-		const projectFolder = project?.folder || projectId
+		const projectFolder = sanitizeFilename(project?.folder || projectId)
 		const home = agent?.homeFolder || "/"
 
 		if (home === "/" || home === "") {
 			return path.join(this.projectsBaseDir, projectFolder)
 		}
-		return path.join(this.projectsBaseDir, projectFolder, home)
+		// Sanitize homeFolder to prevent path traversal
+		const safeHome = sanitizeFilename(home)
+		return path.join(this.projectsBaseDir, projectFolder, safeHome)
 	}
 
 	// Society Agent start - Task pool methods

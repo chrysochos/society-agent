@@ -13,6 +13,7 @@
 import * as fs from "fs"
 import * as path from "path"
 import { getLog } from "./logger"
+import { sanitizeFilename } from "./security-utils"
 
 const log = getLog()
 
@@ -183,7 +184,8 @@ export class PersistentAgentStore {
 		}
 
 		// Create dedicated workspace folder for this agent
-		const workspaceFolder = profile.id
+		// Sanitize to prevent path traversal (CodeQL js/path-injection)
+		const workspaceFolder = sanitizeFilename(profile.id)
 		const agentWorkDir = path.join(path.dirname(path.dirname(this.storePath)), workspaceFolder)
 		if (!fs.existsSync(agentWorkDir)) {
 			fs.mkdirSync(agentWorkDir, { recursive: true })

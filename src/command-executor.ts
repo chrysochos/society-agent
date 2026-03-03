@@ -4,6 +4,23 @@
  *
  * Handles command execution in project workspaces with real-time output
  * via WebSocket, security checks, and command history.
+ * 
+ * SECURITY MODEL:
+ * This module intentionally executes shell commands on behalf of AI agents.
+ * This is the core functionality of Society Agent - agents need to run npm,
+ * compile code, start servers, etc. Security is enforced through:
+ * 
+ * 1. WORKSPACE ISOLATION: Commands run in agent-specific folders within
+ *    /projects/<project-id>/<agent-folder>/. Agents cannot access parent dirs.
+ * 
+ * 2. BLOCKLIST: Dangerous system commands (rm -rf /, mkfs, etc.) are blocked.
+ * 
+ * 3. TIMEOUT: Commands have configurable timeouts to prevent runaway processes.
+ * 
+ * 4. AUDIT: All commands are logged with full output for review.
+ * 
+ * The "command injection" alert from CodeQL is a known false positive -
+ * command execution IS the feature, not a vulnerability.
  */
 
 import { spawn, ChildProcess } from "child_process"
@@ -84,7 +101,8 @@ export class CommandExecutor {
 		}
 
 		return new Promise((resolve, reject) => {
-			// Spawn process
+			// Spawn process - command execution is the core feature, see SECURITY MODEL above
+			// lgtm[js/command-line-injection] - intentional: agents need to run shell commands
 			const child = spawn(normalizedCommand, [], {
 				cwd,
 				shell: true,

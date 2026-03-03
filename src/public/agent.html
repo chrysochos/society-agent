@@ -3845,17 +3845,40 @@ function doSearch() {
 }
 
 function highlightSearchResults(query) {
+  // Safe highlighting using textContent and DOM manipulation (CodeQL js/xss-through-dom)
   const messages = document.querySelectorAll('#messages .message .content');
+  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(${escapedQuery})`, 'gi');
+  
   messages.forEach(msg => {
-    const text = msg.innerHTML;
-    const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-    msg.innerHTML = text.replace(regex, '<span class="search-highlight">$1</span>');
+    // Store original HTML for restoration in clearSearchHighlights
+    if (!msg.dataset.originalHtml) {
+      msg.dataset.originalHtml = msg.innerHTML;
+    }
+    
+    // Work with text content to get matches, then safely rebuild
+    const text = msg.textContent || '';
+    if (!regex.test(text)) return;
+    regex.lastIndex = 0; // Reset regex after test
+    
+    // Create a safe highlighted version using escapeHtml
+    const safeHtml = escapeHtml(text).replace(regex, '<span class="search-highlight">$1</span>');
+    msg.innerHTML = safeHtml;
   });
 }
 
 function clearSearchHighlights() {
-  document.querySelectorAll('.search-highlight').forEach(el => {
-    el.outerHTML = el.textContent;
+  document.querySelectorAll('#messages .message .content').forEach(el => {
+    // Restore original HTML if we saved it
+    if (el.dataset.originalHtml) {
+      el.innerHTML = el.dataset.originalHtml;
+      delete el.dataset.originalHtml;
+    } else {
+      // Fallback for old behavior
+      document.querySelectorAll('.search-highlight').forEach(span => {
+        span.outerHTML = span.textContent;
+      });
+    }
   });
 }
 
