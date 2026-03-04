@@ -2870,8 +2870,8 @@ app.get("/api/projects", (req, res): void => {
 			...p,
 			agents: p.agents.map((a) => ({
 				...a,
-				isActive: activeAgents.has(a.id),
-				historyLength: activeAgents.get(a.id)?.getHistory().length || 0,
+				isActive: activeAgents.has(`${p.id}:${a.id}`),
+				historyLength: activeAgents.get(`${p.id}:${a.id}`)?.getHistory().length || 0,
 			})),
 		}))
 		res.json({ projects })
@@ -2894,8 +2894,8 @@ app.get("/api/projects/:id", (req, res): void => {
 			...project,
 			agents: project.agents.map((a) => ({
 				...a,
-				isActive: activeAgents.has(a.id),
-				historyLength: activeAgents.get(a.id)?.getHistory().length || 0,
+				isActive: activeAgents.has(`${req.params.id}:${a.id}`),
+				historyLength: activeAgents.get(`${req.params.id}:${a.id}`)?.getHistory().length || 0,
 			})),
 		})
 	} catch (error) {
@@ -3219,7 +3219,7 @@ app.delete("/api/projects/:id", (req, res): void => {
 	try {
 		const project = projectStore.get(req.params.id)
 		if (project) {
-			for (const a of project.agents) activeAgents.delete(a.id)
+			for (const a of project.agents) activeAgents.delete(`${req.params.id}:${a.id}`)
 			// Society Agent - stop diagnostics watchers
 			diagnosticsWatcher.stopProject(req.params.id)
 		}
@@ -3305,8 +3305,9 @@ app.put("/api/projects/:projectId/agents/:agentId", (req, res): void => {
 			res.status(404).json({ error: "Project or agent not found" })
 			return
 		}
-		if (activeAgents.has(req.params.agentId)) {
-			activeAgents.delete(req.params.agentId)
+		const cacheKey = `${req.params.projectId}:${req.params.agentId}`
+		if (activeAgents.has(cacheKey)) {
+			activeAgents.delete(cacheKey)
 		}
 		res.json(updated)
 	} catch (error) {
@@ -3319,7 +3320,7 @@ app.put("/api/projects/:projectId/agents/:agentId", (req, res): void => {
  */
 app.delete("/api/projects/:projectId/agents/:agentId", (req, res): void => {
 	try {
-		activeAgents.delete(req.params.agentId)
+		activeAgents.delete(`${req.params.projectId}:${req.params.agentId}`)
 		const removed = projectStore.removeAgent(req.params.projectId, req.params.agentId)
 		if (!removed) {
 			res.status(404).json({ error: "Project or agent not found" })
@@ -3342,7 +3343,7 @@ app.post("/api/projects/:projectId/agents/:agentId/reset", (req, res): void => {
 			res.status(404).json({ error: "Project or agent not found" })
 			return
 		}
-		activeAgents.delete(req.params.agentId)
+		activeAgents.delete(`${req.params.projectId}:${req.params.agentId}`)
 		projectStore.resetAgentMemory(req.params.projectId, req.params.agentId)
 		// Society Agent - notify open agent pages
 		io.emit("agent-reset", { agentId: req.params.agentId, projectId: req.params.projectId, timestamp: Date.now() })
@@ -8713,7 +8714,9 @@ function getOrCreateProjectAgent(
 	project: Project,
 	apiKey: string,
 ): ConversationAgent {
-	const existing = activeAgents.get(agentConfig.id)
+	// Bug fix: key must be project-scoped — two projects can have the same agent id (e.g. "supervisor")
+	const cacheKey = `${project.id}:${agentConfig.id}`
+	const existing = activeAgents.get(cacheKey)
 	if (existing) return existing
 
 	// Society Agent start - Defensive checks
@@ -8833,7 +8836,7 @@ This ensures files are automatically saved in your project folder. Do NOT just d
 		// Society Agent end
 	})
 
-	activeAgents.set(agentConfig.id, agent)
+	activeAgents.set(`${project.id}:${agentConfig.id}`, agent)
 	log.info(`Activated project agent: ${agentConfig.name} in ${project.name} (workspace: ${projectDir})`)
 	return agent
 }
