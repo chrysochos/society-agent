@@ -713,6 +713,58 @@ function stripAnsiCodes(text: string): string {
 	return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
 }
 
+// Society Agent - Estimate tokens for a messages array + system prompt
+const CONTEXT_HARD_LIMIT = 160000 // trim when estimated tokens exceed this (safe margin below 196608)
+const CONTEXT_TOOL_OVERHEAD = 6000 // tool definitions token cost
+
+function estimateMessagesTokens(systemPrompt: string, msgs: any[]): number {
+	let chars = systemPrompt.length
+	for (const m of msgs) {
+		if (typeof m.content === "string") {
+			chars += m.content.length
+		} else if (Array.isArray(m.content)) {
+			for (const part of m.content) {
+				if (part.text) chars += part.text.length
+				else if (part.content) chars += typeof part.content === "string" ? part.content.length : JSON.stringify(part.content).length
+				else chars += JSON.stringify(part).length
+			}
+		}
+	}
+	return Math.ceil(chars / 4) + CONTEXT_TOOL_OVERHEAD
+}
+
+// Trim old tool results in-place when approaching context limit
+function trimMessagesForContext(systemPrompt: string, msgs: any[]): number {
+	let estimated = estimateMessagesTokens(systemPrompt, msgs)
+	if (estimated <= CONTEXT_HARD_LIMIT) return 0
+
+	let trimCount = 0
+	// Work from oldest to newest, skipping first message (original task) and last 4 (recent context)
+	for (let i = 1; i < msgs.length - 4 && estimated > CONTEXT_HARD_LIMIT; i++) {
+		const msg = msgs[i]
+		if (msg.role === "user" && Array.isArray(msg.content)) {
+			for (const part of msg.content) {
+				if (part.type === "tool_result" && typeof part.content === "string" && part.content.length > 200) {
+					const saved = Math.ceil((part.content.length - 80) / 4)
+					part.content = `[truncated ${part.content.length} chars]`
+					estimated -= saved
+					trimCount++
+				}
+			}
+		} else if (msg.role === "assistant" && Array.isArray(msg.content)) {
+			for (const part of msg.content) {
+				if (part.type === "text" && typeof part.text === "string" && part.text.length > 500) {
+					const saved = Math.ceil((part.text.length - 80) / 4)
+					part.text = `[truncated ${part.text.length} chars]`
+					estimated -= saved
+					trimCount++
+				}
+			}
+		}
+	}
+	return trimCount
+}
+
 // Society Agent - Extract clean preview from tool results for UI tool cards
 function extractCleanPreview(result: string, maxLines = 2): { preview: string; lineCount: number } {
 	// Show more lines for errors so users can read them without expanding
@@ -7249,11 +7301,29 @@ async function handleSupervisorChat(
 	let actChatOutLogged = false      // Track if any chat_out was logged during iterations
 	// Society Agent end
 
+	// Society Agent end
+
 	for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
 		iterationCount = iteration + 1
 		actCallIndex = 0 // reset per-iteration call index
 		const actIterationStartTime = Date.now()
-		log.info(`[Supervisor] ${supervisorConfig.name} iteration ${iteration + 1}, ${messages.length} messages, useOpenRouter=${useOpenRouter}`)
+
+		// Society Agent start - Trim old tool results if approaching context limit
+		const trimCount = trimMessagesForContext(systemPrompt, messages)
+		if (trimCount > 0) {
+			log.warn(`[Supervisor] ${supervisorConfig.name} trimmed ${trimCount} old message parts to fit context (~${estimateMessagesTokens(systemPrompt, messages)} tokens)`)
+			io.emit("agent-message", {
+				agentId: supervisorConfig.id,
+				agentName: supervisorConfig.name,
+				projectId: project.id,
+				message: `\n⚠️ *Context approaching limit — trimmed ${trimCount} old results to continue*\n`,
+				timestamp: Date.now(),
+				isStreaming: false,
+			})
+		}
+		// Society Agent end
+
+		log.info(`[Supervisor] ${supervisorConfig.name} iteration ${iteration + 1}, ${messages.length} messages, ~${estimateMessagesTokens(systemPrompt, messages)} tokens, useOpenRouter=${useOpenRouter}`)
 
 		// Society Agent start - Check if agent was stopped
 		if (stoppedAgents.has(supervisorConfig.id)) {
@@ -8464,6 +8534,13 @@ You will self-destruct after completing or failing. Focus on your task.`
 	
 	for (let iteration = 0; iteration < MAX_ITERATIONS && !taskCompleted; iteration++) {
 		actualIterations = iteration + 1
+
+		// Society Agent - Trim old tool results if approaching context limit
+		const wTrimCount = trimMessagesForContext(systemPrompt, messages)
+		if (wTrimCount > 0) {
+			log.warn(`[Worker ${workerName}] Trimmed ${wTrimCount} old message parts to fit context (~${estimateMessagesTokens(systemPrompt, messages)} tokens)`)
+		}
+
 		log.info(`[Worker ${workerName}] Iteration ${actualIterations}`)
 		
 		// Emit progress
