@@ -450,6 +450,7 @@ function estimateMessagesTokens(systemPrompt: string, msgs: any[]): number {
 }
 
 // Trim old tool results in-place when approaching context limit
+// 16.7C: uses soft-trim (head + omission marker + tail) instead of hard replace
 function trimMessagesForContext(systemPrompt: string, msgs: any[]): number {
 	let estimated = estimateMessagesTokens(systemPrompt, msgs)
 	if (estimated <= CONTEXT_HARD_LIMIT) return 0
@@ -461,8 +462,14 @@ function trimMessagesForContext(systemPrompt: string, msgs: any[]): number {
 		if (msg.role === "user" && Array.isArray(msg.content)) {
 			for (const part of msg.content) {
 				if (part.type === "tool_result" && typeof part.content === "string" && part.content.length > 200) {
-					const saved = Math.ceil((part.content.length - 80) / 4)
-					part.content = `[truncated ${part.content.length} chars]`
+					const orig = part.content
+					const head = orig.substring(0, 300)
+					const tail = orig.substring(orig.length - 100)
+					const omitted = orig.length - 400
+					const saved = Math.ceil((orig.length - 400) / 4)
+					part.content = omitted > 50
+						? `${head}\n…[+${omitted} chars omitted]…\n${tail}`
+						: orig.substring(0, 200)
 					estimated -= saved
 					trimCount++
 				}
@@ -470,8 +477,14 @@ function trimMessagesForContext(systemPrompt: string, msgs: any[]): number {
 		} else if (msg.role === "assistant" && Array.isArray(msg.content)) {
 			for (const part of msg.content) {
 				if (part.type === "text" && typeof part.text === "string" && part.text.length > 500) {
-					const saved = Math.ceil((part.text.length - 80) / 4)
-					part.text = `[truncated ${part.text.length} chars]`
+					const orig = part.text
+					const head = orig.substring(0, 200)
+					const tail = orig.substring(orig.length - 80)
+					const omitted = orig.length - 280
+					const saved = Math.ceil((orig.length - 80) / 4)
+					part.text = omitted > 50
+						? `${head}\n…[+${omitted} chars omitted]…\n${tail}`
+						: orig.substring(0, 200)
 					estimated -= saved
 					trimCount++
 				}
@@ -479,6 +492,18 @@ function trimMessagesForContext(systemPrompt: string, msgs: any[]): number {
 		}
 	}
 	return trimCount
+}
+
+// 16.7A: History turn limiting — keep only the last N user turns (+ first message)
+const HISTORY_TURN_LIMIT = 40
+function limitHistory(msgs: any[], limit: number = HISTORY_TURN_LIMIT): any[] {
+	if (msgs.length < 3) return msgs
+	const first = msgs[0]
+	const rest = msgs.slice(1)
+	const userIdxs = rest.map((m, i) => (m.role === "user" ? i : -1)).filter(i => i >= 0)
+	if (userIdxs.length <= limit) return msgs
+	const keepFrom = userIdxs[userIdxs.length - limit]
+	return [first, ...rest.slice(keepFrom)]
 }
 
 // Society Agent - Extract clean preview from tool results for UI tool cards
@@ -7053,9 +7078,19 @@ async function handleSupervisorChat(
 		const actIterationStartTime = Date.now()
 
 		// Society Agent start - Trim old tool results if approaching context limit
+		// 16.7A: cap history to last N turns before trimming
+		const _limited = limitHistory(messages)
+		if (_limited.length < messages.length) messages.splice(0, messages.length, ..._limited)
 		const trimCount = trimMessagesForContext(systemPrompt, messages)
+		const estimatedCtx = estimateMessagesTokens(systemPrompt, messages)
+		io.emit("context-stats", {
+			agentId: supervisorConfig.id,
+			messageCount: messages.length,
+			estimated: estimatedCtx,
+			trimCount,
+		})
 		if (trimCount > 0) {
-			log.warn(`[Supervisor] ${supervisorConfig.name} trimmed ${trimCount} old message parts to fit context (~${estimateMessagesTokens(systemPrompt, messages)} tokens)`)
+			log.warn(`[Supervisor] ${supervisorConfig.name} trimmed ${trimCount} old message parts to fit context (~${estimatedCtx} tokens)`)
 			io.emit("agent-message", {
 				agentId: supervisorConfig.id,
 				agentName: supervisorConfig.name,
@@ -8283,9 +8318,19 @@ You will self-destruct after completing or failing. Focus on your task.`
 		actualIterations = iteration + 1
 
 		// Society Agent - Trim old tool results if approaching context limit
+		// 16.7A: cap history to last N turns before trimming
+		const _wLimited = limitHistory(messages)
+		if (_wLimited.length < messages.length) messages.splice(0, messages.length, ..._wLimited)
 		const wTrimCount = trimMessagesForContext(systemPrompt, messages)
+		const wEstimatedCtx = estimateMessagesTokens(systemPrompt, messages)
+		io.emit("context-stats", {
+			agentId: workerId,
+			messageCount: messages.length,
+			estimated: wEstimatedCtx,
+			trimCount: wTrimCount,
+		})
 		if (wTrimCount > 0) {
-			log.warn(`[Worker ${workerName}] Trimmed ${wTrimCount} old message parts to fit context (~${estimateMessagesTokens(systemPrompt, messages)} tokens)`)
+			log.warn(`[Worker ${workerName}] Trimmed ${wTrimCount} old message parts to fit context (~${wEstimatedCtx} tokens)`)
 		}
 
 		log.info(`[Worker ${workerName}] Iteration ${actualIterations}`)

@@ -273,15 +273,37 @@
   .summary-label { font-size: 11px; color: var(--green); font-weight: 600; margin-bottom: 4px; }
   .summary-text { font-size: 13px; color: var(--text); }
 
-  /* Agent Thinking */
+  /* Agent Thinking — hidden by default, shown only in debug mode */
   .agent-thinking {
+    display: none;
     background: rgba(210,153,34,0.1);
     border-radius: 6px;
     padding: 10px;
     margin-bottom: 8px;
   }
+  .messages.debug-on .agent-thinking { display: block; }
   .thinking-label { font-size: 11px; color: var(--yellow); font-weight: 600; margin-bottom: 4px; }
   .thinking-text { font-size: 13px; color: var(--text); line-height: 1.5; }
+
+  /* Debug toggle button */
+  .btn-debug { background: transparent; border: 1px solid var(--border); color: var(--muted);
+    padding: 3px 9px; border-radius: 4px; cursor: pointer; font-size: 11px; line-height: 1.6;
+    white-space: nowrap; }
+  .btn-debug.active { border-color: var(--yellow); color: var(--yellow); background: rgba(210,153,34,0.1); }
+
+  /* Message cap banner */
+  .msg-cap-banner { text-align: center; padding: 5px 12px; font-size: 11px; color: var(--muted);
+    background: var(--surface); border-radius: 6px; margin: 4px 8px;
+    border: 1px dashed var(--border); cursor: pointer; }
+  .msg-cap-banner:hover { color: var(--text); border-color: var(--accent); }
+
+  /* Consecutive system message grouping */
+  .message.system + .message.system { margin-top: 2px; }
+
+  /* Context stats bar (visible in debug mode only) */
+  .ctx-stats-bar { display: none; font-size: 10px; color: var(--muted); padding: 3px 12px;
+    background: var(--surface); border-top: 1px solid var(--border); text-align: right; }
+  .ctx-stats-bar.visible { display: block; }
 
   /* Tool Cards */
   .tool-card {
@@ -646,6 +668,8 @@
     <button id="scrollBottomBtn" class="scroll-bottom-btn" onclick="scrollToBottom(true)" title="Scroll to bottom">
       ↓ New messages
     </button>
+    <!-- 16.8 Context stats bar (visible when debug mode is on) -->
+    <div class="ctx-stats-bar" id="ctxStatsBar"></div>
 
     <div class="input-area">
       <div id="attachChips" class="attach-chips" style="display:none"></div>
@@ -656,6 +680,7 @@
           rows="1" autofocus></textarea>
         <button class="btn-send" id="sendBtn" onclick="sendMessage()">Send</button>
         <button class="btn-stop" id="stopBtn" onclick="stopAgent()" title="Stop agent">&#9632; Stop</button>
+        <button class="btn-debug" id="debugBtn" onclick="toggleDebug()" title="Show thinking blocks &amp; debug info">🔍</button>
       </div>
     </div>
 
@@ -1260,6 +1285,7 @@ function createAgentTurn(agentId, agentName) {
     </details>
   `;
   document.getElementById('messages').appendChild(turn);
+  enforceMessageCap(document.getElementById('messages'));
   currentTurnEl = turn;
   turnToolsContainer = turn.querySelector('.turn-content');
   traceDrawerEl = turn.querySelector('.trace-drawer');
@@ -1469,6 +1495,18 @@ socket.on('agent-message', (data) => {
     if (currentStreamEl && streamText) {
       currentStreamEl.innerHTML = formatMarkdown(streamText);
     }
+    // ── 16.6 NO_REPLY / silent turns: discard from UI ────────────────────────────────
+    if (!streamText.trim() || /^\s*NO_REPLY\s*$/i.test(streamText.trim())) {
+      if (currentTurnEl) currentTurnEl.remove();
+      currentStreamEl = null; currentTextEl = null; currentTurnEl = null;
+      turnToolsContainer = null; traceDrawerEl = null; turnChangedFiles = [];
+      streamText = ''; lastStreamedText = ''; isStreaming = false;
+      lastStreamChunk = ''; repeatCount = 0;
+      document.getElementById('sendBtn').disabled = false;
+      document.getElementById('stopBtn').style.display = 'none';
+      removeTyping();
+      return;
+    }
     // Outcome badge + artifacts
     if (currentTurnEl) {
       finalizeTurnOutcome(currentTurnEl, streamText);
@@ -1583,6 +1621,16 @@ socket.on('tool-execution', (data) => {
   }
 });
 // Society Agent end
+
+// ── 16.8 Context introspection ─────────────────────────────────────────────────
+socket.on('context-stats', (data) => {
+  const bar = document.getElementById('ctxStatsBar');
+  if (bar) {
+    bar.textContent = `ctx: ${formatNumber(data.estimated)} tokens · ${data.messageCount} msgs${data.trimCount > 0 ? ` · trimmed ${data.trimCount}` : ''}`;
+    if (debugMode) bar.classList.add('visible');
+  }
+  addLog('info', `Context: ~${formatNumber(data.estimated)} tokens, ${data.messageCount} messages${data.trimCount ? `, trimmed ${data.trimCount}` : ''}`);
+});
 
 socket.on('team-formed', (data) => {
   addLog('info', `Team formed: ${data.teamSize} agents`);
@@ -2947,16 +2995,76 @@ socket.on('file-moved', () => refreshFiles());
 // UI Helpers
 // ============================================================================
 
+// ── 16.4/16.5 Debug toggle ──────────────────────────────────────────────────
+let debugMode = false;
+function toggleDebug() {
+  debugMode = !debugMode;
+  const msgs = document.getElementById('messages');
+  msgs.classList.toggle('debug-on', debugMode);
+  const btn = document.getElementById('debugBtn');
+  if (btn) { btn.classList.toggle('active', debugMode); btn.title = debugMode ? 'Hide debug info' : 'Show thinking blocks & debug info'; }
+  // Open all trace drawers when debug is on, close when off
+  msgs.querySelectorAll('.trace-drawer').forEach(d => { d.open = debugMode; });
+  // Show/hide context stats bar
+  const bar = document.getElementById('ctxStatsBar');
+  if (bar) bar.classList.toggle('visible', debugMode);
+}
+
+// ── 16.3 Message render cap ──────────────────────────────────────────────────
+function enforceMessageCap(container, max = 200) {
+  const items = container.querySelectorAll('.message:not(.msg-cap-banner), .agent-turn');
+  if (items.length <= max) return;
+  const toHide = items.length - max;
+  let hidden = 0;
+  for (const item of items) {
+    if (hidden >= toHide) break;
+    if (!item.classList.contains('capped')) { item.style.display = 'none'; item.classList.add('capped'); hidden++; }
+  }
+  let banner = container.querySelector('.msg-cap-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.className = 'msg-cap-banner';
+    banner.onclick = () => {
+      container.querySelectorAll('.capped').forEach(el => { el.style.display = ''; el.classList.remove('capped'); });
+      banner.remove();
+    };
+    container.prepend(banner);
+  }
+  banner.textContent = `↑ ${container.querySelectorAll('.capped').length} older messages hidden — click to show`;
+}
+
 function addMessage(role, content, sender) {
+  const container = document.getElementById('messages');
+
+  // ── 16.3 Consecutive same-role system grouping ────────────────────────────
+  if (role === 'system') {
+    const last = container.lastElementChild;
+    if (last && last.classList.contains('message') && last.classList.contains('system')) {
+      const c = last.querySelector('.content');
+      if (c) {
+        const div = document.createElement('div');
+        div.className = 'sys-item';
+        div.innerHTML = content; // server-controlled HTML
+        c.appendChild(div);
+        scrollToBottom();
+        return last;
+      }
+    }
+  }
+
   const el = document.createElement('div');
   el.className = `message ${role}`;
   if (role === 'assistant') {
     // Escape sender to prevent XSS (CodeQL js/xss-through-dom)
     el.innerHTML = `<div class="sender">${escapeHtml(sender || 'Agent')}</div><div class="content">${formatMarkdown(content)}</div>`;
-  } else {
+  } else if (role === 'user') {
     el.innerHTML = `<div class="content">${escapeHtml(content)}</div>`;
+  } else {
+    // system: server-controlled HTML (callers already escape user data within it)
+    el.innerHTML = `<div class="content">${content}</div>`;
   }
-  document.getElementById('messages').appendChild(el);
+  container.appendChild(el);
+  enforceMessageCap(container);
   scrollToBottom();
   return el;
 }
