@@ -267,11 +267,23 @@ const activeAgents = new Map<string, ConversationAgent>() // agentId → live Co
 const BASE_AGENT_RULES = `
 # AGENT RULES
 
+## Response format (mandatory)
+Every response must follow this structure:
+1. **Headline** — one bold line (≤12 words) stating what you did or found
+2. Bullet points — 2-5 bullets with specifics (files changed, errors fixed, commands run)
+3. Final line — **Next:** what happens next  OR  **Done:** task is complete
+
+Example:
+**Fixed TypeScript errors in auth module**
+- Removed unused import in auth/login.ts
+- Changed any -> User type in 3 places
+- Ran tsc -- 0 errors
+**Next:** Running integration tests
+
 ## Output (keep it compact)
-- Use bullet points; avoid paragraphs; never repeat context already visible to user
+- Bullets only; no paragraphs; never repeat context already visible to user
 - Don't echo tool results — user sees tool cards in UI; just summarize what you learned/did
 - Don't create status/progress/report files — communicate directly in chat
-- End work with: what was done · key decisions · next steps
 
 ## Verification (mandatory)
 - Prove servers work with curl before claiming "server running"
@@ -555,6 +567,12 @@ class UsageTracker {
 	private entries: UsageEntry[] = []
 	private maxSize = 1000
 	private sessionStart = Date.now()
+	// Society Agent - Per-agent session budgets (reset on each new task)
+	private agentSessions: Map<string, { tokens: number; cost: number }> = new Map()
+
+	resetAgentSession(agentId: string) {
+		this.agentSessions.set(agentId, { tokens: 0, cost: 0 })
+	}
 
 	record(entry: Omit<UsageEntry, "id" | "timestamp" | "totalTokens" | "costUsd">) {
 		const pricing = getModelPricing(entry.model)
@@ -576,6 +594,25 @@ class UsageTracker {
 		// Emit to UI
 		io.emit("usage", fullEntry)
 		io.emit("usage-summary", this.getSummary())
+
+		// Society Agent - Update per-agent session budget and emit budget-update
+		if (!this.agentSessions.has(entry.agentId)) {
+			this.agentSessions.set(entry.agentId, { tokens: 0, cost: 0 })
+		}
+		const session = this.agentSessions.get(entry.agentId)!
+		session.tokens += fullEntry.totalTokens
+		session.cost += fullEntry.costUsd
+		io.emit("budget-update", {
+			agentId: entry.agentId,
+			agentName: entry.agentName,
+			projectId: entry.projectId,
+			sessionTokens: session.tokens,
+			sessionCostUsd: session.cost,
+			callTokens: fullEntry.totalTokens,
+			callCostUsd: fullEntry.costUsd,
+			model: entry.model,
+			timestamp: fullEntry.timestamp,
+		})
 
 		return fullEntry
 	}
@@ -6764,6 +6801,9 @@ async function handleSupervisorChat(
 	delegationResults: Array<{ agentId: string; agentName: string; filesCreated: number; responseLength: number }>
 	totalFilesCreated: number
 }> {
+	// Society Agent - Reset per-session budget for this agent
+	usageTracker.resetAgentSession(supervisorConfig.id)
+
 	// Society Agent - Emit task-started event so UI can show what was asked
 	const taskPreview = userMessage.substring(0, 200) + (userMessage.length > 200 ? '...' : '')
 	io.emit("task-started", {
@@ -8164,6 +8204,8 @@ async function runEphemeralWorker(
 	const workerName = workerConfig.name
 	
 	log.info(`[Worker ${workerName}] Starting execution loop`)
+	// Society Agent - Reset budget for this worker session
+	usageTracker.resetAgentSession(workerId)
 	
 	// Activity logging setup
 	const workerHomeFolder = workerConfig.homeFolder || "/"
@@ -8287,6 +8329,17 @@ You will self-destruct after completing or failing. Focus on your task.`
 			})
 			
 			log.info(`[Worker ${workerName}] OpenRouter API response received`)
+			// Society Agent - Track worker usage
+			if (completion.usage) {
+				usageTracker.record({
+					projectId: project.id,
+					agentId: workerId,
+					agentName: workerName,
+					model,
+					inputTokens: completion.usage.prompt_tokens || 0,
+					outputTokens: completion.usage.completion_tokens || 0,
+				})
+			}
 			
 			const choice = completion.choices[0]
 			const textContent = choice.message.content || ""
@@ -8414,6 +8467,17 @@ You will self-destruct after completing or failing. Focus on your task.`
 			
 			response = await stream.finalMessage()
 			log.info(`[Worker ${workerName}] Anthropic response received, stop_reason: ${response.stop_reason}`)
+			// Society Agent - Track worker usage
+			if (response.usage) {
+				usageTracker.record({
+					projectId: project.id,
+					agentId: workerId,
+					agentName: workerName,
+					model,
+					inputTokens: response.usage.input_tokens,
+					outputTokens: response.usage.output_tokens,
+				})
+			}
 			
 			// Extract text and emit
 			let textContent = ""
