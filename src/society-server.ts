@@ -707,6 +707,12 @@ function safeParseToolArgs(jsonStr: string | undefined): Record<string, any> {
 	}
 }
 
+// Society Agent - Strip ANSI escape codes from terminal output
+function stripAnsiCodes(text: string): string {
+	// Remove all ANSI escape sequences: colors, cursor movement, etc.
+	return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+}
+
 // Society Agent - Extract clean preview from tool results for UI tool cards
 function extractCleanPreview(result: string, maxLines = 2): { preview: string; lineCount: number } {
 	// Show more lines for errors so users can read them without expanding
@@ -715,8 +721,8 @@ function extractCleanPreview(result: string, maxLines = 2): { preview: string; l
 
 	// Strip markdown formatting to get actual content
 	let content = result
-	// Remove ANSI escape codes (terminal colors like \x1b[32m, \x1b[39m, etc.)
-	content = content.replace(/\x1b\[[0-9;]*m/g, '')
+	// Remove ANSI escape codes (terminal colors etc.)
+	content = stripAnsiCodes(content)
 	// Remove markdown headers like "📄 **filename**:"
 	content = content.replace(/^[📄📝✅❌🔍🔎📁💻📨💬🎯✏️📖][^\n]*\*\*[^*]+\*\*:?\s*\n?/gm, '')
 	// Remove code block markers
@@ -4592,9 +4598,27 @@ async function executeAgentTool(
 				const content = fs.readFileSync(fullPath, "utf-8")
 				
 				if (!content.includes(old_text)) {
-					// Show snippet of file to help agent find correct text
+					// Show snippet of file and fuzzy match hints to help agent find correct text
 					const snippet = content.substring(0, 500)
-					return { result: `❌ Could not find the exact text to replace.\n\nFile starts with:\n\`\`\`\n${snippet}\n\`\`\`\n\nMake sure old_text matches EXACTLY including whitespace.`, filesCreated: 0 }
+					
+					// Try to find partial matches - look for first non-empty line of old_text
+					const firstLine = old_text.split("\n").find(line => line.trim().length > 10)?.trim() || old_text.substring(0, 50)
+					const lines = content.split("\n")
+					const matchingLines: string[] = []
+					lines.forEach((line, idx) => {
+						if (line.includes(firstLine.substring(0, 30)) || firstLine.includes(line.trim().substring(0, 30))) {
+							matchingLines.push(`Line ${idx + 1}: ${line.substring(0, 80)}`)
+						}
+					})
+					
+					let hint = ""
+					if (matchingLines.length > 0 && matchingLines.length < 10) {
+						hint = `\n\n💡 **Possible matches found:**\n\`\`\`\n${matchingLines.slice(0, 5).join("\n")}\n\`\`\`\n\n**TIP:** Use \`run_command("sed -n 'LINE_NUMp' ${filePath}")\` to get the exact text.`
+					} else {
+						hint = "\n\n**TIP:** Use `run_command(\"grep -n 'keyword' " + filePath + "\")` to find the exact line."
+					}
+					
+					return { result: `❌ Could not find the exact text to replace.\n\nFile starts with:\n\`\`\`\n${snippet}\n\`\`\`\n\nMake sure old_text matches EXACTLY including whitespace.${hint}`, filesCreated: 0 }
 				}
 				
 				const occurrences = content.split(old_text).length - 1
@@ -4937,7 +4961,7 @@ async function executeAgentTool(
 
 						let logContent = ""
 						try {
-							logContent = fs.readFileSync(logFile, "utf-8")
+							logContent = stripAnsiCodes(fs.readFileSync(logFile, "utf-8"))
 							if (logContent.length > 3000) logContent = logContent.substring(0, 3000) + "\n...(truncated)"
 						} catch { logContent = "(no output yet)" }
 
@@ -4997,10 +5021,19 @@ async function executeAgentTool(
 	const { spawn } = await import("child_process")
 	
 	// Auto-increase timeout for test commands (enforce minimum for tests)
-	const isTestCommand = /\b(test|vitest|jest|mocha|pytest|npm\s+test|npx\s+vitest)\b/i.test(fixedCommand)
+	// Be specific to actual test runners - don't match files that happen to have "test" in name
+	const isTestCommand = /\b(npm\s+(run\s+)?test|yarn\s+(run\s+)?test|pnpm\s+(run\s+)?test|vitest(\s+run)?|jest|mocha|pytest|npx\s+(vitest|jest|mocha))\b/i.test(fixedCommand)
+	const isBuildCommand = /\b(build|compile|tsc|webpack|vite\s+build|rollup|esbuild)\b/i.test(fixedCommand)
+	const isInstallCommand = /\b(npm\s+install|npm\s+i|yarn\s+install|yarn\s+add|pnpm\s+install|pnpm\s+add|pip\s+install)\b/i.test(fixedCommand)
 	const minTestTimeout = 600000 // 10 min minimum for tests
-	const defaultTimeout = isTestCommand ? minTestTimeout : 300000
+	const buildTimeout = 300000 // 5 min for builds
+	const installTimeout = 180000 // 3 min for installs
+	const defaultTimeout = isTestCommand ? minTestTimeout 
+		: isBuildCommand ? buildTimeout
+		: isInstallCommand ? installTimeout
+		: 120000 // 2 min default for other commands (reduced from 5 min)
 	// For test commands, enforce minimum even if agent passed a shorter timeout
+	// But always respect explicit timeout_ms for non-test commands
 	const timeout = isTestCommand 
 		? Math.max(timeout_ms || defaultTimeout, minTestTimeout)
 		: (timeout_ms || defaultTimeout)
@@ -5013,6 +5046,13 @@ async function executeAgentTool(
 	}
 	// Society Agent end
 
+	// Society Agent - Warn about scripts that might hang on network I/O
+	const isNetworkScript = /\b(imap|smtp|telnet|ssh|curl.*--connect-timeout|ftp|mail|pop3)\b/i.test(fixedCommand)
+	let networkWarning = ""
+	if (isNetworkScript && !timeout_ms) {
+		networkWarning = `\n⚠️ *Network script detected - may hang if server is unreachable (timeout: ${timeout / 1000}s)*\n`
+	}
+
 	return new Promise<{ result: string; filesCreated: number }>((resolve) => {
 		let output = ""
 		let lastEmitTime = 0
@@ -5023,7 +5063,7 @@ async function executeAgentTool(
 			agentId: agentConfig.id,
 			agentName: agentConfig.name,
 			projectId: project.id,
-			message: `\n⏳ *Running: ${finalCommand}*\n\`\`\`\n`,
+			message: `\n⏳ *Running: ${finalCommand}*${networkWarning}\n\`\`\`\n`,
 			timestamp: Date.now(),
 			isStreaming: true,
 		})
@@ -5094,7 +5134,7 @@ async function executeAgentTool(
 		})
 
 		const streamOutput = (data: Buffer) => {
-			const text = data.toString()
+			const text = stripAnsiCodes(data.toString())
 			output += text
 			
 			// Throttle emissions to avoid flooding
@@ -5115,13 +5155,26 @@ async function executeAgentTool(
 		child.stdout?.on("data", streamOutput)
 		child.stderr?.on("data", streamOutput)
 
+		// Society Agent - Emit warning if command takes too long (30s)
+		const warningId = setTimeout(() => {
+			io.emit("agent-message", {
+				agentId: agentConfig.id,
+				agentName: agentConfig.name,
+				projectId: project.id,
+				message: `\n⚠️ *Command running for 30s+ (timeout: ${timeout / 1000}s)...*\n`,
+				timestamp: Date.now(),
+				isStreaming: true,
+			})
+		}, 30000)
+
 		const timeoutId = setTimeout(() => {
+			clearTimeout(warningId)
 			child.kill("SIGTERM")
 			// Society Agent - include bg log content even on timeout
 			let bgTimeoutSection = ''
 			if (bgLogFiles.length > 0) {
 				bgTimeoutSection = '\n\n' + bgLogFiles.map((lp, i) => {
-					try { return `⚡ BG PID=${bgPids[i]}: ${bgCommands[i]?.substring(0,50)}\n\`\`\`\n${fs.readFileSync(lp,'utf8').substring(0,2000)}\n\`\`\`` }
+					try { return `⚡ BG PID=${bgPids[i]}: ${bgCommands[i]?.substring(0,50)}\n\`\`\`\n${stripAnsiCodes(fs.readFileSync(lp,'utf8')).substring(0,2000)}\n\`\`\`` }
 					catch { return `⚡ BG PID=${bgPids[i]}: ${bgCommands[i]?.substring(0,50)} log not readable` }
 				}).join('\n\n')
 			}
@@ -5130,6 +5183,7 @@ async function executeAgentTool(
 
 		child.on("close", (code) => {
 			clearTimeout(timeoutId)
+			clearTimeout(warningId)
 			
 			// Close the streaming code block in UI
 			io.emit("agent-message", {
@@ -5169,7 +5223,7 @@ async function executeAgentTool(
 					const pid = bgPids[i] ?? '?'
 					const cmd = bgCommands[i]?.substring(0, 50) ?? ''
 					try {
-						const logContent = fs.readFileSync(logPath, 'utf8')
+						const logContent = stripAnsiCodes(fs.readFileSync(logPath, 'utf8'))
 						const lines = logContent.split('\n')
 						// Show up to 80 lines; if more, show first 40 + last 40
 						let preview: string
@@ -5194,6 +5248,7 @@ async function executeAgentTool(
 
 		child.on("error", (err) => {
 			clearTimeout(timeoutId)
+			clearTimeout(warningId)
 			resolve({ result: `❌ Command error: ${err.message}`, filesCreated: 0 })
 		})
 	})
@@ -5736,7 +5791,17 @@ If you don't know, say so. Be concise.`,
 			
 			// Society Agent - Guard against non-existent searchDir (e.g. agent passed wrong path)
 			if (!fs.existsSync(searchDir)) {
-				return { result: `❌ Directory not found: ${searchDir}`, filesCreated: 0 }
+				// Suggest available directories
+				let suggestion = ""
+				if (fs.existsSync(agentFolder)) {
+					const availableDirs = fs.readdirSync(agentFolder, { withFileTypes: true })
+						.filter(d => d.isDirectory() && !d.name.startsWith(".") && d.name !== "node_modules")
+						.map(d => d.name)
+					if (availableDirs.length > 0) {
+						suggestion = `\n\n📁 Available directories in your folder:\n${availableDirs.map(d => "  - " + d + "/").join("\n")}`
+					}
+				}
+				return { result: `❌ Directory not found: ${searchPath}${suggestion}`, filesCreated: 0 }
 			}
 			
 			try {
@@ -5862,7 +5927,16 @@ If you don't know, say so. Be concise.`,
 				
 				return { result: `📡 **${method.toUpperCase()} ${url}**\nStatus: ${response.status} ${response.statusText}\n\`\`\`\n${truncated}\n\`\`\``, filesCreated: 0 }
 			} catch (err: any) {
-				return { result: `❌ Request failed: ${err.message}`, filesCreated: 0 }
+				// Provide more helpful error messages for common issues
+				let hint = ""
+				if (err.message.includes("Headers constructor")) {
+					hint = "\n\n💡 **Header format issue.** Headers must be a plain object like: { \"Content-Type\": \"application/json\" }"
+				} else if (err.message.includes("aborted") || err.name === "AbortError") {
+					hint = "\n\n💡 **Request timed out.** Try increasing timeout_ms or check if the server is running."
+				} else if (err.message.includes("ECONNREFUSED")) {
+					hint = "\n\n💡 **Connection refused.** The server may not be running. Check with `get_processes({ port: PORT })`"
+				}
+				return { result: `❌ Request failed: ${err.message}${hint}`, filesCreated: 0 }
 			}
 		}
 
@@ -9359,6 +9433,151 @@ app.post("/api/agent/:agentId/workspace/move", async (req, res): Promise<void> =
 		res.json({ success: true, from, to })
 	} catch (error) {
 		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/agent/:agentId/workspace/sqlite - Query SQLite database file
+ * Query params: path (required), table (optional), query (optional SQL), limit (optional, default 100)
+ */
+app.get("/api/agent/:agentId/workspace/sqlite", async (req, res): Promise<void> => {
+	try {
+		const filePath = req.query.path as string
+		const tableName = req.query.table as string | undefined
+		const customQuery = req.query.query as string | undefined
+		const limit = parseInt(req.query.limit as string) || 100
+
+		if (!filePath) { res.status(400).json({ error: "path query parameter required" }); return }
+
+		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const check = securePath(agentDir, filePath)
+		if (!check.ok) { res.status(403).json({ error: check.error }); return }
+
+		if (!fs.existsSync(check.fullPath)) {
+			res.status(404).json({ error: "Database file not found" }); return
+		}
+
+		// Dynamic import sqlite3
+		const sqlite3 = await import("better-sqlite3")
+		const db = sqlite3.default(check.fullPath, { readonly: true })
+
+		try {
+			// Get list of tables
+			const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[]
+			const tableNames = tables.map(t => t.name)
+
+			// If no table specified, return schema info
+			if (!tableName && !customQuery) {
+				const schema: Record<string, any[]> = {}
+				for (const t of tableNames) {
+					schema[t] = db.prepare(`PRAGMA table_info("${t}")`).all()
+				}
+				res.json({ tables: tableNames, schema })
+				return
+			}
+
+			// If custom query provided (read-only SELECT queries only)
+			if (customQuery) {
+				const trimmed = customQuery.trim().toLowerCase()
+				if (!trimmed.startsWith("select")) {
+					res.status(400).json({ error: "Only SELECT queries are allowed" }); return
+				}
+				const rows = db.prepare(customQuery).all()
+				const columns = rows.length > 0 ? Object.keys(rows[0] as object) : []
+				res.json({ rows: rows.slice(0, limit), columns, total: rows.length })
+				return
+			}
+
+			// Query specific table
+			if (tableName && !tableNames.includes(tableName)) {
+				res.status(404).json({ error: `Table '${tableName}' not found`, tables: tableNames }); return
+			}
+
+			const countResult = db.prepare(`SELECT COUNT(*) as count FROM "${tableName}"`).get() as { count: number }
+			const rows = db.prepare(`SELECT * FROM "${tableName}" LIMIT ?`).all(limit)
+			const columns = rows.length > 0 ? Object.keys(rows[0] as object) : []
+
+			res.json({ table: tableName, rows, columns, total: countResult.count, limit })
+		} finally {
+			db.close()
+		}
+	} catch (error: any) {
+		log.error("SQLite query error:", error)
+		res.status(500).json({ error: error.message || String(error) })
+	}
+})
+
+/**
+ * POST /api/agent/:agentId/workspace/sqlite - Execute write query on SQLite database
+ * Body: { path, query } or { path, table, rowid, column, value } for cell update
+ */
+app.post("/api/agent/:agentId/workspace/sqlite", async (req, res): Promise<void> => {
+	try {
+		const { path: filePath, query, table, rowid, column, value } = req.body
+
+		if (!filePath) { res.status(400).json({ error: "path required" }); return }
+
+		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const check = securePath(agentDir, filePath)
+		if (!check.ok) { res.status(403).json({ error: check.error }); return }
+
+		if (!fs.existsSync(check.fullPath)) {
+			res.status(404).json({ error: "Database file not found" }); return
+		}
+
+		const sqlite3 = await import("better-sqlite3")
+		const db = sqlite3.default(check.fullPath)
+
+		try {
+			// Cell update mode (inline editing)
+			if (table && rowid !== undefined && column) {
+				// Get primary key column name
+				const tableInfo = db.prepare(`PRAGMA table_info("${table}")`).all() as { name: string; pk: number }[]
+				const pkColumn = tableInfo.find(c => c.pk === 1)?.name || 'rowid'
+				
+				// Sanitize column name (must be in table schema)
+				const validColumns = tableInfo.map(c => c.name)
+				if (!validColumns.includes(column) && column !== 'rowid') {
+					res.status(400).json({ error: `Invalid column: ${column}` }); return
+				}
+
+				const stmt = db.prepare(`UPDATE "${table}" SET "${column}" = ? WHERE "${pkColumn}" = ?`)
+				const result = stmt.run(value, rowid)
+				
+				res.json({ success: true, changes: result.changes })
+				return
+			}
+
+			// Custom query mode
+			if (query) {
+				const trimmed = query.trim().toLowerCase()
+				const isWrite = trimmed.startsWith("update") || trimmed.startsWith("insert") || trimmed.startsWith("delete")
+				const isDrop = trimmed.startsWith("drop") || trimmed.startsWith("alter") || trimmed.startsWith("create")
+				
+				if (isDrop) {
+					res.status(400).json({ error: "DROP, ALTER, and CREATE queries are not allowed from the UI" }); return
+				}
+
+				if (isWrite) {
+					const result = db.prepare(query).run()
+					res.json({ success: true, changes: result.changes, lastInsertRowid: result.lastInsertRowid })
+				} else if (trimmed.startsWith("select")) {
+					const rows = db.prepare(query).all()
+					const columns = rows.length > 0 ? Object.keys(rows[0] as object) : []
+					res.json({ rows, columns, total: rows.length })
+				} else {
+					res.status(400).json({ error: "Only SELECT, UPDATE, INSERT, DELETE queries are allowed" })
+				}
+				return
+			}
+
+			res.status(400).json({ error: "Either 'query' or 'table/rowid/column/value' required" })
+		} finally {
+			db.close()
+		}
+	} catch (error: any) {
+		log.error("SQLite write error:", error)
+		res.status(500).json({ error: error.message || String(error) })
 	}
 })
 

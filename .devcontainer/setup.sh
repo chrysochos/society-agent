@@ -17,4 +17,7 @@ npm install
 echo "🎭 Ensuring Playwright browsers are installed..."
 npx -y playwright install chromium
 
+echo "🔌 Installing VS Code extensions..."
+code --install-extension qwtel.sqlite-viewer || true
+
 echo "✅ Setup complete!"

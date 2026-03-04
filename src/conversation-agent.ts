@@ -48,8 +48,9 @@ export interface ConversationAgentConfig {
 	maxMessages?: number // Max messages before summarization (default: 50) - LEGACY
 	summaryThreshold?: number // When to trigger summary (default: 40) - LEGACY
 	// Society Agent start - token-based summarization
-	contextWindowSize?: number // Total context window size in tokens (default: 200000 for Claude)
+	contextWindowSize?: number // Total context window size in tokens (default: 196608 for Claude 3.5/4)
 	contextThresholdPercent?: number // Percentage of context window to trigger summarization (default: 70)
+	toolTokenOverhead?: number // Estimated tokens for tool definitions sent with each request (default: 20000 for ~44 tools)
 	// Society Agent end
 	// Society Agent start - backup and persistence settings
 	backupsEnabled?: boolean // Enable/disable pre-summarization backups (default: true)
@@ -84,6 +85,7 @@ export class ConversationAgent {
 	// Society Agent start - token-based summarization
 	private contextWindowSize: number
 	private contextThresholdPercent: number
+	private toolTokenOverhead: number // Society Agent: Estimated tokens for tool definitions
 	private historyBackups: Array<{ timestamp: number; messages: AgentMessage[]; tokenCount: number; reason: string }> = []
 	// Society Agent end
 	// Society Agent start - backup and persistence settings
@@ -115,8 +117,9 @@ export class ConversationAgent {
 		this.onSummarizationStart = config.onSummarizationStart // Society Agent
 		this.onSummarizationEnd = config.onSummarizationEnd // Society Agent
 		// Society Agent start - token-based summarization
-		this.contextWindowSize = config.contextWindowSize || 200000 // Claude 3.5 Sonnet context window
+		this.contextWindowSize = config.contextWindowSize || 196608 // Claude 3.5/4 actual context window
 		this.contextThresholdPercent = config.contextThresholdPercent || 70 // Summarize at 70% capacity
+		this.toolTokenOverhead = config.toolTokenOverhead || 20000 // ~44 tools add ~20k tokens
 		this.historyBackups = []
 		// Society Agent end
 		// Society Agent start - backup and persistence settings
@@ -210,13 +213,15 @@ export class ConversationAgent {
 	/**
 	 * Estimate token count for current conversation
 	 * Uses rough approximation: ~4 chars per token for English text
+	 * Includes tool definition overhead (not in message content but sent with each request)
 	 */
 	estimateTokenCount(): number {
 		let totalChars = this.systemPrompt.length
 		for (const msg of this.state.conversationHistory) {
 			totalChars += msg.content.length
 		}
-		return Math.ceil(totalChars / 4) // ~4 chars per token
+		// Add tool token overhead - these are sent with every request but not in message content
+		return Math.ceil(totalChars / 4) + this.toolTokenOverhead
 	}
 
 	/**

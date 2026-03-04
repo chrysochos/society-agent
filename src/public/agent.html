@@ -2930,6 +2930,13 @@ async function viewFile(filePath) {
       return;
     }
 
+    // SQLite: Show database viewer
+    const isSqlite = ['db', 'sqlite', 'sqlite3'].includes(ext);
+    if (isSqlite) {
+      await viewSqliteFile(filePath, viewer);
+      return;
+    }
+
     // Text files: Fetch content
     const res = await agentFileApi(`/file?path=${encodeURIComponent(filePath)}`);
     const data = await res.json();
@@ -3007,6 +3014,378 @@ function toggleMdView(mode) {
     btnRendered.classList.add('active');
     btnRaw.classList.remove('active');
   }
+}
+
+// SQLite database viewer
+let currentSqlitePath = null;
+let currentSqliteTables = [];
+let currentSqliteTable = null;
+let currentSqliteSchema = {};
+
+async function viewSqliteFile(filePath, viewer) {
+  currentSqlitePath = filePath;
+  
+  // Fetch table list and schema
+  const res = await agentFileApi(`/sqlite?path=${encodeURIComponent(filePath)}`);
+  const data = await res.json();
+  
+  if (!res.ok) {
+    addLog('error', data.error || 'Failed to open database');
+    return;
+  }
+  
+  currentSqliteTables = data.tables || [];
+  currentSqliteSchema = data.schema || {};
+  
+  const tableList = currentSqliteTables.map(t => 
+    `<button class="sqlite-table-btn" onclick="loadSqliteTable('${escAttr(t)}')">${esc(t)}</button>`
+  ).join('');
+  
+  viewer.innerHTML = `<div class="file-viewer-panel sqlite-viewer" style="max-width:90vw;width:1000px;">
+    <div class="file-viewer-header">
+      <span class="title">&#128451; ${esc(filePath)}</span>
+      <span class="meta">${currentSqliteTables.length} table(s)</span>
+      <button class="close-btn" onclick="closeFileViewer()">&times;</button>
+    </div>
+    <div class="sqlite-toolbar">
+      <div class="sqlite-tables">${tableList}</div>
+      <div class="sqlite-query-row">
+        <input type="text" id="sqliteQuery" placeholder="SELECT/UPDATE/INSERT/DELETE queries..." style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--fg);font-family:monospace;font-size:12px;" onkeydown="if(event.key==='Enter')runSqliteQuery()">
+        <button onclick="runSqliteQuery()" style="padding:6px 12px;background:var(--accent);color:white;border:none;border-radius:4px;cursor:pointer;">Run</button>
+        <button onclick="insertSqliteRow()" id="sqliteInsertBtn" style="padding:6px 12px;background:#27ae60;color:white;border:none;border-radius:4px;cursor:pointer;display:none;" title="Insert new row">+ Insert</button>
+      </div>
+    </div>
+    <div class="file-viewer-body sqlite-body" id="sqliteResults" style="padding:0;overflow:auto;">
+      <div style="padding:20px;color:var(--muted);text-align:center;">Select a table or run a query</div>
+    </div>
+  </div>`;
+  
+  // Add styles if not already added
+  if (!document.getElementById('sqlite-styles')) {
+    const style = document.createElement('style');
+    style.id = 'sqlite-styles';
+    style.textContent = `
+      .sqlite-toolbar { padding:10px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:8px; }
+      .sqlite-tables { display:flex;flex-wrap:wrap;gap:4px; }
+      .sqlite-table-btn { padding:4px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;cursor:pointer;font-size:12px;color:var(--fg); }
+      .sqlite-table-btn:hover { background:var(--border); }
+      .sqlite-table-btn.active { background:var(--accent);color:white;border-color:var(--accent); }
+      .sqlite-query-row { display:flex;gap:8px; }
+      .sqlite-body { max-height:60vh; }
+      .sqlite-table { width:100%;border-collapse:collapse;font-size:12px; }
+      .sqlite-table th { position:sticky;top:0;background:var(--bg-card);padding:8px;text-align:left;border-bottom:2px solid var(--border);font-weight:600; }
+      .sqlite-table td { padding:6px 8px;border-bottom:1px solid var(--border);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer; }
+      .sqlite-table td:hover { background:rgba(52,152,219,0.1); }
+      .sqlite-table td.editing { padding:2px;background:var(--bg); }
+      .sqlite-table td.editing input { width:100%;padding:4px 6px;border:2px solid var(--accent);border-radius:3px;background:var(--bg);color:var(--fg);font-family:monospace;font-size:12px;outline:none; }
+      .sqlite-table tr:hover td { background:var(--bg-card); }
+      .sqlite-table td.editing:hover { background:var(--bg); }
+      .sqlite-info { padding:10px;background:var(--bg-card);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);display:flex;justify-content:space-between;align-items:center; }
+      .sqlite-info .hint { font-size:11px;color:var(--muted);opacity:0.7; }
+      .sqlite-table .row-actions { width:60px;text-align:center; }
+      .sqlite-table .delete-btn { padding:2px 6px;background:#e74c3c;color:white;border:none;border-radius:3px;cursor:pointer;font-size:10px;opacity:0.7; }
+      .sqlite-table .delete-btn:hover { opacity:1; }
+      .sqlite-success { color:#27ae60;padding:10px;background:rgba(39,174,96,0.1);border-bottom:1px solid var(--border); }
+    `;
+    document.head.appendChild(style);
+  }
+  
+  viewer.style.display = 'flex';
+  
+  // Auto-load first table if exists
+  if (currentSqliteTables.length > 0) {
+    loadSqliteTable(currentSqliteTables[0]);
+  }
+}
+
+async function loadSqliteTable(tableName) {
+  currentSqliteTable = tableName;
+  
+  // Update active state and show insert button
+  document.querySelectorAll('.sqlite-table-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.textContent === tableName);
+  });
+  const insertBtn = document.getElementById('sqliteInsertBtn');
+  if (insertBtn) insertBtn.style.display = 'inline-block';
+  
+  const resultsDiv = document.getElementById('sqliteResults');
+  resultsDiv.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);">Loading...</div>';
+  
+  const res = await agentFileApi(`/sqlite?path=${encodeURIComponent(currentSqlitePath)}&table=${encodeURIComponent(tableName)}`);
+  const data = await res.json();
+  
+  if (!res.ok) {
+    resultsDiv.innerHTML = `<div style="padding:20px;color:#e74c3c;">${esc(data.error)}</div>`;
+    return;
+  }
+  
+  renderSqliteResults(data, true);
+}
+
+async function runSqliteQuery() {
+  const query = document.getElementById('sqliteQuery').value.trim();
+  if (!query) return;
+  
+  const resultsDiv = document.getElementById('sqliteResults');
+  resultsDiv.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);">Running query...</div>';
+  
+  // Clear active table buttons and hide insert for custom queries
+  document.querySelectorAll('.sqlite-table-btn').forEach(btn => btn.classList.remove('active'));
+  const insertBtn = document.getElementById('sqliteInsertBtn');
+  if (insertBtn) insertBtn.style.display = 'none';
+  currentSqliteTable = null;
+  
+  // Determine if write query
+  const isWrite = /^(update|insert|delete)/i.test(query);
+  
+  let res;
+  if (isWrite) {
+    res = await fetch(`${API}/api/agent/${AGENT_ID}/workspace/sqlite`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: currentSqlitePath, query })
+    });
+  } else {
+    res = await agentFileApi(`/sqlite?path=${encodeURIComponent(currentSqlitePath)}&query=${encodeURIComponent(query)}`);
+  }
+  
+  const data = await res.json();
+  
+  if (!res.ok) {
+    resultsDiv.innerHTML = `<div style="padding:20px;color:#e74c3c;">${esc(data.error)}</div>`;
+    return;
+  }
+  
+  if (isWrite) {
+    resultsDiv.innerHTML = `<div class="sqlite-success">✓ Query executed. ${data.changes || 0} row(s) affected.</div>`;
+    // Reload the previously selected table if any
+    setTimeout(() => {
+      const activeBtn = document.querySelector('.sqlite-table-btn.active');
+      if (activeBtn) loadSqliteTable(activeBtn.textContent);
+    }, 500);
+  } else {
+    renderSqliteResults(data, false);
+  }
+}
+
+function renderSqliteResults(data, editable = false) {
+  const resultsDiv = document.getElementById('sqliteResults');
+  const { rows, columns, total, limit, table } = data;
+  
+  if (!rows || rows.length === 0) {
+    const emptyMsg = table 
+      ? `<div style="padding:20px;text-align:center;color:var(--muted);">No rows in table. <a href="#" onclick="insertSqliteRow();return false;" style="color:var(--accent);">Insert first row?</a></div>`
+      : '<div style="padding:20px;text-align:center;color:var(--muted);">No rows found</div>';
+    resultsDiv.innerHTML = emptyMsg;
+    return;
+  }
+  
+  const info = table 
+    ? `Table: <strong>${esc(table)}</strong> | Showing ${rows.length} of ${total} rows`
+    : `Query returned ${rows.length} rows`;
+  const hint = editable ? '<span class="hint">Double-click cell to edit</span>' : '';
+  
+  // Get the primary key column (first column or rowid)
+  const pkCol = columns.includes('id') ? 'id' : (columns.includes('rowid') ? 'rowid' : columns[0]);
+  
+  const header = columns.map(c => `<th>${esc(c)}</th>`).join('') + (editable ? '<th class="row-actions">Actions</th>' : '');
+  const body = rows.map(row => {
+    const rowId = row[pkCol] ?? row['rowid'] ?? row[columns[0]];
+    const cells = columns.map(c => {
+      const val = row[c];
+      const display = val === null ? '<span style="color:var(--muted)">NULL</span>' : esc(String(val));
+      const editAttr = editable ? `ondblclick="startCellEdit(this, '${escAttr(table)}', '${escAttr(String(rowId))}', '${escAttr(c)}')"` : '';
+      return `<td data-value="${escAttr(val === null ? '' : String(val))}" ${editAttr}>${display}</td>`;
+    }).join('');
+    const actions = editable ? `<td class="row-actions"><button class="delete-btn" onclick="deleteSqliteRow('${escAttr(table)}', '${escAttr(String(rowId))}', '${escAttr(pkCol)}')">Delete</button></td>` : '';
+    return `<tr data-rowid="${escAttr(String(rowId))}">${cells}${actions}</tr>`;
+  }).join('');
+  
+  resultsDiv.innerHTML = `
+    <div class="sqlite-info"><span>${info}</span>${hint}</div>
+    <table class="sqlite-table">
+      <thead><tr>${header}</tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+  `;
+}
+
+function startCellEdit(td, table, rowid, column) {
+  if (td.classList.contains('editing')) return;
+  
+  const currentValue = td.dataset.value || '';
+  td.classList.add('editing');
+  td.innerHTML = `<input type="text" value="${escAttr(currentValue)}" onblur="saveCellEdit(this, '${escAttr(table)}', '${escAttr(rowid)}', '${escAttr(column)}')" onkeydown="handleCellKeydown(event, this, '${escAttr(table)}', '${escAttr(rowid)}', '${escAttr(column)}')">`;
+  const input = td.querySelector('input');
+  input.focus();
+  input.select();
+}
+
+function handleCellKeydown(event, input, table, rowid, column) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    saveCellEdit(input, table, rowid, column);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    cancelCellEdit(input);
+  }
+}
+
+function cancelCellEdit(input) {
+  const td = input.parentElement;
+  const val = td.dataset.value || '';
+  td.classList.remove('editing');
+  td.innerHTML = val ? esc(val) : '<span style="color:var(--muted)">NULL</span>';
+}
+
+async function saveCellEdit(input, table, rowid, column) {
+  const td = input.parentElement;
+  const newValue = input.value;
+  const oldValue = td.dataset.value || '';
+  
+  if (newValue === oldValue) {
+    cancelCellEdit(input);
+    return;
+  }
+  
+  td.innerHTML = '<span style="color:var(--muted)">Saving...</span>';
+  
+  try {
+    const res = await fetch(`${API}/api/agent/${AGENT_ID}/workspace/sqlite`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: currentSqlitePath,
+        table,
+        rowid,
+        column,
+        value: newValue || null
+      })
+    });
+    
+    const data = await res.json();
+    
+    if (!res.ok) {
+      addLog('error', data.error || 'Failed to update');
+      td.classList.remove('editing');
+      td.innerHTML = oldValue ? esc(oldValue) : '<span style="color:var(--muted)">NULL</span>';
+      return;
+    }
+    
+    td.dataset.value = newValue;
+    td.classList.remove('editing');
+    td.innerHTML = newValue ? esc(newValue) : '<span style="color:var(--muted)">NULL</span>';
+    td.style.background = 'rgba(39,174,96,0.2)';
+    setTimeout(() => td.style.background = '', 1000);
+  } catch (e) {
+    addLog('error', 'Failed to save: ' + e.message);
+    cancelCellEdit(input);
+  }
+}
+
+async function deleteSqliteRow(table, rowid, pkCol) {
+  if (!confirm(`Delete row with ${pkCol}=${rowid}?`)) return;
+  
+  try {
+    const query = `DELETE FROM "${table}" WHERE "${pkCol}" = '${rowid}'`;
+    const res = await fetch(`${API}/api/agent/${AGENT_ID}/workspace/sqlite`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: currentSqlitePath, query })
+    });
+    
+    const data = await res.json();
+    
+    if (!res.ok) {
+      addLog('error', data.error || 'Failed to delete');
+      return;
+    }
+    
+    // Reload table
+    loadSqliteTable(table);
+  } catch (e) {
+    addLog('error', 'Delete failed: ' + e.message);
+  }
+}
+
+async function insertSqliteRow() {
+  if (!currentSqliteTable) {
+    addLog('error', 'Select a table first');
+    return;
+  }
+  
+  const schema = currentSqliteSchema[currentSqliteTable] || [];
+  if (schema.length === 0) {
+    addLog('error', 'Cannot determine table schema');
+    return;
+  }
+  
+  // Build a simple form for inserting
+  const fields = schema.filter(c => c.pk !== 1 || c.name.toLowerCase() !== 'id').map(c => {
+    const nullable = c.notnull ? '' : ' (optional)';
+    return `<div style="margin-bottom:8px;">
+      <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:2px;">${esc(c.name)}${nullable}</label>
+      <input type="text" name="${escAttr(c.name)}" placeholder="${esc(c.type || 'TEXT')}" style="width:100%;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--fg);font-size:12px;">
+    </div>`;
+  }).join('');
+  
+  const modal = document.createElement('div');
+  modal.className = 'file-viewer';
+  modal.style.display = 'flex';
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  modal.innerHTML = `<div class="file-viewer-panel" style="max-width:400px;width:100%;">
+    <div class="file-viewer-header">
+      <span class="title">Insert into ${esc(currentSqliteTable)}</span>
+      <button class="close-btn" onclick="this.closest('.file-viewer').remove()">&times;</button>
+    </div>
+    <div class="file-viewer-body" style="padding:16px;">
+      <form id="sqliteInsertForm">${fields}
+        <button type="submit" style="margin-top:10px;padding:8px 16px;background:var(--accent);color:white;border:none;border-radius:4px;cursor:pointer;width:100%;">Insert Row</button>
+      </form>
+    </div>
+  </div>`;
+  
+  document.body.appendChild(modal);
+  
+  document.getElementById('sqliteInsertForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const cols = [];
+    const vals = [];
+    for (const [key, value] of formData.entries()) {
+      if (value !== '') {
+        cols.push(`"${key}"`);
+        vals.push(`'${String(value).replace(/'/g, "''")}'`);
+      }
+    }
+    
+    if (cols.length === 0) {
+      addLog('error', 'Enter at least one value');
+      return;
+    }
+    
+    const query = `INSERT INTO "${currentSqliteTable}" (${cols.join(', ')}) VALUES (${vals.join(', ')})`;
+    
+    try {
+      const res = await fetch(`${API}/api/agent/${AGENT_ID}/workspace/sqlite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: currentSqlitePath, query })
+      });
+      
+      const data = await res.json();
+      
+      if (!res.ok) {
+        addLog('error', data.error || 'Insert failed');
+        return;
+      }
+      
+      modal.remove();
+      loadSqliteTable(currentSqliteTable);
+    } catch (err) {
+      addLog('error', 'Insert failed: ' + err.message);
+    }
+  };
 }
 
 // Simple markdown renderer

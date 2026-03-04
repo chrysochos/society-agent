@@ -10,8 +10,8 @@
   // Run setup script which installs system dependencies + npm packages
   "postCreateCommand": "chmod +x .devcontainer/setup.sh && .devcontainer/setup.sh",
 
-  // Auto-start the Society Agent server every time the container starts (including after VS Code reconnects)
-  "postStartCommand": "cd /workspaces/society-agent && npm start > /tmp/society-server.log 2>&1 &",
+  // Auto-start the Society Agent server in watch mode (auto-reloads on code changes)
+  "postStartCommand": "cd /workspaces/society-agent && npm run dev > /tmp/society-server.log 2>&1 &",
   
   // Features add common dev tools that persist across rebuilds
   "features": {
@@ -24,7 +24,8 @@
     "vscode": {
       "extensions": [
         "dbaeumer.vscode-eslint",
-        "esbenp.prettier-vscode"
+        "esbenp.prettier-vscode",
+        "qwtel.sqlite-viewer"
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "bash"
