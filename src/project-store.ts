@@ -732,8 +732,9 @@ export class ProjectStore {
 	}
 
 	/** Find which project an agent belongs to (by global agent ID search) */
-	findAgentProject(agentId: string): { project: Project; agent: ProjectAgentConfig } | undefined {
+	findAgentProject(agentId: string, projectId?: string): { project: Project; agent: ProjectAgentConfig } | undefined {
 		for (const project of this.state.projects) {
+			if (projectId && project.id !== projectId) continue
 			const agent = project.agents.find((a) => a.id === agentId)
 			if (agent) return { project, agent }
 		}

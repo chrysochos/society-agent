@@ -1454,9 +1454,12 @@ let lastStreamChunk = ''; // Detect repeated chunks
 let repeatCount = 0;
 socket.on('agent-message', (data) => {
   // Filter to selected agent only
-  if (selectedAgentId && data.agentId && data.agentId !== selectedAgentId) {
-    addLog('info', `[${data.agentName || data.agentId}] ${(data.message || '').substring(0, 50)}...`);
-    return;
+  if (selectedAgentId && data.agentId) {
+    const _sel = getSelectedAgent();
+    if (_sel && (data.agentId !== _sel.agentId || (data.projectId && data.projectId !== _sel.projectId))) {
+      addLog('info', `[${data.agentName || data.agentId}] ${(data.message || '').substring(0, 50)}...`);
+      return;
+    }
   }
 
   if (data.isStreaming) {
@@ -1543,7 +1546,7 @@ function stopAgent() {
   if (!isStreaming) return;
   
   // Tell server to stop
-  const agentId = selectedAgentId || 'default';
+  const agentId = getSelectedAgent()?.agentId || 'default';
   socket.emit('stop-agent', { agentId });
   
   // Update UI immediately
@@ -1571,7 +1574,10 @@ function stopAgent() {
 let toolCount = 0;
 let lastToolUpdate = null; // compat ref, unused now
 socket.on('tool-execution', (data) => {
-  if (selectedAgentId && data.agentId && data.agentId !== selectedAgentId) return;
+  if (selectedAgentId && data.agentId) {
+    const _sel = getSelectedAgent();
+    if (_sel && (data.agentId !== _sel.agentId || (data.projectId && data.projectId !== _sel.projectId))) return;
+  }
 
   // Ensure a turn exists
   if (!currentTurnEl && data.status === 'started') {
@@ -1958,8 +1964,10 @@ async function sendMessage() {
   showTyping();
 
   try {
-    const agentId = selectedAgentId || undefined;
-    const agentName = selectedAgentId ? (allProjectAgents.find(a => a.id === selectedAgentId)?.name || selectedAgentId) : undefined;
+    const sel = getSelectedAgent();
+    const agentId = sel?.agentId;
+    const projectId = sel?.projectId;
+    const agentName = selectedAgentId ? (allProjectAgents.find(a => (a.projectId + ':' + a.id) === selectedAgentId)?.name || agentId) : undefined;
 
     const res = await fetch(`${API}/api/purpose/start`, {
       method: 'POST',
@@ -1968,6 +1976,7 @@ async function sendMessage() {
         description: text,
         attachments: contentParts.length > 1 || contentParts[0]?.type === 'image' ? contentParts : undefined,
         agentId,
+        projectId,
       }),
     });
     const data = await res.json();
@@ -2050,6 +2059,7 @@ async function refreshAgents() {
 // ============================================================================
 
 let fileData = [];       // flat list from server
+let activeProjectFolder = null; // Society Agent - filter file tree to selected project
 let expandedDirs = new Set(['']);  // track open folders ('' = root always open)
 let selectedPath = null; // currently selected item
 let dragSrc = null;      // path being dragged
@@ -2141,8 +2151,18 @@ async function refreshFiles() {
   try {
     const res = await fetch(`${API}/api/workspace/files`);
     const data = await res.json();
-    fileData = data.files || [];
-    document.getElementById('fileCount').textContent = `${data.totalFiles} files, ${data.totalDirs} dirs`;
+    // Society Agent start - Filter to selected project's files when an agent is active
+    const allFiles = data.files || [];
+    if (activeProjectFolder) {
+      const prefix = activeProjectFolder + '/';
+      fileData = allFiles.filter(f => f.path === activeProjectFolder || f.path.startsWith(prefix));
+    } else {
+      fileData = allFiles;
+    }
+    const visibleFiles = fileData.filter(f => !f.isDir);
+    const visibleDirs = fileData.filter(f => f.isDir);
+    document.getElementById('fileCount').textContent = `${visibleFiles.length} files, ${visibleDirs.length} dirs`;
+    // Society Agent end
 
     const tree = document.getElementById('fileTree');
     if (fileData.length === 0) {
@@ -3622,8 +3642,17 @@ document.getElementById('input').addEventListener('input', function() {
 
 let projects = [];
 let allProjectAgents = []; // flattened list of all agents across projects
-let selectedAgentId = ''; // '' means default society agent
+let selectedAgentId = ''; // '' means default society agent; set to 'projectId:agentId' when a project agent is selected
 let editingProjectId = null; // null = create, string = editing
+
+// Society Agent start - Parse composite 'projectId:agentId' key
+function getSelectedAgent() {
+  if (!selectedAgentId) return null;
+  const colon = selectedAgentId.indexOf(':');
+  if (colon === -1) return null;
+  return { projectId: selectedAgentId.slice(0, colon), agentId: selectedAgentId.slice(colon + 1) };
+}
+// Society Agent end
 
 async function loadProjects() {
   try {
@@ -3722,13 +3751,14 @@ function renderAgentSelector() {
     if (!p.agents || p.agents.length === 0) return;
     html += `<optgroup label="${escapeHtml(p.name)}">`;
     p.agents.forEach(a => {
-      html += `<option value="${escapeHtml(a.id)}" ${a.id === prev ? 'selected' : ''}>${escapeHtml(a.name)} — ${escapeHtml(a.role)}</option>`;
+      const compositeVal = p.id + ':' + a.id;
+      html += `<option value="${escapeHtml(compositeVal)}" ${compositeVal === prev ? 'selected' : ''}>${escapeHtml(a.name)} — ${escapeHtml(a.role)}</option>`;
     });
     html += '</optgroup>';
   });
   sel.innerHTML = html;
   // Restore selection
-  if (prev && allProjectAgents.some(a => a.id === prev)) {
+  if (prev && allProjectAgents.some(a => (a.projectId + ':' + a.id) === prev)) {
     sel.value = prev;
   }
   onAgentChange();
@@ -3751,7 +3781,7 @@ function onAgentChange() {
   
   // Show which agent is selected
   if (selectedAgentId) {
-    const agent = allProjectAgents.find(a => a.id === selectedAgentId);
+    const agent = allProjectAgents.find(a => (a.projectId + ':' + a.id) === selectedAgentId);
     if (agent) {
       addMessage('system', `Now chatting with <b>${escapeHtml(agent.name)}</b> (${escapeHtml(agent.role)})`);
     }
@@ -3760,11 +3790,20 @@ function onAgentChange() {
   }
   // Society Agent end
   
+  // Society Agent start - Refresh file explorer scoped to the selected project
+  {
+    const agentObj = allProjectAgents.find(a => (a.projectId + ':' + a.id) === selectedAgentId);
+    const project = agentObj ? projects.find(p => p.id === agentObj.projectId) : null;
+    activeProjectFolder = project ? (project.folder || project.id) : null;
+    refreshFiles();
+  }
+  // Society Agent end
+
   if (!selectedAgentId) {
     info.innerHTML = '';
     return;
   }
-  const agent = allProjectAgents.find(a => a.id === selectedAgentId);
+  const agent = allProjectAgents.find(a => (a.projectId + ':' + a.id) === selectedAgentId);
   if (agent) {
     info.innerHTML = `<span style="color:var(--muted);font-size:10px">${escapeHtml(agent.projectName)}</span> · ${escapeHtml((agent.capabilities || []).slice(0, 3).join(', '))}`;
   }
@@ -3937,7 +3976,7 @@ async function deleteProject(id, name) {
     const data = await res.json();
     if (data.success) {
       addLog('info', `Project ${name} deleted`);
-      if (allProjectAgents.some(a => a.projectId === id && a.id === selectedAgentId)) {
+      if (selectedAgentId.startsWith(id + ':')) {
         selectedAgentId = '';
       }
       loadProjects();

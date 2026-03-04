@@ -2186,7 +2186,7 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 			return
 		}
 
-		const { description, attachments, agentId } = req.body // Society Agent - added agentId
+		const { description, attachments, agentId, projectId } = req.body // Society Agent - added agentId, projectId
 
 		if (!description && (!attachments || attachments.length === 0)) {
 			res.status(400).json({ error: "Purpose description or attachments required" })
@@ -2196,7 +2196,7 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 		// Society Agent start - route to persistent/project agent if agentId specified
 		if (agentId) {
 			// Try project store first, then legacy store
-			const found = projectStore.findAgentProject(agentId)
+			const found = projectStore.findAgentProject(agentId, projectId)
 			let agent: ConversationAgent
 			let agentName: string
 			let agentProjectId: string | undefined
@@ -3029,7 +3029,7 @@ app.post("/api/projects", (req, res): void => {
 		// Society Agent start - Auto-create Main Supervisor if no agents provided
 		let projectAgents = agents
 		if (!agents || agents.length === 0) {
-			const supervisorId = "supervisor"
+			const supervisorId = id  // Society Agent - use project id so each supervisor has a globally unique agent ID
 			projectAgents = [{
 				id: supervisorId,
 				name: "Main Supervisor",
@@ -8869,13 +8869,14 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 		}
 
 		const { description, attachments } = req.body
+		const projectId = req.body.projectId as string | undefined
 		if (!description && (!attachments || attachments.length === 0)) {
 			res.status(400).json({ error: "Message description or attachments required" })
 			return
 		}
 
 		// Try project store first
-		const found = projectStore.findAgentProject(agentId)
+		const found = projectStore.findAgentProject(agentId, projectId)
 		if (found) {
 			// Ephemeral workers don't accept direct messages - they only work on tasks
 			if (found.agent.ephemeral) {
