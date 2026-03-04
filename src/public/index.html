@@ -192,6 +192,10 @@
     overflow: hidden;
   }
   .agent-turn.completed { border-color: var(--green); border-left: 3px solid var(--green); }
+  .task-budget { font-size: 11px; color: #8b949e; margin-top: 6px; padding-top: 6px; border-top: 1px solid #30363d; display: flex; gap: 12px; align-items: center; }
+  .task-budget .bud-tokens { color: #58a6ff; font-variant-numeric: tabular-nums; }
+  .task-budget .bud-cost { color: #3fb950; font-variant-numeric: tabular-nums; }
+  .task-budget .bud-calls { color: #8b949e; }
   .turn-header {
     display: flex;
     justify-content: space-between;
@@ -1176,17 +1180,19 @@ let currentTurnEl = null; // Container for current agent turn
 let currentTextEl = null; // Current text streaming element within the turn
 let turnToolsContainer = null; // Container for tools within current turn
 
-function createAgentTurn(agentName) {
+function createAgentTurn(agentId, agentName) {
   // End previous turn if exists
   if (currentTurnEl) {
     currentTurnEl.classList.add('completed');
   }
   
+  const displayName = agentName || agentId || 'Agent';
   const turn = document.createElement('div');
   turn.className = 'agent-turn';
+  turn.dataset.turnId = agentId || '';
   turn.innerHTML = `
     <div class="turn-header">
-      <span class="turn-agent">${escapeHtml(agentName)}</span>
+      <span class="turn-agent">${escapeHtml(displayName)}</span>
       <span class="turn-time">${new Date().toLocaleTimeString()}</span>
     </div>
     <div class="turn-content"></div>
@@ -1194,9 +1200,9 @@ function createAgentTurn(agentName) {
   `;
   document.getElementById('messages').appendChild(turn);
   currentTurnEl = turn;
-  turnToolsContainer = turn.querySelector('.turn-content'); // Tools go directly in content, in order
+  turnToolsContainer = turn.querySelector('.turn-content');
   scrollToBottom();
-  return turn;
+  return agentId || turn;
 }
 
 function addThinkingToTurn(text) {
@@ -1501,12 +1507,38 @@ socket.on('task-started', (data) => {
       <span style="background:#58a6ff;color:#0d1117;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;">TASK</span>
       <span style="color:#8b949e;font-size:12px;">${new Date(data.timestamp).toLocaleTimeString()}</span>
     </div>
-    <div style="color:#c9d1d9;line-height:1.5;">${data.task}</div>
+    <div style="color:#c9d1d9;line-height:1.5;">${escapeHtml(data.task)}</div>
+    <div class="task-budget" id="task-budget-${data.agentId}">
+      <span class="bud-tokens" id="task-budget-tok-${data.agentId}">0 tokens</span>
+      <span class="bud-cost" id="task-budget-cost-${data.agentId}">$0.00</span>
+      <span class="bud-calls" id="task-budget-calls-${data.agentId}">0 calls</span>
+    </div>
   </div>`;
   const currentTurn = document.querySelector(`[data-turn-id="${turnId}"] .turn-content`);
   if (currentTurn) {
     currentTurn.insertAdjacentHTML('afterbegin', taskHtml);
   }
+});
+
+// Society Agent - Live budget tracking per task
+const taskBudgets = {}; // agentId -> { tokens, cost, calls }
+socket.on('budget-update', (data) => {
+  const id = data.agentId;
+  if (!taskBudgets[id]) taskBudgets[id] = { tokens: 0, cost: 0, calls: 0 };
+  taskBudgets[id].tokens = data.sessionTokens;
+  taskBudgets[id].cost = data.sessionCostUsd;
+  taskBudgets[id].calls = (taskBudgets[id].calls || 0) + 1;
+
+  const tokEl = document.getElementById(`task-budget-tok-${id}`);
+  const costEl = document.getElementById(`task-budget-cost-${id}`);
+  const callsEl = document.getElementById(`task-budget-calls-${id}`);
+  if (tokEl) tokEl.textContent = formatNumber(data.sessionTokens) + ' tokens';
+  if (costEl) {
+    const c = data.sessionCostUsd;
+    costEl.textContent = c < 0.01 ? `${(c*100).toFixed(2)}¢` : `$${c.toFixed(4)}`;
+    costEl.style.color = c > 1 ? 'var(--red)' : c > 0.1 ? 'var(--yellow)' : 'var(--green)';
+  }
+  if (callsEl) callsEl.textContent = taskBudgets[id].calls + ' call' + (taskBudgets[id].calls !== 1 ? 's' : '');
 });
 
 // Society Agent - Delegation visibility events

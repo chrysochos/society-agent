@@ -7304,8 +7304,9 @@ async function handleSupervisorChat(
 					agentId: supervisorConfig.id,
 					agentName: supervisorConfig.name,
 					model,
-					inputTokens: streamUsage.prompt_tokens || 0,
-					outputTokens: streamUsage.completion_tokens || 0,
+					// Handle both OpenAI schema (prompt_tokens) and Anthropic schema (input_tokens)
+					inputTokens: streamUsage.prompt_tokens || (streamUsage as any).input_tokens || 0,
+					outputTokens: streamUsage.completion_tokens || (streamUsage as any).output_tokens || 0,
 				})
 			}
 			// Society Agent end
