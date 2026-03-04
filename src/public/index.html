@@ -196,6 +196,63 @@
   .task-budget .bud-tokens { color: #58a6ff; font-variant-numeric: tabular-nums; }
   .task-budget .bud-cost { color: #3fb950; font-variant-numeric: tabular-nums; }
   .task-budget .bud-calls { color: #8b949e; }
+
+  /* ── Three-level information architecture ── */
+  /* Outcome badge in turn header */
+  .outcome-badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; margin-left: auto; }
+  .outcome-success { background: rgba(63,185,80,0.2); color: var(--green); border: 1px solid rgba(63,185,80,0.4); }
+  .outcome-partial { background: rgba(210,153,34,0.2); color: var(--yellow); border: 1px solid rgba(210,153,34,0.4); }
+  .outcome-failed  { background: rgba(248,81,73,0.2);  color: var(--red);    border: 1px solid rgba(248,81,73,0.4); }
+  .outcome-running { background: rgba(88,166,255,0.15); color: var(--accent); border: 1px solid rgba(88,166,255,0.3); }
+
+  /* Level 3: Trace drawer (collapsed by default) */
+  .trace-drawer { border-top: 1px solid var(--border); }
+  .trace-drawer > summary { list-style: none; padding: 5px 12px; cursor: pointer;
+    font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px;
+    background: rgba(0,0,0,0.12); user-select: none; }
+  .trace-drawer > summary:hover { color: var(--text); background: rgba(0,0,0,0.2); }
+  .trace-drawer > summary::-webkit-details-marker { display: none; }
+  .trace-list { padding: 6px 10px; display: flex; flex-direction: column; gap: 3px; max-height: 400px; overflow-y: auto; }
+  .trace-item { background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 5px 8px; font-size: 11px; cursor: default; }
+  .trace-item.trace-error   { border-left: 3px solid var(--red); }
+  .trace-item.trace-success { border-left: 2px solid #2d333b; }
+  .trace-item.trace-running { border-left: 3px solid var(--yellow); }
+  .trace-item-header { display: flex; align-items: center; gap: 5px; }
+  .trace-item-icon { font-size: 11px; flex-shrink: 0; }
+  .trace-item-name { font-weight: 600; color: var(--text); white-space: nowrap; }
+  .trace-item-target { font-family: monospace; color: var(--accent); flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .trace-item-duration { color: var(--muted); margin-left: auto; white-space: nowrap; flex-shrink: 0; }
+  .trace-item-why { color: #6e7681; font-style: italic; font-size: 10px; padding-left: 16px; margin-top: 1px; }
+  .trace-item-error-out { color: var(--red); font-family: monospace; font-size: 10px;
+    max-height: 50px; overflow: hidden; padding: 3px 5px;
+    background: rgba(248,81,73,0.05); border-radius: 2px; margin-top: 3px; cursor: pointer; }
+  .trace-item-error-out.expanded { max-height: none; }
+
+  /* Level 1: turn response text (inside turn, always visible) */
+  .turn-response { padding: 6px 0; font-size: 13px; line-height: 1.6; }
+  .turn-response p { margin-bottom: 6px; }
+  .turn-response ul, .turn-response ol { padding-left: 20px; margin-bottom: 6px; }
+  .turn-response li { margin-bottom: 2px; }
+  .turn-response code { background: rgba(110,118,129,0.15); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  .turn-response pre { background: var(--bg); padding: 8px 10px; border-radius: 5px; overflow-x: auto; font-size: 11px; margin-bottom: 6px; }
+  .turn-response strong { color: var(--text); }
+  /* Inline error shown in turn */
+  .turn-error-inline { color: var(--red); font-size: 11px; padding: 3px 0; font-family: monospace; }
+  /* Live progress indicator inside turn */
+  .turn-progress { color: var(--muted); font-size: 11px; padding: 3px 0; font-style: italic; }
+
+  /* Artifacts panel (Level 1 — always visible when files changed) */
+  .artifacts-panel { margin-top: 8px; background: rgba(63,185,80,0.05);
+    border: 1px solid rgba(63,185,80,0.2); border-radius: 6px; overflow: hidden; }
+  .artifacts-header { display: flex; align-items: center; gap: 6px; padding: 5px 10px;
+    font-size: 11px; color: var(--green); font-weight: 600; cursor: pointer;
+    background: rgba(63,185,80,0.08); user-select: none; }
+  .artifacts-list { padding: 5px 10px 6px; display: flex; flex-direction: column; gap: 2px; }
+  .artifact-item { font-family: monospace; font-size: 11px; color: var(--muted); }
+  .artifact-op { color: var(--green); margin-right: 6px; font-weight: 600; }
+
   .turn-header {
     display: flex;
     justify-content: space-between;
@@ -1175,18 +1232,18 @@ async function resetUsage() {
 setTimeout(fetchLimits, 1500);
 // Society Agent end
 
-// Society Agent - Unified turn management for proper message ordering
-let currentTurnEl = null; // Container for current agent turn
-let currentTextEl = null; // Current text streaming element within the turn
-let turnToolsContainer = null; // Container for tools within current turn
+// Society Agent - Three-level turn management
+let currentTurnEl = null;        // container for current agent turn
+let currentTextEl = null;        // compat ref
+let turnToolsContainer = null;   // .turn-content inside current turn
+let traceDrawerEl = null;        // <details class="trace-drawer"> in current turn
+let turnChangedFiles = [];       // files changed this turn (for artifacts)
+let lastStreamedText = '';       // agent text captured before each tool call (WHY)
 
 function createAgentTurn(agentId, agentName) {
-  // End previous turn if exists
-  if (currentTurnEl) {
-    currentTurnEl.classList.add('completed');
-  }
-  
+  if (currentTurnEl) finalizeTurnOutcome(currentTurnEl, lastStreamedText);
   const displayName = agentName || agentId || 'Agent';
+  const safeId = (agentId || '').replace(/[^a-z0-9_-]/gi, '_');
   const turn = document.createElement('div');
   turn.className = 'agent-turn';
   turn.dataset.turnId = agentId || '';
@@ -1194,15 +1251,57 @@ function createAgentTurn(agentId, agentName) {
     <div class="turn-header">
       <span class="turn-agent">${escapeHtml(displayName)}</span>
       <span class="turn-time">${new Date().toLocaleTimeString()}</span>
+      <span class="outcome-badge outcome-running" id="turn-badge-${safeId}">⏳ Running</span>
     </div>
     <div class="turn-content"></div>
-    <div class="turn-summary" style="display:none;"></div>
+    <details class="trace-drawer" id="trace-${safeId}">
+      <summary>⚙️ <span class="trace-count">0 operations</span> — click to inspect</summary>
+      <div class="trace-list"></div>
+    </details>
   `;
   document.getElementById('messages').appendChild(turn);
   currentTurnEl = turn;
   turnToolsContainer = turn.querySelector('.turn-content');
+  traceDrawerEl = turn.querySelector('.trace-drawer');
+  turnChangedFiles = [];
+  lastStreamedText = '';
   scrollToBottom();
-  return agentId || turn;
+  return agentId || safeId;
+}
+
+function finalizeTurnOutcome(turnEl, text) {
+  if (!turnEl) return;
+  turnEl.classList.add('completed');
+  const badge = turnEl.querySelector('.outcome-badge');
+  if (!badge) return;
+  const t = text || '';
+  let cls, label;
+  if (/\*\*done[:\*]/i.test(t) || /completed successfully/i.test(t)) {
+    cls = 'outcome-success'; label = '✓ Done';
+  } else if (/\*\*next[:\*]/i.test(t) || /in progress/i.test(t)) {
+    cls = 'outcome-partial'; label = '→ In Progress';
+  } else if (/❌/.test(t) || /\bfailed\b/i.test(t)) {
+    cls = 'outcome-failed'; label = '✗ Failed';
+  } else if (!t) { badge.style.display = 'none'; return;
+  } else { badge.style.display = 'none'; return; }
+  badge.className = `outcome-badge ${cls}`;
+  badge.textContent = label;
+}
+
+function addArtifactsPanel(turnEl, files) {
+  const uniq = [...new Set(files)];
+  if (!uniq.length || !turnEl) return;
+  const content = turnEl.querySelector('.turn-content');
+  if (!content) return;
+  const panel = document.createElement('div');
+  panel.className = 'artifacts-panel';
+  panel.innerHTML = `
+    <div class="artifacts-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">
+      📎 ${uniq.length} file${uniq.length!==1?'s':''} changed
+    </div>
+    <div class="artifacts-list">${uniq.map(f=>`<div class="artifact-item"><span class="artifact-op">±</span>${escapeHtml(f)}</div>`).join('')}</div>
+  `;
+  content.appendChild(panel);
 }
 
 function addThinkingToTurn(text) {
@@ -1223,119 +1322,103 @@ function addThinkingToTurn(text) {
   scrollToBottom();
 }
 
-function addToolCardToTurn(toolName, input, status, result, duration) {
-  if (!turnToolsContainer) {
-    // No turn active - create one
-    createAgentTurn('Agent');
-  }
-  
-  // For 'started' status - create new card
-  // For 'completed'/'error' - try to update existing card for this tool
-  const toolKey = `${toolName}-${JSON.stringify(input || {}).substring(0, 50)}`;
-  
-  const statusIcon = {
-    'started': '⏳',
-    'completed': '✅',
-    'error': '❌'
-  }[status] || '🔧';
-  
-  const statusClass = status === 'error' ? 'tool-error' : status === 'completed' ? 'tool-success' : 'tool-running';
-  
-  // Format tool input nicely - show what's happening
-  let inputDisplay = '';
-  let toolLabel = toolName.replace(/_/g, ' ');
-  
-  if (toolName === 'read_file' || toolName === 'read_project_file') {
-    toolLabel = 'Read File';
-    inputDisplay = input?.path || input?.relativePath || '';
-  } else if (toolName === 'write_file' || toolName === 'write_project_file') {
-    toolLabel = 'Write File';
-    inputDisplay = input?.path || input?.relativePath || '';
-  } else if (toolName === 'edit_file' || toolName === 'edit_project_file') {
-    toolLabel = 'Edit File';
-    inputDisplay = input?.path || input?.relativePath || '';
-  } else if (toolName === 'run_command') {
-    toolLabel = 'Run Command';
-    inputDisplay = (input?.command || '').substring(0, 80);
-  } else if (toolName === 'delegate_task') {
-    toolLabel = 'Delegate';
-    inputDisplay = `→ ${input?.agent_id}: ${(input?.task || '').substring(0, 60)}...`;
-  } else if (toolName === 'list_files' || toolName === 'list_project_files') {
-    toolLabel = 'List Files';
-    inputDisplay = input?.path || '.';
-  } else if (toolName === 'search_files' || toolName === 'search_project') {
-    toolLabel = 'Search';
-    inputDisplay = input?.query || input?.pattern || '';
-  } else {
-    inputDisplay = typeof input === 'string' ? input.substring(0, 80) : JSON.stringify(input || {}).substring(0, 80);
-  }
-  
-  // If completed/error, try to update existing 'started' card
+// Resolve tool target label from input
+function toolTarget(name, inp) {
+  if (!inp) return '';
+  if (inp.path) return inp.path;
+  if (inp.relativePath) return inp.relativePath;
+  if (inp.command) return inp.command.substring(0, 70);
+  if (inp.query) return inp.query.substring(0, 60);
+  if (inp.task) return inp.task.substring(0, 50);
+  if (inp.agent_id) return `→ ${inp.agent_id}`;
+  return JSON.stringify(inp).substring(0, 60);
+}
+
+const TOOL_ICONS = {
+  run_command:'⚡', read_file:'📖', read_project_file:'📖',
+  write_file:'✏️', write_project_file:'✏️', patch_file:'✏️',
+  edit_file:'✏️', edit_project_file:'✏️',
+  list_files:'📁', list_project_files:'📁', list_dir:'📁',
+  search_in_files:'🔍', find_files:'🔍', grep_search:'🔍',
+  http_request:'🌐', delete_file:'🗑️',
+  git_status:'📊', git_diff:'📊',
+  delegate_task:'📤', send_message:'💬', ask_agent:'💬',
+  spawn_worker:'🤖', create_task:'📋',
+  complete_task:'✅', fail_task:'❌', claim_task:'🎯',
+  report_to_supervisor:'📨',
+};
+
+function addTraceItem(toolName, input, status, result, duration, why) {
+  if (!traceDrawerEl) return null;
+  const traceList = traceDrawerEl.querySelector('.trace-list');
+  if (!traceList) return null;
+  const toolKey = `${toolName}-${JSON.stringify(input||{}).substring(0,50)}`;
+  const icon = TOOL_ICONS[toolName] || '🔧';
+  const target = toolTarget(toolName, input);
+
+  // Update existing running item on completion
   if (status === 'completed' || status === 'error') {
-    const existingCards = turnToolsContainer.querySelectorAll('.tool-card.tool-running');
-    for (const card of existingCards) {
-      if (card.dataset.toolKey === toolKey) {
-        // Update this card
-        card.className = `tool-card ${statusClass}`;
-        card.querySelector('.tool-icon').textContent = statusIcon;
+    for (const el of traceList.querySelectorAll('.trace-running')) {
+      if (el.dataset.toolKey === toolKey) {
+        el.classList.remove('trace-running');
+        el.classList.add(status === 'error' ? 'trace-error' : 'trace-success');
+        const ic = el.querySelector('.trace-item-icon');
+        if (ic) ic.textContent = status === 'error' ? '✗' : '✓';
         if (duration) {
-          const durEl = card.querySelector('.tool-duration');
-          if (durEl) durEl.textContent = `${duration}ms`;
-          else card.querySelector('.tool-header').insertAdjacentHTML('beforeend', `<span class="tool-duration">${duration}ms</span>`);
+          let d = el.querySelector('.trace-item-duration');
+          if (!d) { d = document.createElement('span'); d.className = 'trace-item-duration'; el.querySelector('.trace-item-header').appendChild(d); }
+          d.textContent = `${duration}ms`;
         }
-        if (result) {
-          let resultEl = card.querySelector('.tool-result');
-          if (!resultEl) {
-            resultEl = document.createElement('div');
-            resultEl.className = 'tool-result';
-            card.appendChild(resultEl);
-          }
-          resultEl.className = `tool-result ${result.startsWith('❌') ? 'result-error' : ''}`;
-          resultEl.textContent = result.substring(0, 150) + (result.length > 150 ? '...' : '');
+        if (status === 'error' && result) {
+          const e2 = document.createElement('div');
+          e2.className = 'trace-item-error-out';
+          e2.textContent = result.replace(/^❌\s*/,'').substring(0, 300);
+          e2.title = 'Click to expand';
+          e2.onclick = () => e2.classList.toggle('expanded');
+          el.appendChild(e2);
         }
-        scrollToBottom();
-        return card;
+        return el;
       }
     }
   }
-  
-  // Create new card
-  const card = document.createElement('div');
-  card.className = `tool-card ${statusClass}`;
-  card.dataset.toolKey = toolKey;
-  card.innerHTML = `
-    <div class="tool-header">
-      <span class="tool-icon">${statusIcon}</span>
-      <span class="tool-name">${escapeHtml(toolLabel)}</span>
-      ${duration ? `<span class="tool-duration">${duration}ms</span>` : ''}
-    </div>
-    <div class="tool-input">${escapeHtml(inputDisplay)}</div>
-    ${result ? `<div class="tool-result ${result.startsWith('❌') ? 'result-error' : ''}">${escapeHtml(result.substring(0, 150))}${result.length > 150 ? '...' : ''}</div>` : ''}
-  `;
-  
-  // Insert BEFORE any streaming text element, so tools appear in order above response
-  if (currentTextEl && currentTextEl.parentNode === turnToolsContainer) {
-    turnToolsContainer.insertBefore(card, currentTextEl);
-  } else {
-    turnToolsContainer.appendChild(card);
-  }
-  scrollToBottom();
-  return card;
+
+  // Create new item
+  const item = document.createElement('div');
+  item.dataset.toolKey = toolKey;
+  item.className = `trace-item trace-${status==='error'?'error':status==='completed'?'success':'running'}`;
+  const dspIcon = status==='completed' ? '✓' : status==='error' ? '✗' : icon;
+  const whyHtml = why ? `<div class="trace-item-why">→ ${escapeHtml(why.substring(0,100))}</div>` : '';
+  const errHtml = (status==='error' && result)
+    ? `<div class="trace-item-error-out" title="Click to expand" onclick="this.classList.toggle('expanded')">${escapeHtml(result.replace(/^❌\s*/,'').substring(0,300))}</div>` : '';
+  item.innerHTML = `
+    <div class="trace-item-header">
+      <span class="trace-item-icon">${dspIcon}</span>
+      <span class="trace-item-name">${escapeHtml(toolName.replace(/_/g,' '))}</span>
+      <span class="trace-item-target">${escapeHtml(target)}</span>
+    </div>${whyHtml}${errHtml}`;
+  traceList.appendChild(item);
+  const countEl = traceDrawerEl.querySelector('.trace-count');
+  if (countEl) { const n = traceList.querySelectorAll('.trace-item').length; countEl.textContent = `${n} operation${n!==1?'s':''}`; }
+  return item;
+}
+
+// Legacy shim — delegates to trace system
+function addToolCardToTurn(toolName, input, status, result, duration) {
+  addTraceItem(toolName, input, status, result, duration, null);
 }
 
 function completeTurn(summary) {
   if (!currentTurnEl) return;
-  
-  if (summary) {
-    const summaryEl = currentTurnEl.querySelector('.turn-summary');
-    summaryEl.style.display = 'block';
-    summaryEl.innerHTML = `<div class="summary-label">📋 Summary</div><div class="summary-text">${formatMarkdown(summary)}</div>`;
-  }
-  
+  finalizeTurnOutcome(currentTurnEl, lastStreamedText);
+  if (turnChangedFiles.length > 0) addArtifactsPanel(currentTurnEl, turnChangedFiles);
   currentTurnEl.classList.add('completed');
   currentTurnEl = null;
   currentTextEl = null;
+  currentStreamEl = null;
   turnToolsContainer = null;
+  traceDrawerEl = null;
+  turnChangedFiles = [];
+  lastStreamedText = '';
   scrollToBottom();
 }
 
@@ -1344,67 +1427,63 @@ let streamDidFire = false;
 let lastStreamChunk = ''; // Detect repeated chunks
 let repeatCount = 0;
 socket.on('agent-message', (data) => {
-  // Society Agent - Filter to only show messages for selected agent
-  // If an agent is selected and this message is from a different agent, ignore it
+  // Filter to selected agent only
   if (selectedAgentId && data.agentId && data.agentId !== selectedAgentId) {
-    // Log it but don't display in chat
     addLog('info', `[${data.agentName || data.agentId}] ${(data.message || '').substring(0, 50)}...`);
     return;
   }
-  
+
   if (data.isStreaming) {
-    // Detect repeating text (model stuck in loop)
+    // Dedup repeated chunks
     if (data.message === lastStreamChunk) {
       repeatCount++;
-      if (repeatCount > 3) {
-        console.warn('Repeated streaming chunk detected, ignoring');
-        return; // Skip duplicate
-      }
-    } else {
-      lastStreamChunk = data.message;
-      repeatCount = 0;
-    }
-    
+      if (repeatCount > 3) return;
+    } else { lastStreamChunk = data.message; repeatCount = 0; }
+
     streamDidFire = true;
-    
-    // Remove progress indicator when response starts
-    if (lastToolUpdate) {
-      lastToolUpdate.remove();
-      lastToolUpdate = null;
+
+    // Remove tool progress indicator when response starts
+    if (currentTurnEl) {
+      const prog = currentTurnEl.querySelector('.turn-progress');
+      if (prog) prog.remove();
     }
-    toolCount = 0;
-    
-    // Simple streaming - just show the response
+
+    // ── Level 1: stream text INTO the current agent turn ──
     if (!currentStreamEl) {
       removeTyping();
-      const msgDiv = document.createElement('div');
-      msgDiv.className = 'message assistant';
-      const senderName = data.agentName || 'Society Agent';
-      msgDiv.innerHTML = `<div class="sender">${escapeHtml(senderName)}</div><div class="content"></div>`;
-      document.getElementById('messages').appendChild(msgDiv);
-      currentStreamEl = msgDiv.querySelector('.content');
+      if (!currentTurnEl) createAgentTurn(data.agentId, data.agentName);
+      const respDiv = document.createElement('div');
+      respDiv.className = 'turn-response';
+      turnToolsContainer.appendChild(respDiv);
+      currentStreamEl = respDiv;
+      currentTextEl = respDiv; // compat
     }
-    
+
     streamText += data.message;
+    lastStreamedText = streamText; // track for WHY + outcome detection
     currentStreamEl.innerHTML = formatMarkdown(streamText);
     scrollToBottom();
+
   } else if (data.isDone) {
-    // Streaming complete
+    // Finalize rendered text
     if (currentStreamEl && streamText) {
       currentStreamEl.innerHTML = formatMarkdown(streamText);
     }
-    
-    // Clean up
-    if (lastToolUpdate) {
-      lastToolUpdate.remove();
-      lastToolUpdate = null;
+    // Outcome badge + artifacts
+    if (currentTurnEl) {
+      finalizeTurnOutcome(currentTurnEl, streamText);
+      if (turnChangedFiles.length > 0) addArtifactsPanel(currentTurnEl, turnChangedFiles);
+      currentTurnEl.classList.add('completed');
     }
-    toolCount = 0;
-    
+    // Clean up
     currentStreamEl = null;
     currentTextEl = null;
     currentTurnEl = null;
+    turnToolsContainer = null;
+    traceDrawerEl = null;
+    turnChangedFiles = [];
     streamText = '';
+    lastStreamedText = '';
     isStreaming = false;
     lastStreamChunk = '';
     repeatCount = 0;
@@ -1450,31 +1529,57 @@ function stopAgent() {
 }
 // Society Agent end
 
-// Society Agent - Show tool executions as simple progress (not cards)
+// Society Agent - Tool executions → Level 3 trace drawer
 let toolCount = 0;
-let lastToolUpdate = null;
+let lastToolUpdate = null; // compat ref, unused now
 socket.on('tool-execution', (data) => {
-  // Only track for selected agent
-  if (selectedAgentId && data.agentId && data.agentId !== selectedAgentId) {
-    return;
+  if (selectedAgentId && data.agentId && data.agentId !== selectedAgentId) return;
+
+  // Ensure a turn exists
+  if (!currentTurnEl && data.status === 'started') {
+    createAgentTurn(data.agentId, data.agentName);
   }
-  
-  // Just count tools, show simple progress
+
+  // WHY: infer from the last line of streamed text before this tool call
+  let why = null;
+  if (data.status === 'started' && lastStreamedText) {
+    const lines = lastStreamedText.trim().split('\n').filter(l => l.trim());
+    const last = (lines[lines.length - 1] || '').trim();
+    // Extract [→ reason] annotation if agent included it
+    const annot = last.match(/\[→\s*([^\]]{3,80})\]/);
+    if (annot) why = annot[1];
+    else if (last.length > 5 && last.length < 120 && !last.startsWith('#')) why = last.replace(/^[-*]\s*/, '').substring(0, 80);
+  }
+
   if (data.status === 'started') {
     toolCount++;
-    // Update or create progress indicator
-    if (!lastToolUpdate) {
-      lastToolUpdate = document.createElement('div');
-      lastToolUpdate.className = 'tool-progress';
-      lastToolUpdate.style.cssText = 'color:var(--muted);font-size:12px;padding:4px 8px;';
-      const messages = document.getElementById('messages');
-      messages.appendChild(lastToolUpdate);
+    addTraceItem(data.toolName, data.toolInput, 'started', null, null, why);
+    // Show live progress inside turn (Level 1 — minimal, replaces firehose)
+    if (currentTurnEl) {
+      let prog = currentTurnEl.querySelector('.turn-progress');
+      if (!prog) {
+        prog = document.createElement('div');
+        prog.className = 'turn-progress';
+        turnToolsContainer && turnToolsContainer.appendChild(prog);
+      }
+      prog.textContent = `⏳ ${data.toolName.replace(/_/g, ' ')}…`;
     }
-    lastToolUpdate.innerHTML = `⏳ Working... (${data.toolName.replace(/_/g, ' ')})`;
     scrollToBottom();
-  } else if (data.status === 'error') {
-    // Only show errors
-    addMessage('system', `❌ Error in ${data.toolName}: ${(data.result || 'failed').substring(0, 100)}`);
+  } else {
+    addTraceItem(data.toolName, data.toolInput, data.status, data.result, data.duration, null);
+    // Remove progress indicator
+    if (currentTurnEl) {
+      const prog = currentTurnEl.querySelector('.turn-progress');
+      if (prog) prog.remove();
+    }
+    // ── Level 1: show errors inline, hide successes ──
+    if (data.status === 'error' && currentTurnEl) {
+      const errDiv = document.createElement('div');
+      errDiv.className = 'turn-error-inline';
+      errDiv.textContent = `✗ ${data.toolName}: ${(data.result || '').replace(/^❌\s*/, '').substring(0, 120)}`;
+      turnToolsContainer && turnToolsContainer.appendChild(errDiv);
+      scrollToBottom();
+    }
   }
 });
 // Society Agent end
@@ -1588,10 +1693,15 @@ socket.on('agent-progress', (data) => {
   // Don't spam the chat with every progress update, just log it
 });
 
-// File creation events
+// File creation events — track for per-turn artifacts panel
 socket.on('file-created', (data) => {
   addLog('info', `File created: ${data.relativePath} (${formatSize(data.size)})`);
-  addMessage('system', `&#128196; Created: ${data.relativePath} (${formatSize(data.size)})`);
+  // Accumulate for artifacts panel instead of noisy addMessage
+  if (currentTurnEl && data.relativePath) {
+    turnChangedFiles.push(data.relativePath);
+  } else {
+    addMessage('system', `&#128196; Created: ${data.relativePath} (${formatSize(data.size)})`);
+  }
   refreshFiles();
 });
 

@@ -285,6 +285,13 @@ Example:
 - Don't echo tool results — user sees tool cards in UI; just summarize what you learned/did
 - Don't create status/progress/report files — communicate directly in chat
 
+## WHY labels (required before tool calls)
+Before running a tool, state intent inline: "[→ reason]" on the same line as your reasoning.
+Examples:
+- I'll read the config file [→ check CORS origins include localhost]
+- Running tsc [→ verify no type errors remain after edit]
+- Checking processes [→ confirm dev server is still running on port 3000]
+
 ## Verification (mandatory)
 - Prove servers work with curl before claiming "server running"
 - Run tsc/compiler before claiming "no errors"
