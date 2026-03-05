@@ -3358,25 +3358,70 @@ app.post("/api/projects/:projectId/agents/:agentId/reset", (req, res): void => {
 // Society Agent start - agent chat history endpoint
 /**
  * GET /api/agent/:agentId/history - Get conversation history for an agent
- * Returns messages from the live agent (if cached), plus summary if available.
+ * Returns messages from the live agent (if cached), or loads from persisted disk file.
  */
-app.get("/api/agent/:agentId/history", (req, res): void => {
+app.get("/api/agent/:agentId/history", async (req, res): Promise<void> => {
 	try {
 		const { agentId } = req.params
-		const agent = activeAgents.get(agentId)
-		if (!agent) {
-			// Agent not active — return empty with any persisted memory
-			const found = projectStore.findAgentProject(agentId)
-			const memorySummary = found?.agent.memorySummary || agentStore.get(agentId)?.memorySummary || ""
-			res.json({ messages: [], summary: "", memorySummary, active: false })
+		const projectId = req.query.projectId as string | undefined
+
+		// Try bare key first (legacy/persistent agents), then composite key (project agents)
+		const found = projectStore.findAgentProject(agentId, projectId)
+		const compositeKey = found ? `${found.project.id}:${agentId}` : null
+		const agent = activeAgents.get(agentId) || (compositeKey ? activeAgents.get(compositeKey) : undefined)
+
+		if (agent) {
+			res.json({
+				messages: agent.getHistory(),
+				summary: agent.getSummary(),
+				memorySummary: "",
+				active: true,
+			})
 			return
 		}
-		res.json({
-			messages: agent.getHistory(),
-			summary: agent.getSummary(),
-			memorySummary: "",
-			active: true,
-		})
+
+		// Agent not in memory — try to load from persisted disk history
+		const memorySummary = found?.agent.memorySummary || agentStore.get(agentId)?.memorySummary || ""
+		if (found) {
+			const agentWorkspace = projectStore.agentHomeDir(found.project.id, agentId)
+			const historyFile = path.join(agentWorkspace, ".history", `${agentId}.json`)
+			try {
+				const raw = await fs.promises.readFile(historyFile, "utf-8")
+				const parsed = JSON.parse(raw)
+				res.json({
+					messages: parsed.messages || [],
+					summary: parsed.summary || "",
+					memorySummary,
+					active: false,
+				})
+				return
+			} catch (fileErr: any) {
+				if (fileErr.code !== "ENOENT") {
+					log.warn(`Failed to read persisted history for ${agentId}: ${fileErr}`)
+				}
+			}
+		} else {
+			// Legacy persistent agent — try legacy path
+			const legacyProfile = agentStore.get(agentId)
+			if (legacyProfile) {
+				const agentWorkspace = path.join(getWorkspacePath(), "projects", (legacyProfile as any).workspaceFolder || agentId)
+				const historyFile = path.join(agentWorkspace, ".history", `${agentId}.json`)
+				try {
+					const raw = await fs.promises.readFile(historyFile, "utf-8")
+					const parsed = JSON.parse(raw)
+					res.json({
+						messages: parsed.messages || [],
+						summary: parsed.summary || "",
+						memorySummary,
+						active: false,
+					})
+					return
+				} catch { /* ignore */ }
+			}
+		}
+
+		// No persisted history found
+		res.json({ messages: [], summary: "", memorySummary, active: false })
 	} catch (error) {
 		res.status(500).json({ error: String(error) })
 	}
@@ -3384,21 +3429,29 @@ app.get("/api/agent/:agentId/history", (req, res): void => {
 
 /**
  * DELETE /api/agent/:agentId/history - Clear conversation history for an agent
- * Clears in-memory history and persisted memory summary.
+ * Clears in-memory history, persisted memory summary, and persisted disk history file.
  */
-app.delete("/api/agent/:agentId/history", (req, res): void => {
+app.delete("/api/agent/:agentId/history", async (req, res): Promise<void> => {
 	try {
 		const { agentId } = req.params
-		const agent = activeAgents.get(agentId)
+		const projectId = req.query.projectId as string | undefined
+		const found = projectStore.findAgentProject(agentId, projectId)
+		const compositeKey = found ? `${found.project.id}:${agentId}` : null
+		const agent = activeAgents.get(agentId) || (compositeKey ? activeAgents.get(compositeKey) : undefined)
 		if (agent) {
 			agent.clearHistory()
 		}
-		// Also clear persisted memory
-		const found = projectStore.findAgentProject(agentId)
+		// Clear persisted memory summary
 		if (found) {
 			projectStore.resetAgentMemory(found.project.id, agentId)
 		} else {
 			agentStore.updateMemory(agentId, "")
+		}
+		// Delete persisted history file from disk
+		if (found) {
+			const agentWorkspace = projectStore.agentHomeDir(found.project.id, agentId)
+			const historyFile = path.join(agentWorkspace, ".history", `${agentId}.json`)
+			try { await fs.promises.unlink(historyFile) } catch { /* ignore if not present */ }
 		}
 		io.emit("agent-reset", { agentId, timestamp: Date.now() })
 		log.info(`Cleared history for agent: ${agentId}`)
@@ -8833,6 +8886,11 @@ This ensures files are automatically saved in your project folder. Do NOT just d
 				timestamp: Date.now() 
 			})
 		},
+		// Society Agent end
+		// Society Agent start - persist chat history to disk so page refreshes and server restarts restore it
+		persistHistory: true,
+		historyDir: path.join(projectDir, ".history"),
+		backupsEnabled: true,
 		// Society Agent end
 	})
 

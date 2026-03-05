@@ -2266,7 +2266,8 @@ setTimeout(fetchAgentUsage, 500);
 // Society Agent start - load history on page open
 async function loadChatHistory() {
   try {
-    const res = await fetch(`${API}/api/agent/${AGENT_ID}/history`);
+    const qs = PROJECT_ID ? `?projectId=${encodeURIComponent(PROJECT_ID)}` : '';
+    const res = await fetch(`${API}/api/agent/${AGENT_ID}/history${qs}`);
     if (!res.ok) return;
     const data = await res.json();
 
@@ -2300,7 +2301,8 @@ async function loadChatHistory() {
 async function clearChat() {
   if (!confirm('Clear all conversation history for this agent?')) return;
   try {
-    const res = await fetch(`${API}/api/agent/${AGENT_ID}/history`, { method: 'DELETE' });
+    const qs = PROJECT_ID ? `?projectId=${encodeURIComponent(PROJECT_ID)}` : '';
+    const res = await fetch(`${API}/api/agent/${AGENT_ID}/history${qs}`, { method: 'DELETE' });
     const data = await res.json();
     if (data.success) {
       document.getElementById('messages').innerHTML =
