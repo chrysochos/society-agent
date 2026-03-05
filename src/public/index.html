@@ -3351,6 +3351,19 @@ document.addEventListener('DOMContentLoaded', () => {
   if (modelSelect) {
     modelSelect.addEventListener('change', updateModelCost);
   }
+
+  // Society Agent start - Block browser shortcuts when terminal tab is active.
+  // window capture fires BEFORE the browser acts on Ctrl+W/T/N etc.
+  const TERM_BLOCKED = new Set(['w','t','n','k','l','u','h','j']);
+  window.addEventListener('keydown', (e) => {
+    if (!e.ctrlKey || e.altKey || e.metaKey) return;
+    if (!TERM_BLOCKED.has(e.key.toLowerCase())) return;
+    const pane = document.getElementById('paneTerminal');
+    if (pane && pane.classList.contains('active')) {
+      e.preventDefault();
+    }
+  }, true);
+  // Society Agent end
 });
 
 async function saveSettings() {
@@ -4573,36 +4586,19 @@ function initTerminal() {
     }
   });
 
-  // Society Agent start - Capture browser-intercepted keys so they reach the terminal
-  // Ctrl+W (browser close tab), Ctrl+T (new tab), Ctrl+N (new window),
-  // Ctrl+K (address bar on some browsers), Ctrl+L, Ctrl+U, Ctrl+H (history), Ctrl+J (downloads)
+  // Society Agent start - Block browser shortcuts (Ctrl+W etc) when terminal tab is visible
+  // Use capture phase at window level so it fires before the browser acts on the key
   term.attachCustomKeyEventHandler((e) => {
     if (e.ctrlKey && !e.altKey && !e.metaKey) {
       const blockedKeys = ['w','t','n','k','l','u','h','j'];
       if (blockedKeys.includes(e.key.toLowerCase())) {
         e.preventDefault();
-        return true; // let xterm handle it
+        return true;
       }
     }
     return true;
   });
-
-  // Also capture at DOM level (before browser default fires) when terminal is focused
-  let termHasFocus = false;
-  term.onKey(() => { termHasFocus = true; }); // any key activity means terminal is active
-  container.addEventListener('focusin', () => { termHasFocus = true; }, true);
-  container.addEventListener('focusout', () => { termHasFocus = false; }, true);
-  term.element?.addEventListener('mousedown', () => { termHasFocus = true; });
-
-  document.addEventListener('keydown', (e) => {
-    if (!termHasFocus) return;
-    if (e.ctrlKey && !e.altKey && !e.metaKey) {
-      const blockedKeys = ['w','t','n','k','l','u','h','j'];
-      if (blockedKeys.includes(e.key.toLowerCase())) {
-        e.preventDefault();
-      }
-    }
-  }, true); // capture phase
+  // Society Agent end
   // Society Agent end
 }
 
