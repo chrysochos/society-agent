@@ -4572,6 +4572,33 @@ function initTerminal() {
       socket.emit('terminal-resize', { cols, rows });
     }
   });
+
+  // Society Agent start - Capture browser-intercepted keys so they reach the terminal
+  // Ctrl+W (browser close tab), Ctrl+T (new tab), Ctrl+N (new window),
+  // Ctrl+K (address bar on some browsers), Ctrl+L, Ctrl+U, Ctrl+H (history), Ctrl+J (downloads)
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.ctrlKey && !e.altKey && !e.metaKey) {
+      const blockedKeys = ['w','t','n','k','l','u','h','j'];
+      if (blockedKeys.includes(e.key.toLowerCase())) {
+        e.preventDefault();
+        return true; // let xterm handle it
+      }
+    }
+    return true;
+  });
+
+  // Also capture at DOM level (before browser default fires) when terminal is focused
+  document.addEventListener('keydown', (e) => {
+    if (!termConnected) return;
+    if (!container.contains(document.activeElement)) return;
+    if (e.ctrlKey && !e.altKey && !e.metaKey) {
+      const blockedKeys = ['w','t','n','k','l','u','h','j'];
+      if (blockedKeys.includes(e.key.toLowerCase())) {
+        e.preventDefault();
+      }
+    }
+  }, true); // capture phase
+  // Society Agent end
 }
 
 function connectTerminal() {
