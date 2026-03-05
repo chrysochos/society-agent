@@ -3354,7 +3354,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Society Agent start - Block browser shortcuts when terminal tab is active.
   // window capture fires BEFORE the browser acts on Ctrl+W/T/N etc.
-  const TERM_BLOCKED = new Set(['w','t','n','k','l','u','h','j']);
+  // NOTE: Ctrl+W cannot be blocked in Chrome/Firefox (browser security restriction).
+  // Users should use Ctrl+F instead (which CAN be blocked) for nano search.
+  const TERM_BLOCKED = new Set(['f','t','n','k','l','u','h','j']);
   window.addEventListener('keydown', (e) => {
     if (!e.ctrlKey || e.altKey || e.metaKey) return;
     if (!TERM_BLOCKED.has(e.key.toLowerCase())) return;
