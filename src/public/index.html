@@ -4588,9 +4588,14 @@ function initTerminal() {
   });
 
   // Also capture at DOM level (before browser default fires) when terminal is focused
+  let termHasFocus = false;
+  term.onKey(() => { termHasFocus = true; }); // any key activity means terminal is active
+  container.addEventListener('focusin', () => { termHasFocus = true; }, true);
+  container.addEventListener('focusout', () => { termHasFocus = false; }, true);
+  term.element?.addEventListener('mousedown', () => { termHasFocus = true; });
+
   document.addEventListener('keydown', (e) => {
-    if (!termConnected) return;
-    if (!container.contains(document.activeElement)) return;
+    if (!termHasFocus) return;
     if (e.ctrlKey && !e.altKey && !e.metaKey) {
       const blockedKeys = ['w','t','n','k','l','u','h','j'];
       if (blockedKeys.includes(e.key.toLowerCase())) {
