@@ -470,6 +470,7 @@
   .agent-selector select { background: var(--bg); border: 1px solid var(--border); color: var(--text);
     padding: 4px 8px; border-radius: 4px; font-size: 12px; min-width: 140px; }
   .agent-selector .agent-info { color: var(--muted); font-size: 11px; margin-left: 4px; }
+  .agent-selector .project-badge { display:inline-block; background:var(--border); color:var(--text); font-size:11px; font-weight:600; padding:2px 8px; border-radius:10px; margin-left:6px; letter-spacing:0.02em; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle; }
   .agent-selector .agent-indicator { display: inline-block; width: 6px; height: 6px; border-radius: 50%;
     margin-right: 4px; }
   .agent-selector .agent-indicator.active { background: var(--green); }
@@ -3798,7 +3799,7 @@ function onAgentChange() {
   if (selectedAgentId) {
     const agent = allProjectAgents.find(a => (a.projectId + ':' + a.id) === selectedAgentId);
     if (agent) {
-      addMessage('system', `Now chatting with <b>${escapeHtml(agent.name)}</b> (${escapeHtml(agent.role)})`);
+      addMessage('system', `Now chatting with <b>${escapeHtml(agent.name)}</b> &mdash; <span style="color:var(--accent)">${escapeHtml(agent.projectName)}</span>`);
     }
   } else {
     addMessage('system', 'Select an agent from the dropdown above to start chatting');
@@ -3820,7 +3821,7 @@ function onAgentChange() {
   }
   const agent = allProjectAgents.find(a => (a.projectId + ':' + a.id) === selectedAgentId);
   if (agent) {
-    info.innerHTML = `<span style="color:var(--muted);font-size:10px">${escapeHtml(agent.projectName)}</span> · ${escapeHtml((agent.capabilities || []).slice(0, 3).join(', '))}`;
+    info.innerHTML = `<span class="project-badge" title="${escapeHtml(agent.projectName)}">📂 ${escapeHtml(agent.projectName)}</span>`;
   }
 }
 
