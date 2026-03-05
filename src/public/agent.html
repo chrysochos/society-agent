@@ -42,6 +42,7 @@
     align-items: center; justify-content: center; font-size: 16px; background: rgba(88,166,255,0.15); }
   header .agent-title { font-size: 16px; font-weight: 600; }
   header .agent-role { font-size: 12px; color: var(--muted); }
+  header .project-badge { display:inline-block; background:rgba(88,166,255,0.15); color:#58a6ff; border:1px solid rgba(88,166,255,0.4); font-size:11px; font-weight:600; padding:1px 8px; border-radius:10px; margin-left:8px; vertical-align:middle; }
   header .agent-caps { display: flex; gap: 4px; margin-left: 8px; }
   header .cap-tag { font-size: 10px; padding: 1px 6px; border-radius: 8px;
     background: rgba(88,166,255,0.1); color: var(--accent); border: 1px solid rgba(88,166,255,0.2); }
@@ -891,8 +892,22 @@ async function loadAgent() {
     const termCwd = document.getElementById('termCwd');
 
     if (avatar) avatar.innerHTML = !agentProfile.ephemeral ? '&#128081;' : '&#129302;'; // Society Agent - Use !ephemeral
-    if (title) title.textContent = agentProfile.name;
+    if (title) {
+      title.textContent = agentProfile.name;
+      if (agentProfile.projectName) {
+        const badge = document.createElement('span');
+        badge.className = 'project-badge';
+        badge.textContent = '📂 ' + agentProfile.projectName;
+        title.appendChild(badge);
+      }
+    }
     if (role) role.textContent = agentProfile.role;
+
+    // Update back link with actual project name
+    if (agentProfile.projectName) {
+      const backLink = document.querySelector('.back-link');
+      if (backLink) backLink.textContent = '\u2190 ' + agentProfile.projectName;
+    }
     if (caps) caps.innerHTML = (agentProfile.capabilities || []).map(c =>
       `<span class="cap-tag">${esc(c)}</span>`).join('');
     if (stats) stats.innerHTML =
