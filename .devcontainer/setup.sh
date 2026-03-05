@@ -5,8 +5,8 @@
 
 set -e
 
-echo "🔧 Installing network utilities..."
-apt-get update && apt-get install -y lsof iproute2
+echo "🔧 Installing network utilities and editors..."
+apt-get update && apt-get install -y lsof iproute2 nano vim less
 
 echo "🔧 Configuring git safe directory..."
 git config --global --add safe.directory /home/john/projects/society-agent

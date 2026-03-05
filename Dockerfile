@@ -3,6 +3,7 @@ FROM node:20-slim
 # Install system dependencies permanently in the image
 RUN apt-get update && apt-get install -y \
     git curl wget jq sqlite3 \
+    nano vim less \
     iputils-ping net-tools dnsutils \
     python3 python3-pip python3-venv \
     build-essential make g++ \
