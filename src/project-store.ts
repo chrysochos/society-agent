@@ -945,6 +945,27 @@ When learning organically → add to KNOWLEDGE.md as playbook
 		Object.assign(agent, updates)
 		project.updatedAt = new Date().toISOString()
 		this.save()
+
+		// Society Agent start - Sync AGENTS.md header when name or role changes
+		if (updates.name !== undefined || updates.role !== undefined) {
+			try {
+				const agentDir = this.agentHomeDir(projectId, agentId)
+				const agentsFilePath = path.join(agentDir, "AGENTS.md")
+				if (fs.existsSync(agentsFilePath)) {
+					let content = fs.readFileSync(agentsFilePath, "utf-8")
+					// Update the H1 title line
+					content = content.replace(/^# .+$/m, `# ${agent.name} - Knowledge Index`)
+					// Update the Role metadata line
+					content = content.replace(/^> \*\*Role\*\*: .+$/m, `> **Role**: ${agent.role}`)
+					fs.writeFileSync(agentsFilePath, content, "utf-8")
+					log.info(`Updated AGENTS.md header for ${agent.name}`)
+				}
+			} catch (err) {
+				log.warn(`Failed to update AGENTS.md for agent ${agentId}: ${err}`)
+			}
+		}
+		// Society Agent end
+
 		return agent
 	}
 
