@@ -321,7 +321,17 @@ Examples:
 7. Register any new files in \`FILES.md\`
 8. Document any new errors (and their fixes) in \`ERRORS.md\`
 
-## Autonomous work
+## Receiving a task from your supervisor
+When a supervisor delegates work to you containing a checklist or feature list:
+1. Write all items into YOUR \`PLAN.md\` BEFORE doing any work — do not start until this is done
+2. Execute them one by one following the Work Protocol above
+3. Report back with the commit hash for each completed item:
+   > "Done. Commits: feature-name (abc1234), other-feature (def5678)"
+
+Never start implementing before writing the received tasks into your PLAN.md.
+If the task is ambiguous, write what you understood into PLAN.md and send it back for confirmation before executing.
+
+
 - Work until task is fully complete (up to 200 iterations)
 - If DESIRED_STATE.md exists, achieve it autonomously
 - Use \`report_to_supervisor\` to report: in_progress / completed / blocked / needs_info
@@ -8844,23 +8854,49 @@ This ensures files are automatically saved in your project folder. Do NOT just d
 - Ephemeral: best for one-off tasks · Persistent: best for ongoing roles with memory`
 
 	if (isSupervisor) {
-		const reportNames = directReports.map(a => `${a.id} (${a.name})`).join(", ")
+		const reportNames = directReports.map(a => `${a.id} (${a.name}, folder: ${projectStore.agentHomeDir(project.id, a.id)})`).join("\n  - ")
 		fullPrompt += `\n\n## 🔴 SUPERVISOR RULES (you have direct reports)
 
-Your direct reports: **${reportNames}**
+Your direct reports:
+  - ${reportNames}
 
-**You are a coordinator, not an implementer. Your responsibilities:**
-- Break work into clear tasks and delegate them via \`delegate_task\` or \`delegate_tasks_parallel\`
-- Write tasks in \`PLAN.md\` with acceptance criteria before delegating
-- Review results reported back by subagents
-- Update project-level \`PLAN.md\` as tasks complete
+**You are a coordinator. You plan, split, delegate — you do not implement what belongs to a subagent.**
 
-**Hard rules — never break these:**
-- ❌ NEVER write, edit, or delete files inside a subagent's folder
-- ❌ NEVER run commands on behalf of a subagent — delegate instead
-- ❌ NEVER mark a task done in PLAN.md without a commit hash from the subagent
-- ✅ Your own files live in YOUR folder only (AGENTS.md, PLAN.md, FILES.md, ERRORS.md)
-- ✅ To check subagent progress: use \`read_project_file("<subagent-folder>/PLAN.md")\` (read-only)`
+### How to delegate work (follow this every time)
+
+1. **Write your own PLAN.md first** — list the high-level deliverables you are responsible for:
+   \`\`\`
+   - [ ] Auth system (→ ${directReports[0]?.id ?? 'subagent'})
+   - [ ] Dashboard UI (→ ${directReports[1]?.id ?? directReports[0]?.id ?? 'subagent'})
+   \`\`\`
+
+2. **Delegate via message** — send each subagent their portion using \`delegate_task\`.
+   The message MUST contain a ready-to-paste task checklist, e.g.:
+   \`\`\`
+   Your tasks for this sprint:
+   - [ ] POST /api/login — returns signed JWT
+   - [ ] Auth middleware — validates JWT on protected routes
+   - [ ] Password reset flow
+
+   Definition of done per task: compile passes + git commit + PLAN.md checked off with commit hash.
+   Report back with: task name + commit hash for each.
+   \`\`\`
+
+3. **The subagent writes the checklist into its own PLAN.md** and executes.
+   You cannot write their PLAN.md — you can only send the list via message.
+
+4. **Collect results** — when a subagent reports back, extract the commit hashes
+   and mark YOUR own PLAN.md:
+   \`[x] Auth system (commits: abc1234, def5678)\`
+
+5. **Verify before marking done** — run \`git log --oneline -5\` to confirm commits exist.
+
+### Hard rules — never break these
+- ❌ NEVER write, edit, or delete any file inside a subagent's folder
+- ❌ NEVER run commands intended for a subagent — send them the task instead
+- ❌ NEVER mark your PLAN.md \`[x]\` without a commit hash from the subagent
+- ✅ Read subagent progress (read-only): \`read_project_file("<subagent-folder>/PLAN.md")\`
+- ✅ Your own files: AGENTS.md, PLAN.md, FILES.md, ERRORS.md — in YOUR folder only`
 	}
 
 	if (project.knowledge) {
