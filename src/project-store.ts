@@ -903,11 +903,103 @@ When learning organically → add to KNOWLEDGE.md as playbook
 
 `
 
+		const today = new Date().toISOString().split("T")[0]
+
+		const planTemplate = `# PLAN.md — Task Checklist
+
+> **Agent**: ${agent.name} (${agent.id})  
+> **Role**: ${agent.role}  
+
+## ⚠️ Work Protocol
+
+Before every task, follow these steps IN ORDER:
+1. Find the first unchecked \`[ ]\` item below
+2. Read all relevant files before writing anything — check FILES.md for existing files
+3. Implement in small, verifiable steps
+4. Run \`npx tsc --noEmit\` — fix all errors
+5. Run \`git add -A && git commit -m "feat: <description>"\`
+6. Mark the item \`[x]\` with the commit hash: \`[x] Task name *(commit: abc1234)*\`
+7. Report completion, then ask whether to continue
+
+## ✅ Definition of Done
+
+A task is NOT done until ALL four are true:
+- Feature works as designed (manually verified)
+- TypeScript/lint passes with zero errors
+- Git commit exists with descriptive message
+- Checkbox below is checked **with commit hash**
+
+---
+
+## 📋 Tasks
+
+- [ ] (No tasks yet — will be assigned by supervisor or user)
+`
+
+		const filesTemplate = `# FILES.md — File Ownership Registry
+
+> **Check this file BEFORE creating any new file.**  
+> If a file already exists here, EXTEND it — never create a duplicate.  
+> After creating a file, register it here immediately.
+
+## ⚠️ Rules
+- One file per purpose — never two files solving the same problem
+- Before creating: \`find . -name "pattern"\` to verify it doesn't exist
+- If replacing an old solution, delete the old file in the same commit
+
+## Registered Files
+
+| Path | Purpose | Created |
+|------|---------|----------|
+| \`AGENTS.md\` | Agent knowledge index | ${today} |
+| \`PLAN.md\` | Task checklist with commit tracking | ${today} |
+| \`FILES.md\` | This file registry | ${today} |
+| \`ERRORS.md\` | Error log and solutions | ${today} |
+`
+
+		const errorsTemplate = `# ERRORS.md — Error Log
+
+> Before debugging an error, check here first — it may already be solved.  
+> After fixing a new error, document it here for future reference.
+
+## Format
+
+\`\`\`
+### Error: <short description>
+- **Symptom**: what happened
+- **Root Cause**: why it happened
+- **Solution**: exact commands/changes that fixed it
+- **Commit**: <hash>
+\`\`\`
+
+---
+
+*(No errors logged yet)*
+`
+
 		try {
 			fs.writeFileSync(agentsFilePath, template, "utf-8")
 			log.info(`Created AGENTS.md for ${agent.name} at ${agentsFilePath}`)
+
+			const planPath = path.join(agentDir, "PLAN.md")
+			if (!fs.existsSync(planPath)) {
+				fs.writeFileSync(planPath, planTemplate, "utf-8")
+				log.info(`Created PLAN.md for ${agent.name}`)
+			}
+
+			const filesPath = path.join(agentDir, "FILES.md")
+			if (!fs.existsSync(filesPath)) {
+				fs.writeFileSync(filesPath, filesTemplate, "utf-8")
+				log.info(`Created FILES.md for ${agent.name}`)
+			}
+
+			const errorsPath = path.join(agentDir, "ERRORS.md")
+			if (!fs.existsSync(errorsPath)) {
+				fs.writeFileSync(errorsPath, errorsTemplate, "utf-8")
+				log.info(`Created ERRORS.md for ${agent.name}`)
+			}
 		} catch (err) {
-			log.warn(`Failed to create AGENTS.md for ${agent.name}: ${err}`)
+			log.warn(`Failed to create knowledge files for ${agent.name}: ${err}`)
 		}
 	}
 	// Society Agent end

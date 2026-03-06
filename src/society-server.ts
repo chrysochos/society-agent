@@ -300,10 +300,26 @@ Examples:
 - Fix errors automatically (run→fail→fix→re-run), don't ask permission
 
 ## Files
-- Only write to YOUR project folder: \`projects/<your-project>/\`
-- Never write to root workspace or other agents' folders
-- Update AGENTS.md / KNOWLEDGE.md when you learn something important
-- Document error fixes in ERRORS.md solutions field
+- Only write to YOUR folder — never touch other agents' folders or the root workspace
+- A supervisor NEVER writes to a subagent's folder — only delegates via \`delegate_task\`
+
+## Four Canonical Files (every agent has these)
+| File | Purpose | When to update |
+|------|---------|----------------|
+| \`AGENTS.md\` | Knowledge index, current state, skills | After every session |
+| \`PLAN.md\` | Task checklist — \`[ ]\` / \`[x]\` with commit hashes | Before & after every task |
+| \`FILES.md\` | Registry of files you own — check before creating any file | Every time you create a file |
+| \`ERRORS.md\` | Error log with solutions — check before debugging | When you fix a new error |
+
+## Work Protocol (mandatory for every task)
+1. Read \`PLAN.md\` → find the first \`[ ]\` item
+2. Read \`FILES.md\` → check what files already exist before creating anything
+3. Implement the item
+4. Run the compiler (\`npx tsc --noEmit\` or equivalent) → fix all errors
+5. \`git add -A && git commit -m "feat: <description>"\`
+6. Mark \`[x]\` in PLAN.md with the commit hash: \`[x] Task *(commit: abc1234)*\`
+7. Register any new files in \`FILES.md\`
+8. Document any new errors (and their fixes) in \`ERRORS.md\`
 
 ## Autonomous work
 - Work until task is fully complete (up to 200 iterations)
@@ -8819,11 +8835,33 @@ This ensures files are automatically saved in your project folder. Do NOT just d
 
 	// Society Agent start - All agents get tool-use awareness
 	const siblingAgents = project.agents.filter(a => a.id !== agentConfig.id)
+	const directReports = project.agents.filter(a => a.reportsTo === agentConfig.id)
+	const isSupervisor = directReports.length > 0
 	fullPrompt += `\n\n## Team & Task Tools
 **Ephemeral workers (one-off tasks):** \`create_task()\` → \`spawn_worker(count)\` → \`list_tasks()\` → \`get_worker_status()\`
 **Persistent agents:** \`list_team\` · \`delegate_task\` · \`delegate_tasks_parallel\` · \`propose_new_agent\`
 **Other agents (${siblingAgents.length}):** ${siblingAgents.length > 0 ? siblingAgents.map(a => `${a.id} (${a.name})`).join(" · ") : "none yet"}
 - Ephemeral: best for one-off tasks · Persistent: best for ongoing roles with memory`
+
+	if (isSupervisor) {
+		const reportNames = directReports.map(a => `${a.id} (${a.name})`).join(", ")
+		fullPrompt += `\n\n## 🔴 SUPERVISOR RULES (you have direct reports)
+
+Your direct reports: **${reportNames}**
+
+**You are a coordinator, not an implementer. Your responsibilities:**
+- Break work into clear tasks and delegate them via \`delegate_task\` or \`delegate_tasks_parallel\`
+- Write tasks in \`PLAN.md\` with acceptance criteria before delegating
+- Review results reported back by subagents
+- Update project-level \`PLAN.md\` as tasks complete
+
+**Hard rules — never break these:**
+- ❌ NEVER write, edit, or delete files inside a subagent's folder
+- ❌ NEVER run commands on behalf of a subagent — delegate instead
+- ❌ NEVER mark a task done in PLAN.md without a commit hash from the subagent
+- ✅ Your own files live in YOUR folder only (AGENTS.md, PLAN.md, FILES.md, ERRORS.md)
+- ✅ To check subagent progress: use \`read_project_file("<subagent-folder>/PLAN.md")\` (read-only)`
+	}
 
 	if (project.knowledge) {
 		fullPrompt += `\n\n## Project Knowledge (${project.name})\n${project.knowledge}`
