@@ -15,6 +15,79 @@ import * as fs from "fs"
 import * as path from "path"
 import { getLog } from "./logger"
 import { sanitizeFilename } from "./security-utils"
+import {
+	type ManagedTask,
+	type TaskStatus,
+	type BlockingReason,
+	createTask as createManagedTask,
+	transitionTask,
+	delegateTask,
+	acceptTask,
+	blockTask,
+	unblockTask,
+	submitForReview,
+	approveTask,
+	verifyTask,
+	failTask,
+	cancelTask,
+	generatePrefix,
+	generatePlanContent,
+	appendToTaskLog,
+	canTransition,
+	getValidTransitions,
+	isTerminalState,
+	canStartTask,
+} from "./task-manager"
+import {
+	type OwnershipRegistry,
+	type FileOwnership,
+	type OwnershipHandoff,
+	createOwnershipRegistry,
+	canModifyFile,
+	registerFileOwnership,
+	requestHandoff,
+	approveHandoff,
+	denyHandoff,
+	completeHandoff,
+	parseFilesMd,
+	writeFilesMd,
+	getFilesOwnedBy,
+	getPendingHandoffs,
+} from "./file-ownership"
+import {
+	type VerificationResult,
+	runVerification,
+	runQuickVerification,
+	canMarkVerified,
+	logVerification,
+} from "./verification-runner"
+import {
+	type PlanningLog,
+	type Decision,
+	type DecisionCategory,
+	initPlanningLog,
+	loadPlanningLog,
+	savePlanningLog,
+	createDecision,
+	proposeDecision,
+	acceptDecision,
+	markDecisionImplemented,
+	supersedeDecision,
+	rejectDecision,
+	deferDecision,
+	getDecisionsForTask,
+	getActiveDecisions,
+	getPendingDecisions as getPendingPlanningDecisions,
+} from "./planning-log"
+import {
+	type SupervisorOverride,
+	type TaskPriority,
+	supervisorForceUnblock,
+	supervisorForceReassign,
+	supervisorForceStatus,
+	supervisorForceCancel,
+	supervisorChangePriority,
+} from "./task-manager"
 
 const log = getLog()
 
@@ -266,10 +339,30 @@ export interface Project {
 	/** Agents assigned to this project */
 	agents: ProjectAgentConfig[]
 	// Society Agent start - Task pool
-	/** Task pool for this project */
+	/** Task pool for this project (legacy - kept for compatibility) */
 	tasks: Task[]
 	/** Maximum concurrent ephemeral workers (default: 3) */
 	maxConcurrentWorkers: number
+	// Society Agent end
+	// Society Agent start - Enhanced task management (Proposal 1, 2)
+	/** Managed tasks with stable IDs and state machine */
+	managedTasks?: ManagedTask[]
+	/** Task sequence counter for ID generation */
+	taskSequence?: number
+	/** Project task ID prefix (e.g., "ARCH", "BE", "FE") */
+	taskPrefix?: string
+	// Society Agent end
+	// Society Agent start - File ownership (Proposal 4)
+	/** File ownership registry */
+	ownershipRegistry?: OwnershipRegistry
+	// Society Agent end
+	// Society Agent start - Planning log (Proposal 3)
+	/** Planning log for architectural decisions */
+	planningLog?: PlanningLog
+	// Society Agent end
+	// Society Agent start - Supervisor overrides (Proposal 5)
+	/** History of supervisor overrides */
+	supervisorOverrides?: SupervisorOverride[]
 	// Society Agent end
 	// Society Agent start - Git integration
 	/** Git repository configuration (for projects loaded from GitLab/GitHub) */
@@ -1801,4 +1894,923 @@ A task is NOT done until ALL four are true:
 		return chain
 	}
 	// Society Agent end
+
+	// ========================================================================
+	// Society Agent - Enhanced Task Management (Proposals 1, 2)
+	// Stable Task IDs (T-PREFIX-NNN) and 9-state state machine
+	// ========================================================================
+
+	/** Initialize task management for a project */
+	private initTaskManagement(project: Project): void {
+		if (!project.managedTasks) {
+			project.managedTasks = []
+		}
+		if (!project.taskSequence) {
+			project.taskSequence = 0
+		}
+		if (!project.taskPrefix) {
+			project.taskPrefix = generatePrefix(project.name)
+		}
+	}
+
+	/** Get next task sequence number and increment */
+	private getNextTaskSequence(project: Project): number {
+		this.initTaskManagement(project)
+		project.taskSequence = (project.taskSequence ?? 0) + 1
+		return project.taskSequence
+	}
+
+	/** Create a managed task with stable ID */
+	createManagedTask(
+		projectId: string,
+		data: {
+			title: string
+			description: string
+			createdBy: string
+			priority?: 1 | 2 | 3 | 4 | 5
+			parentTaskId?: string
+			dependsOn?: string[]
+			context?: ManagedTask["context"]
+			/** Override the default prefix for this task (e.g., for agent-specific tasks) */
+			prefixOverride?: string
+		}
+	): ManagedTask | undefined {
+		const project = this.get(projectId)
+		if (!project) return undefined
+
+		this.initTaskManagement(project)
+		const sequence = this.getNextTaskSequence(project)
+		const prefix = data.prefixOverride ?? project.taskPrefix ?? generatePrefix(project.name)
+
+		const task = createManagedTask(prefix, sequence, {
+			title: data.title,
+			description: data.description,
+			createdBy: data.createdBy,
+			priority: data.priority,
+			parentTaskId: data.parentTaskId,
+			dependsOn: data.dependsOn,
+			context: data.context,
+		})
+
+		project.managedTasks!.push(task)
+		project.updatedAt = new Date().toISOString()
+		this.save()
+
+		log.info(`[TaskManager] Created ${task.taskId}: "${task.title}" by ${data.createdBy}`)
+		return task
+	}
+
+	/** Get all managed tasks for a project */
+	getManagedTasks(projectId: string): ManagedTask[] {
+		const project = this.get(projectId)
+		return project?.managedTasks ?? []
+	}
+
+	/** Get a specific managed task */
+	getManagedTask(projectId: string, taskId: string): ManagedTask | undefined {
+		const project = this.get(projectId)
+		return project?.managedTasks?.find((t) => t.taskId === taskId)
+	}
+
+	/** Update a managed task (internal helper) */
+	private updateManagedTask(projectId: string, task: ManagedTask): boolean {
+		const project = this.get(projectId)
+		if (!project?.managedTasks) return false
+
+		const idx = project.managedTasks.findIndex((t) => t.taskId === task.taskId)
+		if (idx === -1) return false
+
+		project.managedTasks[idx] = task
+		project.updatedAt = new Date().toISOString()
+		this.save()
+		return true
+	}
+
+	/** Transition a task to a new status */
+	transitionManagedTask(
+		projectId: string,
+		taskId: string,
+		newStatus: TaskStatus,
+		agentId: string,
+		options?: { reason?: string; metadata?: ManagedTask["statusHistory"][0]["metadata"] }
+	): ManagedTask | undefined {
+		const task = this.getManagedTask(projectId, taskId)
+		if (!task) return undefined
+
+		try {
+			const updated = transitionTask(task, newStatus, agentId, options)
+			this.updateManagedTask(projectId, updated)
+			log.info(`[TaskManager] ${taskId}: ${task.status} → ${newStatus} by ${agentId}`)
+			return updated
+		} catch (error) {
+			log.error(`[TaskManager] Transition failed: ${error}`)
+			return undefined
+		}
+	}
+
+	/** Delegate a task to an agent */
+	delegateManagedTask(
+		projectId: string,
+		taskId: string,
+		toAgentId: string,
+		byAgentId: string
+	): ManagedTask | undefined {
+		const task = this.getManagedTask(projectId, taskId)
+		if (!task) return undefined
+
+		try {
+			const updated = delegateTask(task, toAgentId, byAgentId)
+			this.updateManagedTask(projectId, updated)
+			log.info(`[TaskManager] ${taskId} delegated to ${toAgentId}`)
+			return updated
+		} catch (error) {
+			log.error(`[TaskManager] Delegation failed: ${error}`)
+			return undefined
+		}
+	}
+
+	/** Accept a delegated task and start working */
+	acceptManagedTask(projectId: string, taskId: string, agentId: string): ManagedTask | undefined {
+		const task = this.getManagedTask(projectId, taskId)
+		if (!task) return undefined
+
+		try {
+			const updated = acceptTask(task, agentId)
+			this.updateManagedTask(projectId, updated)
+			log.info(`[TaskManager] ${taskId} accepted by ${agentId}`)
+			return updated
+		} catch (error) {
+			log.error(`[TaskManager] Accept failed: ${error}`)
+			return undefined
+		}
+	}
+
+	/** Block a task with a reason */
+	blockManagedTask(
+		projectId: string,
+		taskId: string,
+		agentId: string,
+		blockingReason: BlockingReason
+	): ManagedTask | undefined {
+		const task = this.getManagedTask(projectId, taskId)
+		if (!task) return undefined
+
+		try {
+			const updated = blockTask(task, agentId, blockingReason)
+			this.updateManagedTask(projectId, updated)
+			log.info(`[TaskManager] ${taskId} blocked: ${blockingReason.description}`)
+			return updated
+		} catch (error) {
+			log.error(`[TaskManager] Block failed: ${error}`)
+			return undefined
+		}
+	}
+
+	/** Unblock a task and continue working */
+	unblockManagedTask(
+		projectId: string,
+		taskId: string,
+		agentId: string,
+		resolution: string
+	): ManagedTask | undefined {
+		const task = this.getManagedTask(projectId, taskId)
+		if (!task) return undefined
+
+		try {
+			const updated = unblockTask(task, agentId, resolution)
+			this.updateManagedTask(projectId, updated)
+			log.info(`[TaskManager] ${taskId} unblocked: ${resolution}`)
+			return updated
+		} catch (error) {
+			log.error(`[TaskManager] Unblock failed: ${error}`)
+			return undefined
+		}
+	}
+
+	/** Submit task for review */
+	submitManagedTaskForReview(
+		projectId: string,
+		taskId: string,
+		agentId: string,
+		result: ManagedTask["result"]
+	): ManagedTask | undefined {
+		const task = this.getManagedTask(projectId, taskId)
+		if (!task) return undefined
+
+		try {
+			const updated = submitForReview(task, agentId, result)
+			this.updateManagedTask(projectId, updated)
+			log.info(`[TaskManager] ${taskId} submitted for review`)
+			return updated
+		} catch (error) {
+			log.error(`[TaskManager] Submit for review failed: ${error}`)
+			return undefined
+		}
+	}
+
+	/** Approve a task (after review) */
+	approveManagedTask(projectId: string, taskId: string, reviewerAgentId: string): ManagedTask | undefined {
+		const task = this.getManagedTask(projectId, taskId)
+		if (!task) return undefined
+
+		try {
+			const updated = approveTask(task, reviewerAgentId)
+			this.updateManagedTask(projectId, updated)
+			log.info(`[TaskManager] ${taskId} approved by ${reviewerAgentId}`)
+			return updated
+		} catch (error) {
+			log.error(`[TaskManager] Approve failed: ${error}`)
+			return undefined
+		}
+	}
+
+	/** Verify a task with verification result */
+	async verifyManagedTask(
+		projectId: string,
+		taskId: string,
+		agentId: string,
+		verification: VerificationResult
+	): Promise<ManagedTask | undefined> {
+		const task = this.getManagedTask(projectId, taskId)
+		if (!task) return undefined
+
+		const canVerify = canMarkVerified(task.status, verification)
+		if (!canVerify.allowed) {
+			log.warn(`[TaskManager] Cannot verify ${taskId}: ${canVerify.reason}`)
+			return undefined
+		}
+
+		try {
+			const updated = verifyTask(task, agentId, verification)
+			this.updateManagedTask(projectId, updated)
+
+			// Log to TASK_LOG.md
+			const projectDir = this.projectDir(projectId)
+			await appendToTaskLog(projectDir, updated)
+			await logVerification(projectDir, verification)
+
+			log.info(`[TaskManager] ${taskId} verified`)
+			return updated
+		} catch (error) {
+			log.error(`[TaskManager] Verify failed: ${error}`)
+			return undefined
+		}
+	}
+
+	/** Run verification for a task */
+	async runTaskVerification(
+		projectId: string,
+		taskId: string,
+		options?: { quickMode?: boolean }
+	): Promise<VerificationResult | undefined> {
+		const task = this.getManagedTask(projectId, taskId)
+		if (!task) return undefined
+
+		const projectDir = this.projectDir(projectId)
+		return options?.quickMode
+			? runQuickVerification(task, projectDir)
+			: runVerification(task, projectDir)
+	}
+
+	/** Fail a task */
+	failManagedTask(
+		projectId: string,
+		taskId: string,
+		agentId: string,
+		error: ManagedTask["error"]
+	): ManagedTask | undefined {
+		const task = this.getManagedTask(projectId, taskId)
+		if (!task) return undefined
+
+		try {
+			const updated = failTask(task, agentId, error)
+			this.updateManagedTask(projectId, updated)
+			log.info(`[TaskManager] ${taskId} failed: ${error?.message}`)
+			return updated
+		} catch (err) {
+			log.error(`[TaskManager] Fail task error: ${err}`)
+			return undefined
+		}
+	}
+
+	/** Cancel a task */
+	cancelManagedTask(projectId: string, taskId: string, agentId: string, reason: string): ManagedTask | undefined {
+		const task = this.getManagedTask(projectId, taskId)
+		if (!task) return undefined
+
+		try {
+			const updated = cancelTask(task, agentId, reason)
+			this.updateManagedTask(projectId, updated)
+			log.info(`[TaskManager] ${taskId} cancelled: ${reason}`)
+			return updated
+		} catch (error) {
+			log.error(`[TaskManager] Cancel failed: ${error}`)
+			return undefined
+		}
+	}
+
+	/** Get tasks that can be started (dependencies satisfied) */
+	getStartableTasks(projectId: string): ManagedTask[] {
+		const tasks = this.getManagedTasks(projectId)
+		return tasks.filter((task) => {
+			if (task.status !== "planned" && task.status !== "delegated") return false
+			const { canStart } = canStartTask(task, tasks)
+			return canStart
+		})
+	}
+
+	/** Get blocked tasks with their blocking reasons */
+	getBlockedTasks(projectId: string): Array<{ task: ManagedTask; reason: BlockingReason | undefined }> {
+		const tasks = this.getManagedTasks(projectId)
+		return tasks
+			.filter((t) => t.status === "blocked")
+			.map((task) => ({ task, reason: task.blockingReason }))
+	}
+
+	/** Update PLAN.md from managed tasks */
+	async updateProjectPlan(projectId: string): Promise<void> {
+		const project = this.get(projectId)
+		if (!project) return
+
+		const tasks = this.getManagedTasks(projectId)
+		const content = generatePlanContent(tasks, project.name)
+		const projectDir = this.projectDir(projectId)
+		const planPath = path.join(projectDir, "PLAN.md")
+
+		fs.writeFileSync(planPath, content, "utf-8")
+		log.debug(`[TaskManager] Updated PLAN.md for ${projectId}`)
+	}
+
+	// ========================================================================
+	// Society Agent - File Ownership (Proposal 4)
+	// ========================================================================
+
+	/** Initialize ownership registry for a project */
+	private async initOwnershipRegistry(project: Project): Promise<OwnershipRegistry> {
+		if (!project.ownershipRegistry) {
+			// Try to load from FILES.md
+			const projectDir = this.projectDir(project.id)
+			project.ownershipRegistry = await parseFilesMd(projectDir)
+		}
+		return project.ownershipRegistry
+	}
+
+	/** Get the ownership registry for a project */
+	async getOwnershipRegistry(projectId: string): Promise<OwnershipRegistry | undefined> {
+		const project = this.get(projectId)
+		if (!project) return undefined
+		return this.initOwnershipRegistry(project)
+	}
+
+	/** Check if an agent can modify a file */
+	async checkFileAccess(
+		projectId: string,
+		agentId: string,
+		filePath: string
+	): Promise<{ allowed: boolean; reason?: string; owner?: string }> {
+		const registry = await this.getOwnershipRegistry(projectId)
+		if (!registry) return { allowed: false, reason: "Project not found" }
+
+		return canModifyFile(agentId, filePath, registry)
+	}
+
+	/** Register file ownership */
+	async registerFile(
+		projectId: string,
+		filePath: string,
+		owner: string,
+		options?: { description?: string; taskId?: string }
+	): Promise<FileOwnership | undefined> {
+		const project = this.get(projectId)
+		if (!project) return undefined
+
+		const registry = await this.initOwnershipRegistry(project)
+		const ownership = registerFileOwnership(registry, filePath, owner, options)
+
+		// Save to FILES.md
+		const projectDir = this.projectDir(projectId)
+		await writeFilesMd(projectDir, registry, project.name)
+
+		this.save()
+		return ownership
+	}
+
+	/** Register multiple files for an owner */
+	async registerFiles(
+		projectId: string,
+		filePaths: string[],
+		owner: string,
+		taskId?: string
+	): Promise<FileOwnership[]> {
+		const project = this.get(projectId)
+		if (!project) return []
+
+		const registry = await this.initOwnershipRegistry(project)
+		const ownerships: FileOwnership[] = []
+
+		for (const filePath of filePaths) {
+			const ownership = registerFileOwnership(registry, filePath, owner, { taskId })
+			ownerships.push(ownership)
+		}
+
+		// Save to FILES.md
+		const projectDir = this.projectDir(projectId)
+		await writeFilesMd(projectDir, registry, project.name)
+
+		this.save()
+		return ownerships
+	}
+
+	/** Request a file handoff (transfer ownership) */
+	async requestFileHandoff(
+		projectId: string,
+		filePath: string,
+		toAgentId: string,
+		reason: string,
+		taskId?: string
+	): Promise<OwnershipHandoff | undefined> {
+		const project = this.get(projectId)
+		if (!project) return undefined
+
+		const registry = await this.initOwnershipRegistry(project)
+		
+		// Find current owner
+		const ownership = registry.files.find((f) => f.path === filePath)
+		if (!ownership) {
+			log.warn(`[FileOwnership] Cannot request handoff - file not registered: ${filePath}`)
+			return undefined
+		}
+
+		const handoff = requestHandoff(registry, filePath, ownership.owner, toAgentId, reason, taskId)
+
+		// Save to FILES.md
+		const projectDir = this.projectDir(projectId)
+		await writeFilesMd(projectDir, registry, project.name)
+
+		this.save()
+		return handoff
+	}
+
+	/** Approve a file handoff */
+	async approveFileHandoff(
+		projectId: string,
+		handoffId: string,
+		approverId: string
+	): Promise<OwnershipHandoff | undefined> {
+		const project = this.get(projectId)
+		if (!project) return undefined
+
+		const registry = await this.initOwnershipRegistry(project)
+		
+		try {
+			const handoff = approveHandoff(registry, handoffId, approverId)
+			
+			// Save to FILES.md
+			const projectDir = this.projectDir(projectId)
+			await writeFilesMd(projectDir, registry, project.name)
+
+			this.save()
+			return handoff
+		} catch (error) {
+			log.error(`[FileOwnership] Approve handoff failed: ${error}`)
+			return undefined
+		}
+	}
+
+	/** Deny a file handoff */
+	async denyFileHandoff(
+		projectId: string,
+		handoffId: string,
+		approverId: string,
+		reason: string
+	): Promise<OwnershipHandoff | undefined> {
+		const project = this.get(projectId)
+		if (!project) return undefined
+
+		const registry = await this.initOwnershipRegistry(project)
+		
+		try {
+			const handoff = denyHandoff(registry, handoffId, approverId, reason)
+			
+			// Save to FILES.md
+			const projectDir = this.projectDir(projectId)
+			await writeFilesMd(projectDir, registry, project.name)
+
+			this.save()
+			return handoff
+		} catch (error) {
+			log.error(`[FileOwnership] Deny handoff failed: ${error}`)
+			return undefined
+		}
+	}
+
+	/** Complete a file handoff (transfer ownership) */
+	async completeFileHandoff(projectId: string, handoffId: string): Promise<FileOwnership | undefined> {
+		const project = this.get(projectId)
+		if (!project) return undefined
+
+		const registry = await this.initOwnershipRegistry(project)
+		
+		try {
+			const ownership = completeHandoff(registry, handoffId)
+			
+			// Save to FILES.md
+			const projectDir = this.projectDir(projectId)
+			await writeFilesMd(projectDir, registry, project.name)
+
+			this.save()
+			return ownership
+		} catch (error) {
+			log.error(`[FileOwnership] Complete handoff failed: ${error}`)
+			return undefined
+		}
+	}
+
+	/** Get files owned by an agent */
+	async getAgentFiles(projectId: string, agentId: string): Promise<FileOwnership[]> {
+		const registry = await this.getOwnershipRegistry(projectId)
+		if (!registry) return []
+		return getFilesOwnedBy(registry, agentId)
+	}
+
+	/** Get pending handoffs for an agent to approve */
+	async getAgentPendingHandoffs(projectId: string, agentId: string): Promise<OwnershipHandoff[]> {
+		const registry = await this.getOwnershipRegistry(projectId)
+		if (!registry) return []
+		return getPendingHandoffs(registry, agentId)
+	}
+
+	/** Update FILES.md from current registry */
+	async updateFilesRegistry(projectId: string): Promise<void> {
+		const project = this.get(projectId)
+		if (!project) return
+
+		const registry = await this.initOwnershipRegistry(project)
+		const projectDir = this.projectDir(projectId)
+		await writeFilesMd(projectDir, registry, project.name)
+	}
+
+	// ========================================================================
+	// PLANNING LOG METHODS (Proposal 3)
+	// ========================================================================
+
+	/** Initialize or load planning log */
+	private async initPlanningLog(project: Project): Promise<PlanningLog> {
+		if (project.planningLog) {
+			return project.planningLog
+		}
+
+		const projectDir = this.projectDir(project.id)
+		const planningLog = await loadPlanningLog(projectDir)
+		project.planningLog = planningLog
+		return planningLog
+	}
+
+	/** Create a new decision */
+	async createDecision(
+		projectId: string,
+		params: Parameters<typeof createDecision>[1],
+	): Promise<Decision | null> {
+		const project = this.get(projectId)
+		if (!project) return null
+
+		const planningLog = await this.initPlanningLog(project)
+		const decision = createDecision(planningLog, params)
+		this.save()
+
+		// Save to PLANNING.md
+		const projectDir = this.projectDir(projectId)
+		await savePlanningLog(projectDir, planningLog)
+
+		return decision
+	}
+
+	/** Propose a decision for review */
+	async proposeDecision(
+		projectId: string,
+		params: Parameters<typeof proposeDecision>[1],
+	): Promise<Decision | null> {
+		const project = this.get(projectId)
+		if (!project) return null
+
+		const planningLog = await this.initPlanningLog(project)
+		const decision = proposeDecision(planningLog, params)
+		this.save()
+
+		const projectDir = this.projectDir(projectId)
+		await savePlanningLog(projectDir, planningLog)
+
+		return decision
+	}
+
+	/** Accept a proposed decision */
+	async acceptPlanningDecision(
+		projectId: string,
+		decisionId: string,
+		params: Parameters<typeof acceptDecision>[2],
+	): Promise<Decision | null> {
+		const project = this.get(projectId)
+		if (!project) return null
+
+		const planningLog = await this.initPlanningLog(project)
+		const decision = acceptDecision(planningLog, decisionId, params)
+		if (decision) {
+			this.save()
+			const projectDir = this.projectDir(projectId)
+			await savePlanningLog(projectDir, planningLog)
+		}
+		return decision
+	}
+
+	/** Mark a decision as implemented */
+	async markDecisionImplemented(
+		projectId: string,
+		decisionId: string,
+		implementedBy: string,
+	): Promise<Decision | null> {
+		const project = this.get(projectId)
+		if (!project) return null
+
+		const planningLog = await this.initPlanningLog(project)
+		const decision = markDecisionImplemented(planningLog, decisionId, implementedBy)
+		if (decision) {
+			this.save()
+			const projectDir = this.projectDir(projectId)
+			await savePlanningLog(projectDir, planningLog)
+		}
+		return decision
+	}
+
+	/** Supersede an old decision with a new one */
+	async supersedeDecision(
+		projectId: string,
+		oldDecisionId: string,
+		newDecisionParams: Parameters<typeof createDecision>[1],
+	): Promise<{ oldDecision: Decision; newDecision: Decision } | null> {
+		const project = this.get(projectId)
+		if (!project) return null
+
+		const planningLog = await this.initPlanningLog(project)
+		const result = supersedeDecision(planningLog, oldDecisionId, newDecisionParams)
+		if (result) {
+			this.save()
+			const projectDir = this.projectDir(projectId)
+			await savePlanningLog(projectDir, planningLog)
+		}
+		return result
+	}
+
+	/** Reject a proposed decision */
+	async rejectDecision(
+		projectId: string,
+		decisionId: string,
+		params: { reason: string; rejectedBy: string },
+	): Promise<Decision | null> {
+		const project = this.get(projectId)
+		if (!project) return null
+
+		const planningLog = await this.initPlanningLog(project)
+		const decision = rejectDecision(planningLog, decisionId, params)
+		if (decision) {
+			this.save()
+			const projectDir = this.projectDir(projectId)
+			await savePlanningLog(projectDir, planningLog)
+		}
+		return decision
+	}
+
+	/** Defer a decision */
+	async deferDecision(
+		projectId: string,
+		decisionId: string,
+		params: { reason: string; deferredBy: string; deferUntil?: string },
+	): Promise<Decision | null> {
+		const project = this.get(projectId)
+		if (!project) return null
+
+		const planningLog = await this.initPlanningLog(project)
+		const decision = deferDecision(planningLog, decisionId, params)
+		if (decision) {
+			this.save()
+			const projectDir = this.projectDir(projectId)
+			await savePlanningLog(projectDir, planningLog)
+		}
+		return decision
+	}
+
+	/** Get decisions affecting a task */
+	async getDecisionsForTask(projectId: string, taskId: string): Promise<Decision[]> {
+		const project = this.get(projectId)
+		if (!project) return []
+
+		const planningLog = await this.initPlanningLog(project)
+		return getDecisionsForTask(planningLog, taskId)
+	}
+
+	/** Get all active decisions */
+	async getActiveDecisions(projectId: string): Promise<Decision[]> {
+		const project = this.get(projectId)
+		if (!project) return []
+
+		const planningLog = await this.initPlanningLog(project)
+		return getActiveDecisions(planningLog)
+	}
+
+	/** Get pending decisions awaiting approval */
+	async getPendingDecisions(projectId: string): Promise<Decision[]> {
+		const project = this.get(projectId)
+		if (!project) return []
+
+		const planningLog = await this.initPlanningLog(project)
+		return getPendingPlanningDecisions(planningLog)
+	}
+
+	/** Update PLANNING.md from current planning log */
+	async updatePlanningLog(projectId: string): Promise<void> {
+		const project = this.get(projectId)
+		if (!project) return
+
+		const planningLog = await this.initPlanningLog(project)
+		const projectDir = this.projectDir(projectId)
+		await savePlanningLog(projectDir, planningLog)
+	}
+
+	// ========================================================================
+	// SUPERVISOR OVERRIDE METHODS (Proposal 5)
+	// ========================================================================
+
+	/** Force unblock a task (supervisor override) */
+	supervisorForceUnblock(
+		projectId: string,
+		taskId: string,
+		supervisorId: string,
+		reason: string,
+		resolution: string,
+	): { task: ManagedTask; override: SupervisorOverride } | null {
+		const project = this.get(projectId)
+		if (!project?.managedTasks) return null
+
+		const taskIndex = project.managedTasks.findIndex((t) => t.taskId === taskId)
+		if (taskIndex < 0) return null
+
+		try {
+			const result = supervisorForceUnblock(
+				project.managedTasks[taskIndex],
+				supervisorId,
+				reason,
+				resolution,
+			)
+
+			project.managedTasks[taskIndex] = result.task
+			project.supervisorOverrides = project.supervisorOverrides || []
+			project.supervisorOverrides.push(result.override)
+			this.save()
+
+			return result
+		} catch {
+			return null
+		}
+	}
+
+	/** Force reassign a task (supervisor override) */
+	supervisorForceReassign(
+		projectId: string,
+		taskId: string,
+		supervisorId: string,
+		newAgentId: string,
+		reason: string,
+	): { task: ManagedTask; override: SupervisorOverride } | null {
+		const project = this.get(projectId)
+		if (!project?.managedTasks) return null
+
+		const taskIndex = project.managedTasks.findIndex((t) => t.taskId === taskId)
+		if (taskIndex < 0) return null
+
+		try {
+			const result = supervisorForceReassign(
+				project.managedTasks[taskIndex],
+				supervisorId,
+				newAgentId,
+				reason,
+			)
+
+			project.managedTasks[taskIndex] = result.task
+			project.supervisorOverrides = project.supervisorOverrides || []
+			project.supervisorOverrides.push(result.override)
+			this.save()
+
+			return result
+		} catch {
+			return null
+		}
+	}
+
+	/** Force a task to a specific status (supervisor override) */
+	supervisorForceStatus(
+		projectId: string,
+		taskId: string,
+		supervisorId: string,
+		newStatus: TaskStatus,
+		reason: string,
+	): { task: ManagedTask; override: SupervisorOverride } | null {
+		const project = this.get(projectId)
+		if (!project?.managedTasks) return null
+
+		const taskIndex = project.managedTasks.findIndex((t) => t.taskId === taskId)
+		if (taskIndex < 0) return null
+
+		try {
+			const result = supervisorForceStatus(
+				project.managedTasks[taskIndex],
+				supervisorId,
+				newStatus,
+				reason,
+			)
+
+			project.managedTasks[taskIndex] = result.task
+			project.supervisorOverrides = project.supervisorOverrides || []
+			project.supervisorOverrides.push(result.override)
+			this.save()
+
+			return result
+		} catch {
+			return null
+		}
+	}
+
+	/** Force cancel a task (supervisor override) */
+	supervisorForceCancel(
+		projectId: string,
+		taskId: string,
+		supervisorId: string,
+		reason: string,
+	): { task: ManagedTask; override: SupervisorOverride } | null {
+		const project = this.get(projectId)
+		if (!project?.managedTasks) return null
+
+		const taskIndex = project.managedTasks.findIndex((t) => t.taskId === taskId)
+		if (taskIndex < 0) return null
+
+		try {
+			const result = supervisorForceCancel(
+				project.managedTasks[taskIndex],
+				supervisorId,
+				reason,
+			)
+
+			project.managedTasks[taskIndex] = result.task
+			project.supervisorOverrides = project.supervisorOverrides || []
+			project.supervisorOverrides.push(result.override)
+			this.save()
+
+			return result
+		} catch {
+			return null
+		}
+	}
+
+	/** Change task priority (supervisor override) */
+	supervisorChangePriority(
+		projectId: string,
+		taskId: string,
+		supervisorId: string,
+		newPriority: TaskPriority,
+		reason: string,
+	): { task: ManagedTask; override: SupervisorOverride } | null {
+		const project = this.get(projectId)
+		if (!project?.managedTasks) return null
+
+		const taskIndex = project.managedTasks.findIndex((t) => t.taskId === taskId)
+		if (taskIndex < 0) return null
+
+		try {
+			const result = supervisorChangePriority(
+				project.managedTasks[taskIndex],
+				supervisorId,
+				newPriority,
+				reason,
+			)
+
+			project.managedTasks[taskIndex] = result.task
+			project.supervisorOverrides = project.supervisorOverrides || []
+			project.supervisorOverrides.push(result.override)
+			this.save()
+
+			return result
+		} catch {
+			return null
+		}
+	}
+
+	/** Get all supervisor overrides for a project */
+	getSupervisorOverrides(projectId: string): SupervisorOverride[] {
+		const project = this.get(projectId)
+		return project?.supervisorOverrides || []
+	}
+
+	/** Get supervisor overrides for a specific task */
+	getTaskOverrides(projectId: string, taskId: string): SupervisorOverride[] {
+		const project = this.get(projectId)
+		return (project?.supervisorOverrides || []).filter((o) => o.taskId === taskId)
+	}
 }

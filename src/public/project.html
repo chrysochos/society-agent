@@ -196,6 +196,58 @@
   .approval-card .btn-deny:hover { background: rgba(248,81,73,0.25); }
   .approval-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 20px; }
 
+  /* Supervisor Override Panel */
+  .blocked-task-card { background: var(--bg); border: 1px solid var(--yellow); border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+  .blocked-task-card .task-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .blocked-task-card .task-id { font-family: monospace; font-size: 12px; color: var(--accent); background: rgba(88,166,255,0.1); padding: 2px 6px; border-radius: 4px; }
+  .blocked-task-card .task-title { font-weight: 600; font-size: 13px; flex: 1; }
+  .blocked-task-card .task-assignee { font-size: 11px; color: var(--muted); }
+  .blocked-task-card .block-reason { background: rgba(210,153,34,0.1); border: 1px solid rgba(210,153,34,0.3); border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+  .blocked-task-card .block-type { font-size: 11px; color: var(--yellow); text-transform: uppercase; font-weight: 600; margin-bottom: 4px; }
+  .blocked-task-card .block-desc { font-size: 12px; color: var(--text); }
+  .blocked-task-card .block-since { font-size: 10px; color: var(--muted); margin-top: 4px; }
+  .blocked-task-card .override-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .blocked-task-card .btn-override { background: rgba(210,153,34,0.15); color: var(--yellow); border-color: var(--yellow); }
+  .blocked-task-card .btn-override:hover { background: rgba(210,153,34,0.25); }
+  .blocked-task-card .btn-reassign { background: rgba(88,166,255,0.15); color: var(--accent); border-color: var(--accent); }
+  .blocked-task-card .btn-reassign:hover { background: rgba(88,166,255,0.25); }
+  .blocked-task-card .btn-cancel { background: rgba(248,81,73,0.15); color: var(--red); border-color: var(--red); }
+  .blocked-task-card .btn-cancel:hover { background: rgba(248,81,73,0.25); }
+  .override-empty { color: var(--green); font-size: 13px; text-align: center; padding: 20px; }
+  .override-history { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); }
+  .override-history-title { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bottom: 6px; }
+  .override-entry { font-size: 11px; color: var(--muted); padding: 4px 0; border-bottom: 1px solid rgba(48,54,61,0.3); }
+  .override-entry:last-child { border-bottom: none; }
+
+  /* Decision Review Panel */
+  .decision-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+  .decision-card.pending { border-color: var(--yellow); }
+  .decision-card .decision-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .decision-card .decision-id { font-family: monospace; font-size: 11px; color: var(--accent); }
+  .decision-card .decision-category { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(88,166,255,0.1); color: var(--accent); text-transform: uppercase; }
+  .decision-card .decision-status { font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: auto; }
+  .decision-card .decision-status.proposed { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .decision-card .decision-status.accepted { background: rgba(63,185,80,0.15); color: var(--green); }
+  .decision-card .decision-status.implemented { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .decision-card .decision-title { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+  .decision-card .decision-context { font-size: 12px; color: var(--muted); margin-bottom: 10px; line-height: 1.4; }
+  .decision-card .decision-options { margin-bottom: 10px; }
+  .decision-card .option-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: 4px; margin-bottom: 4px; font-size: 12px; }
+  .decision-card .option-item.chosen { background: rgba(63,185,80,0.1); border: 1px solid rgba(63,185,80,0.3); }
+  .decision-card .option-item .option-marker { color: var(--muted); }
+  .decision-card .option-item.chosen .option-marker { color: var(--green); }
+  .decision-card .option-item .option-text { flex: 1; }
+  .decision-card .option-pros-cons { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .decision-card .decision-meta { font-size: 11px; color: var(--muted); margin-bottom: 10px; }
+  .decision-card .decision-actions { display: flex; gap: 8px; }
+  .decision-card .btn-accept { background: rgba(63,185,80,0.15); color: var(--green); border-color: var(--green); }
+  .decision-card .btn-accept:hover { background: rgba(63,185,80,0.25); }
+  .decision-card .btn-reject { background: rgba(248,81,73,0.15); color: var(--red); border-color: var(--red); }
+  .decision-card .btn-reject:hover { background: rgba(248,81,73,0.25); }
+  .decision-card .btn-defer { background: rgba(139,148,158,0.15); color: var(--muted); border-color: var(--muted); }
+  .decision-card .btn-defer:hover { background: rgba(139,148,158,0.25); }
+  .decision-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 20px; }
+
   /* Git Log / History */
   .git-log-list { max-height: 300px; overflow-y: auto; }
   .commit-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0;
@@ -410,6 +462,7 @@
   <button class="btn btn-sm" id="pauseBtn" onclick="toggleSystemPause()" style="margin-right:8px">🔧 Maintenance</button>
   <span class="pause-indicator" id="pauseIndicator">⏸ System Paused</span>
   <div class="header-actions">
+    <button class="btn btn-sm" onclick="bootstrapProject()" title="Scan project and generate docs">&#128196; Bootstrap</button>
     <button class="btn btn-sm" id="pushToGitLabBtn" onclick="showPushToGitLabModal()" style="color:var(--green)">&#128268; Push to GitLab</button>
     <button class="btn btn-sm" onclick="editProjectSettings()">&#9881; Settings</button>
   </div>
@@ -512,12 +565,49 @@
   </div>
   <!-- Society Agent end - Approval Queue section -->
 
+  <!-- Supervisor Override section -->
+  <div class="section" id="supervisorSection" data-section="supervisor" style="display:none">
+    <div class="section-header" onclick="toggleSection(this, event)">
+      <span class="collapse-icon">▼</span>
+      <h3>⚡ Supervisor Override</h3>
+      <span class="count" id="blockedCount">0 blocked</span>
+      <button class="btn btn-sm" onclick="refreshBlockedTasks()">&#8635; Refresh</button>
+    </div>
+    <div class="section-body">
+      <div class="blocked-list" id="blockedList">
+        <div class="override-empty">✓ No blocked tasks requiring intervention.</div>
+      </div>
+      <div class="override-history" id="overrideHistory" style="display:none">
+        <div class="override-history-title">Recent Overrides</div>
+        <div id="overrideHistoryList"></div>
+      </div>
+    </div>
+    <div class="resize-handle" onmousedown="startResize(event, this)"></div>
+  </div>
+
+  <!-- Decision Review section -->
+  <div class="section" id="decisionSection" data-section="decisions" style="display:none">
+    <div class="section-header" onclick="toggleSection(this, event)">
+      <span class="collapse-icon">▼</span>
+      <h3>🎯 Decision Review</h3>
+      <span class="count" id="decisionCount">0 pending</span>
+      <button class="btn btn-sm" onclick="refreshDecisions()">&#8635; Refresh</button>
+    </div>
+    <div class="section-body">
+      <div class="decision-list" id="decisionList">
+        <div class="decision-empty">No decisions pending review.</div>
+      </div>
+    </div>
+    <div class="resize-handle" onmousedown="startResize(event, this)"></div>
+  </div>
+
   <!-- Files section -->
   <div class="section" data-section="files">
     <div class="section-header" onclick="toggleSection(this, event)">
       <span class="collapse-icon">▼</span>
       <h3>&#128194; Project Files</h3>
       <span class="count" id="fileCount">-</span>
+      <button class="btn btn-sm" onclick="syncProjectFiles()" title="Sync FILES.md with filesystem">&#128260; Sync</button>
       <button class="btn btn-sm" onclick="refreshFiles()">&#8635; Refresh</button>
     </div>
     <div class="section-body">
@@ -1189,6 +1279,8 @@ function renderProject() {
   refreshTasks();
   refreshProblems();
   refreshApprovals();
+  refreshBlockedTasks();
+  refreshDecisions();
   refreshFiles();
   refreshGitHistory();
   refreshProjectSkills();
@@ -1285,6 +1377,7 @@ function renderAgentNode(agent, agentMap, allAgents) {
   html += `<div class="node-actions" onclick="event.stopPropagation()">`;
   html += `<button class="btn btn-sm" onclick="editAgentInProject('${escapeAttr(agent.id)}')">&#9998;</button>`;
   html += `<button class="btn btn-sm" onclick="showSchedTaskList('${escapeAttr(agent.id)}')" title="Tasks">&#128337;</button>`;
+  html += `<button class="btn btn-sm" onclick="bootstrapAgentFolder('${escapeAttr(agent.id)}')" title="Bootstrap agent folder">&#128196;</button>`;
   html += `<button class="btn btn-sm" style="color:var(--red)" onclick="removeAgent('${escapeAttr(agent.id)}','${escapeAttr(agent.name)}')">&#128465;</button>`;
   html += `</div>`;
   html += `</div>`;
@@ -1700,6 +1793,418 @@ async function resolveApproval(requestId, resolution) {
     }
   } catch (e) {
     showToast('Failed to resolve approval', 'error');
+  }
+}
+
+// ============================================================================
+// Supervisor Override
+// ============================================================================
+
+async function refreshBlockedTasks() {
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/tasks`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const blockedTasks = (data.tasks || []).filter(t => t.status === 'blocked');
+    renderBlockedTasks(blockedTasks);
+    
+    // Also load override history
+    const histRes = await fetch(`${API}/api/projects/${projectId}/supervisor/overrides`);
+    if (histRes.ok) {
+      const histData = await histRes.json();
+      renderOverrideHistory(histData.overrides || []);
+    }
+  } catch (e) {
+    console.error('Failed to load blocked tasks:', e);
+  }
+}
+
+function renderBlockedTasks(tasks) {
+  const section = document.getElementById('supervisorSection');
+  const countEl = document.getElementById('blockedCount');
+  const listEl = document.getElementById('blockedList');
+
+  if (tasks.length > 0) {
+    section.style.display = 'block';
+    countEl.textContent = `${tasks.length} blocked`;
+  } else {
+    // Still show section if there's override history
+    countEl.textContent = '0 blocked';
+    listEl.innerHTML = '<div class="override-empty">✓ No blocked tasks requiring intervention.</div>';
+    return;
+  }
+
+  listEl.innerHTML = tasks.map(t => {
+    const assignee = project.agents?.find(a => a.id === t.assignedTo)?.name || t.assignedTo || 'Unassigned';
+    const blockReason = t.blockedReason || 'Unknown reason';
+    const blockType = t.blockedType || 'dependency';
+    const blockedSince = t.blockedAt ? new Date(t.blockedAt).toLocaleString() : 'Unknown';
+
+    return `<div class="blocked-task-card" data-id="${t.id}">
+      <div class="task-header">
+        <span class="task-id">${escapeHtml(t.id)}</span>
+        <span class="task-title">${escapeHtml(t.title)}</span>
+        <span class="task-assignee">→ ${escapeHtml(assignee)}</span>
+      </div>
+      <div class="block-reason">
+        <div class="block-type">🚧 ${escapeHtml(blockType)}</div>
+        <div class="block-desc">${escapeHtml(blockReason)}</div>
+        <div class="block-since">Blocked since: ${blockedSince}</div>
+      </div>
+      <div class="override-actions">
+        <button class="btn btn-sm btn-override" onclick="supervisorUnblock('${t.id}')" title="Force unblock with resolution">⚡ Unblock</button>
+        <button class="btn btn-sm btn-reassign" onclick="supervisorReassign('${t.id}')" title="Reassign to different agent">🔄 Reassign</button>
+        <button class="btn btn-sm btn-cancel" onclick="supervisorCancel('${t.id}')" title="Cancel this task">✗ Cancel</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderOverrideHistory(overrides) {
+  const historyEl = document.getElementById('overrideHistory');
+  const listEl = document.getElementById('overrideHistoryList');
+  
+  if (!overrides || overrides.length === 0) {
+    historyEl.style.display = 'none';
+    return;
+  }
+  
+  historyEl.style.display = 'block';
+  const recent = overrides.slice(-5).reverse();
+  listEl.innerHTML = recent.map(o => {
+    const time = new Date(o.timestamp).toLocaleString();
+    return `<div class="override-entry">${escapeHtml(o.action)} on ${escapeHtml(o.taskId)} by ${escapeHtml(o.by)} - ${time}</div>`;
+  }).join('');
+}
+
+async function supervisorUnblock(taskId) {
+  const resolution = prompt('Enter resolution for unblocking this task:');
+  if (!resolution) return;
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/supervisor/force-unblock`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId, resolution, by: 'human-supervisor' })
+    });
+    if (res.ok) {
+      showToast('Task unblocked', 'success');
+      refreshBlockedTasks();
+      refreshTasks();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to unblock task', 'error');
+  }
+}
+
+async function supervisorReassign(taskId) {
+  const workers = (project.agents || []).filter(a => a.role === 'worker').map(a => a.name);
+  const newAgent = prompt(`Reassign to which agent?\nAvailable workers: ${workers.join(', ')}`);
+  if (!newAgent) return;
+  
+  const reason = prompt('Reason for reassignment:') || 'Supervisor override';
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/supervisor/force-reassign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId, newAgentId: newAgent, reason, by: 'human-supervisor' })
+    });
+    if (res.ok) {
+      showToast('Task reassigned', 'success');
+      refreshBlockedTasks();
+      refreshTasks();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to reassign task', 'error');
+  }
+}
+
+async function supervisorCancel(taskId) {
+  if (!confirm('Are you sure you want to cancel this task?')) return;
+  
+  const reason = prompt('Reason for cancellation:') || 'Supervisor override';
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/supervisor/force-cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId, reason, by: 'human-supervisor' })
+    });
+    if (res.ok) {
+      showToast('Task cancelled', 'success');
+      refreshBlockedTasks();
+      refreshTasks();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to cancel task', 'error');
+  }
+}
+
+// ============================================================================
+// Decision Review
+// ============================================================================
+
+async function refreshDecisions() {
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/decisions`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderDecisions(data.decisions || []);
+  } catch (e) {
+    console.error('Failed to load decisions:', e);
+  }
+}
+
+function renderDecisions(decisions) {
+  const section = document.getElementById('decisionSection');
+  const countEl = document.getElementById('decisionCount');
+  const listEl = document.getElementById('decisionList');
+
+  const pending = decisions.filter(d => d.status === 'proposed');
+  
+  if (decisions.length > 0) {
+    section.style.display = 'block';
+    countEl.textContent = `${pending.length} pending`;
+  } else {
+    section.style.display = 'none';
+    return;
+  }
+
+  // Show pending first, then recently accepted/implemented
+  const sorted = [...pending, ...decisions.filter(d => d.status !== 'proposed').slice(0, 5)];
+  
+  listEl.innerHTML = sorted.map(d => {
+    const isPending = d.status === 'proposed';
+    const created = new Date(d.createdAt).toLocaleString();
+    const proposer = project.agents?.find(a => a.id === d.proposedBy)?.name || d.proposedBy;
+    
+    const optionsHtml = (d.options || []).map((opt, i) => {
+      const isChosen = d.chosenOption === i;
+      return `<div class="option-item${isChosen ? ' chosen' : ''}">
+        <span class="option-marker">${isChosen ? '✓' : '○'}</span>
+        <div>
+          <div class="option-text">${escapeHtml(opt.description)}</div>
+          ${opt.pros || opt.cons ? `<div class="option-pros-cons">${opt.pros ? '✓ ' + opt.pros.join(', ') : ''} ${opt.cons ? '✗ ' + opt.cons.join(', ') : ''}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+    
+    const actionsHtml = isPending ? `
+      <div class="decision-actions">
+        <button class="btn btn-sm btn-accept" onclick="acceptDecision('${d.id}')" title="Accept this decision">✓ Accept</button>
+        <button class="btn btn-sm btn-reject" onclick="rejectDecision('${d.id}')" title="Reject this decision">✗ Reject</button>
+        <button class="btn btn-sm btn-defer" onclick="deferDecision('${d.id}')" title="Defer for later">⏸ Defer</button>
+      </div>` : '';
+    
+    return `<div class="decision-card${isPending ? ' pending' : ''}" data-id="${d.id}">
+      <div class="decision-header">
+        <span class="decision-id">${escapeHtml(d.id)}</span>
+        <span class="decision-category">${escapeHtml(d.category)}</span>
+        <span class="decision-status ${d.status}">${escapeHtml(d.status)}</span>
+      </div>
+      <div class="decision-title">${escapeHtml(d.title)}</div>
+      <div class="decision-context">${escapeHtml(d.context || '')}</div>
+      ${optionsHtml ? `<div class="decision-options">${optionsHtml}</div>` : ''}
+      <div class="decision-meta">
+        <span>Proposed by ${escapeHtml(proposer)} on ${created}</span>
+        ${d.rationale ? `<br><em>"${escapeHtml(d.rationale)}"</em>` : ''}
+      </div>
+      ${actionsHtml}
+    </div>`;
+  }).join('');
+}
+
+async function acceptDecision(decisionId) {
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/decisions/${decisionId}/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ acceptedBy: 'human-supervisor' })
+    });
+    if (res.ok) {
+      showToast('Decision accepted', 'success');
+      refreshDecisions();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to accept decision', 'error');
+  }
+}
+
+async function rejectDecision(decisionId) {
+  const reason = prompt('Reason for rejection:');
+  if (!reason) return;
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/decisions/${decisionId}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rejectedBy: 'human-supervisor', reason })
+    });
+    if (res.ok) {
+      showToast('Decision rejected', 'success');
+      refreshDecisions();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to reject decision', 'error');
+  }
+}
+
+async function deferDecision(decisionId) {
+  const reason = prompt('Reason for deferral (optional):') || 'Deferred for later review';
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/decisions/${decisionId}/defer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deferredBy: 'human-supervisor', reason })
+    });
+    if (res.ok) {
+      showToast('Decision deferred', 'success');
+      refreshDecisions();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to defer decision', 'error');
+  }
+}
+
+// ============================================================================
+// Bootstrap & Sync
+// ============================================================================
+
+async function bootstrapProject() {
+  if (!confirm('This will scan the project and generate/update FILES.md, PLAN.md, and AGENTS.md. Continue?')) return;
+  
+  try {
+    showToast('Bootstrapping project...', 'info');
+    const res = await fetch(`${API}/api/projects/${projectId}/bootstrap`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        overwrite: false, 
+        scanTasks: true, 
+        analyzeGit: true 
+      })
+    });
+    
+    if (res.ok) {
+      const data = await res.json();
+      const taskCount = data.detectedTasksCount || data.detectedTasks?.length || 0;
+      const addedCount = data.tasksAddedToPlan || 0;
+      let msg = `Bootstrap complete: ${data.filesWritten?.length || 0} files written, ${taskCount} tasks found`;
+      if (addedCount > 0) {
+        msg += `, ${addedCount} tasks added to PLAN.md`;
+      }
+      showToast(msg, 'success');
+      
+      // Show detected tasks details if any were found
+      if (data.detectedTasks?.length > 0) {
+        const taskList = data.detectedTasks.map(t => 
+          `• ${t.type} (${t.priority}): ${t.text}\n  → ${t.file}:${t.line}`
+        ).join('\n\n');
+        const addedMsg = addedCount > 0 
+          ? `\n\n✓ ${addedCount} tasks were added to PLAN.md`
+          : '\n\nNote: PLAN.md already exists. Tasks shown but not added.';
+        alert(`Detected ${taskCount} TODO/FIXME comments:\n\n${taskList}${addedMsg}`);
+      }
+      
+      refreshFiles();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to bootstrap project', 'error');
+  }
+}
+
+async function syncProjectFiles() {
+  try {
+    showToast('Syncing files...', 'info');
+    const res = await fetch(`${API}/api/projects/${projectId}/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        scanNewTasks: true,
+        preserveRemovedFiles: true,
+        addOnly: false
+      })
+    });
+    
+    if (res.ok) {
+      const data = await res.json();
+      const msg = `Sync complete: +${data.filesAdded?.length || 0} files, -${data.filesRemoved?.length || 0} removed`;
+      showToast(msg, 'success');
+      refreshFiles();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to sync files', 'error');
+  }
+}
+
+async function bootstrapAgentFolder(agentId) {
+  const agent = (project.agents || []).find(a => a.id === agentId);
+  if (!agent) {
+    showToast('Agent not found', 'error');
+    return;
+  }
+  
+  // Agent folder from homeFolder (not 'folder' which is for projects)
+  const agentFolder = agent.homeFolder || agent.folder || agent.id;
+  
+  // Skip if agent is at project root
+  if (agentFolder === '/' || agentFolder === '') {
+    showToast(`${agent.name} is at project root. Use main Bootstrap button instead.`, 'info');
+    return;
+  }
+  
+  if (!confirm(`Bootstrap folder for ${agent.name}? This will create FILES.md, PLAN.md, AGENTS.md in ${agentFolder}/`)) return;
+  
+  try {
+    showToast(`Bootstrapping ${agent.name} folder...`, 'info');
+    const res = await fetch(`${API}/api/projects/${projectId}/bootstrap/subfolder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        subPath: agentFolder,
+        ownerAgentId: agentId,
+        scanTasks: true,
+        overwrite: false
+      })
+    });
+    
+    if (res.ok) {
+      const data = await res.json();
+      const msg = `Bootstrap complete: ${data.filesWritten?.length || 0} files written in ${agentFolder}`;
+      showToast(msg, 'success');
+      refreshFiles();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to bootstrap agent folder', 'error');
   }
 }
 
@@ -2524,6 +3029,11 @@ socket.on('file-deleted', () => refreshFiles());
 socket.on('task-claimed', () => refreshTasks());
 socket.on('task-completed', () => refreshTasks());
 socket.on('task-failed', () => refreshTasks());
+socket.on('task-blocked', () => { refreshTasks(); refreshBlockedTasks(); });
+socket.on('task-unblocked', () => { refreshTasks(); refreshBlockedTasks(); });
+socket.on('supervisor-override', () => refreshBlockedTasks());
+socket.on('decision-created', () => refreshDecisions());
+socket.on('decision-updated', () => refreshDecisions());
 
 // Live diagnostics updates from background watchers
 socket.on('diagnostics-update', (data) => {

@@ -470,7 +470,7 @@
   .agent-selector select { background: var(--bg); border: 1px solid var(--border); color: var(--text);
     padding: 4px 8px; border-radius: 4px; font-size: 12px; min-width: 140px; }
   .agent-selector .agent-info { color: var(--muted); font-size: 11px; margin-left: 4px; }
-  .agent-selector .project-badge { display:inline-block; background:var(--border); color:var(--text); font-size:11px; font-weight:600; padding:2px 8px; border-radius:10px; margin-left:6px; letter-spacing:0.02em; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle; }
+  .agent-selector .project-badge { display:inline-block; background:rgba(88,166,255,0.15); color:var(--accent); border:1px solid rgba(88,166,255,0.4); font-size:11px; font-weight:600; padding:2px 8px; border-radius:10px; margin-left:6px; letter-spacing:0.02em; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle; }
   .agent-selector .agent-indicator { display: inline-block; width: 6px; height: 6px; border-radius: 50%;
     margin-right: 4px; }
   .agent-selector .agent-indicator.active { background: var(--green); }
@@ -3768,7 +3768,7 @@ function renderAgentSelector() {
     html += `<optgroup label="${escapeHtml(p.name)}">`;
     p.agents.forEach(a => {
       const compositeVal = p.id + ':' + a.id;
-      html += `<option value="${escapeHtml(compositeVal)}" ${compositeVal === prev ? 'selected' : ''}>${escapeHtml(a.name)} — ${escapeHtml(a.role)}</option>`;
+      html += `<option value="${escapeHtml(compositeVal)}" ${compositeVal === prev ? 'selected' : ''}>[${escapeHtml(p.name)}] ${escapeHtml(a.name)} — ${escapeHtml(a.role)}</option>`;
     });
     html += '</optgroup>';
   });

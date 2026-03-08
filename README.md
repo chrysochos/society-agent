@@ -29,6 +29,9 @@ Society Agent lets you create, organize, and collaborate with specialized AI age
 - **🔌 MCP Integration** - Connect to external services via Model Context Protocol
 - **📁 File Management** - Agents have full access to their workspace with terminal capabilities
 - **🌐 Multi-Provider** - Support for Anthropic, OpenRouter, OpenAI, Gemini, and more
+- **📋 Decision Tracking** - Agents log architectural decisions with full audit trail and PLANNING.md generation
+- **🚦 Supervisor Override** - Force unblock, reassign, cancel, or reprioritize stuck tasks
+- **⚡ Real-time Updates** - Socket.IO events for live UI updates on decisions, tasks, and supervisor actions
 
 ## 🚀 Quick Start
 
@@ -220,6 +223,12 @@ society-agent/
 | `POST /api/projects/:id/agents` | Create an agent |
 | `POST /api/agent/:id/chat` | Chat with an agent |
 | `GET /api/agent/:id/workspace/files` | List agent files |
+| `GET /api/projects/:id/decisions` | List project decisions |
+| `POST /api/projects/:id/decisions` | Create a decision |
+| `POST /api/decisions/:id/accept` | Accept a proposed decision |
+| `GET /api/projects/:id/blocked-tasks` | List blocked tasks |
+| `POST /api/supervisor/force-unblock` | Supervisor: unblock a task |
+| `POST /api/supervisor/force-reassign` | Supervisor: reassign task to another agent |
 
 ## 🛠️ Skills
 
@@ -250,6 +259,52 @@ Connect agents to external tools via [Model Context Protocol](https://modelconte
   }
 }
 ```
+
+## 🎯 Supervisor & Decision System
+
+### Decision Tracking
+
+Agents can record architectural decisions with full context and rationale:
+
+```javascript
+// POST /api/projects/:id/decisions
+{
+  "title": "Use PostgreSQL for persistence",
+  "category": "architecture",
+  "proposedBy": "backend-specialist",
+  "rationale": "Better performance for complex queries",
+  "alternatives": ["MongoDB", "SQLite"],
+  "impact": "high"
+}
+```
+
+Decisions go through a lifecycle: `draft` → `proposed` → `accepted` → `implemented`. All transitions are logged with timestamps in `PLANNING.md`.
+
+### Supervisor Override
+
+When agents get blocked or stuck, supervisors can intervene:
+
+| Action | Description |
+|--------|-------------|
+| **Force Unblock** | Unblock a task with a provided resolution |
+| **Force Reassign** | Move task to a different agent |
+| **Force Status** | Change task status directly |
+| **Force Cancel** | Cancel a stuck task |
+| **Change Priority** | Reprioritize task (critical/high/medium/low) |
+
+### Real-time Updates
+
+Socket.IO events broadcast all changes:
+
+```javascript
+socket.on('decision-created', (decision) => { /* ... */ });
+socket.on('decision-updated', (decision) => { /* ... */ });
+socket.on('task-blocked', (task) => { /* ... */ });
+socket.on('task-unblocked', (task) => { /* ... */ });
+socket.on('supervisor-override', (data) => { /* ... */ });
+```
+
+The agent page UI automatically updates when these events fire.
 
 ## 📚 Documentation
 

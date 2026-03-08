@@ -73,6 +73,14 @@ import { AgentActivityLogger } from "./agent-activity-logger"
 // Society Agent start - security utilities
 import { safeObjectEntries, sanitizeGitRef, validatePath } from "./security-utils"
 // Society Agent end
+// Society Agent start - delegation tracking with stable task IDs
+import {
+	createDelegation,
+	addTaskToPlan,
+	saveTask,
+	DelegationRequest,
+} from "./delegation-tracker"
+// Society Agent end
 
 const app = express()
 const server = http.createServer(app)
@@ -345,6 +353,37 @@ If the task is ambiguous, write what you understood into PLAN.md and send it bac
 function buildFullSystemPrompt(agentSystemPrompt: string): string {
 	return BASE_AGENT_RULES + agentSystemPrompt
 }
+
+// Society Agent start - Build prompt with project-specific config
+import { loadProjectConfig, generateProjectPromptSection, type ProjectConfig, bootstrapExistingProject, writeBootstrapFiles, syncBootstrapFiles, bootstrapSubFolder, smartBootstrap, hasBootstrapFiles } from "./project-config"
+
+// Cache for project configs to avoid repeated disk reads
+const projectConfigCache = new Map<string, { config: ProjectConfig; loadedAt: number }>()
+const CONFIG_CACHE_TTL = 60000 // 1 minute
+
+async function getProjectConfigCached(projectDir: string): Promise<ProjectConfig> {
+	const cached = projectConfigCache.get(projectDir)
+	if (cached && Date.now() - cached.loadedAt < CONFIG_CACHE_TTL) {
+		return cached.config
+	}
+	const config = await loadProjectConfig(projectDir)
+	projectConfigCache.set(projectDir, { config, loadedAt: Date.now() })
+	return config
+}
+
+async function buildProjectAwarePrompt(agentSystemPrompt: string, projectDir: string): Promise<string> {
+	try {
+		const config = await getProjectConfigCached(projectDir)
+		const basePrompt = buildFullSystemPrompt(agentSystemPrompt)
+		const projectSection = generateProjectPromptSection(config)
+		return basePrompt + "\n\n" + projectSection
+	} catch (error) {
+		log.warn(`[buildProjectAwarePrompt] Failed to load project config: ${error}`)
+		return buildFullSystemPrompt(agentSystemPrompt)
+	}
+}
+// Society Agent end - Build prompt with project-specific config
+
 // Society Agent end - Base communication rules
 
 // Society Agent start - project system
@@ -3262,6 +3301,1232 @@ app.delete("/api/projects/:id", (req, res): void => {
 })
 
 /**
+ * POST /api/projects/:id/bootstrap - Bootstrap an existing project
+ * Scans the project and generates FILES.md, PLAN.md, AGENTS.md
+ * Body: { ownerAgentId?, overwrite?, scanTasks?, analyzeGit? }
+ */
+app.post("/api/projects/:id/bootstrap", async (req, res): Promise<void> => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+
+		const projectRoot = projectStore.projectDir(project.id)
+		const {
+			ownerAgentId = project.agents[0]?.id ?? "architect",
+			overwrite = false,
+			scanTasks = true,
+			analyzeGit = true,
+		} = req.body
+
+		log.info(`[Bootstrap] Starting bootstrap for project ${project.id}`)
+
+		// Run bootstrap analysis
+		const result = await bootstrapExistingProject(projectRoot, {
+			ownerAgentId,
+			projectName: project.name,
+			scanTasks,
+			analyzeGit,
+		})
+
+		// Write files to disk
+		const { written, skipped } = await writeBootstrapFiles(projectRoot, result, { overwrite })
+
+		log.info(`[Bootstrap] Complete: wrote ${written.length} files, skipped ${skipped.length}`)
+
+		// If PLAN.md was skipped but we have detected tasks, append them via sync
+		let tasksAddedToPlan = 0
+		if (skipped.includes("PLAN.md") && result.detectedTasks.length > 0) {
+			log.info(`[Bootstrap] PLAN.md exists, appending ${result.detectedTasks.length} detected tasks via sync`)
+			const syncResult = await syncBootstrapFiles(projectRoot, {
+				tasksToAdd: result.detectedTasks,
+				scanNewTasks: false,
+			})
+			tasksAddedToPlan = syncResult.tasksAdded.length
+			log.info(`[Bootstrap] Added ${tasksAddedToPlan} tasks to existing PLAN.md`)
+		}
+
+		// Invalidate project config cache so prompts pick up new config
+		projectConfigCache.delete(projectRoot)
+
+		res.json({
+			success: true,
+			language: result.config.language,
+			framework: result.config.framework,
+			stats: result.stats,
+			detectedTasks: result.detectedTasks.slice(0, 30).map(t => ({
+				type: t.type,
+				file: t.file,
+				line: t.line,
+				text: t.text.slice(0, 100),
+				priority: t.priority,
+			})),
+			detectedTasksCount: result.detectedTasks.length,
+			tasksAddedToPlan,
+			gitSummary: result.gitSummary,
+			filesWritten: written,
+			filesSkipped: skipped,
+		})
+	} catch (error) {
+		log.error(`[Bootstrap] Error: ${error}`)
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/sync - Sync existing FILES.md/PLAN.md with filesystem
+ * Use this when files were added/removed outside Society Agent
+ * Body: { newFileOwner?, scanNewTasks?, preserveRemovedFiles?, addOnly? }
+ */
+app.post("/api/projects/:id/sync", async (req, res): Promise<void> => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+
+		const projectRoot = projectStore.projectDir(project.id)
+		const {
+			subPath, // Optional: sync a specific subfolder (e.g., agent folder)
+			newFileOwner = "unassigned",
+			scanNewTasks = true,
+			preserveRemovedFiles = true,
+			addOnly = false,
+		} = req.body
+
+		const targetPath = subPath ? path.join(projectRoot, subPath) : projectRoot
+
+		log.info(`[Sync] Starting sync for ${targetPath}`)
+
+		const result = await syncBootstrapFiles(targetPath, {
+			newFileOwner,
+			scanNewTasks,
+			preserveRemovedFiles,
+			addOnly,
+		})
+
+		log.info(`[Sync] Complete: +${result.filesAdded.length} files, -${result.filesRemoved.length} files`)
+
+		res.json({
+			success: true,
+			filesAdded: result.filesAdded,
+			filesRemoved: result.filesRemoved,
+			filesUnchanged: result.filesUnchanged,
+			tasksAdded: result.tasksAdded.length,
+			conflicts: result.conflicts,
+		})
+	} catch (error) {
+		log.error(`[Sync] Error: ${error}`)
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/bootstrap/subfolder - Bootstrap a specific subfolder
+ * Use to initialize an agent's folder with its own FILES.md, PLAN.md, AGENTS.md
+ * Body: { subPath (required), ownerAgentId?, scanTasks?, inheritParentConfig? }
+ */
+app.post("/api/projects/:id/bootstrap/subfolder", async (req, res): Promise<void> => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+
+		const { subPath, ownerAgentId, scanTasks = true, inheritParentConfig = true, overwrite = false } = req.body
+
+		if (!subPath) {
+			res.status(400).json({ error: "subPath is required" })
+			return
+		}
+
+		const projectRoot = projectStore.projectDir(project.id)
+		const fullPath = path.join(projectRoot, subPath)
+
+		log.info(`[SubfolderBootstrap] Starting for ${subPath}`)
+
+		const result = await bootstrapSubFolder(projectRoot, subPath, {
+			ownerAgentId,
+			scanTasks,
+			inheritParentConfig,
+		})
+
+		// Write files to the subfolder
+		const { written, skipped } = await writeBootstrapFiles(fullPath, result, { overwrite })
+
+		log.info(`[SubfolderBootstrap] Complete: wrote ${written.length} files in ${subPath}`)
+
+		res.json({
+			success: true,
+			subPath,
+			language: result.config.language,
+			stats: result.stats,
+			detectedTasks: result.detectedTasks.length,
+			filesWritten: written,
+			filesSkipped: skipped,
+		})
+	} catch (error) {
+		log.error(`[SubfolderBootstrap] Error: ${error}`)
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/smart-bootstrap - Auto-detect: full bootstrap or sync
+ * If no bootstrap files exist, does full bootstrap. Otherwise syncs.
+ * Body: { subPath?, ownerAgentId?, scanTasks?, force? }
+ */
+app.post("/api/projects/:id/smart-bootstrap", async (req, res): Promise<void> => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+
+		const projectRoot = projectStore.projectDir(project.id)
+		const {
+			subPath,
+			ownerAgentId = project.agents[0]?.id ?? "architect",
+			scanTasks = true,
+			force = false,
+		} = req.body
+
+		const targetPath = subPath ? path.join(projectRoot, subPath) : projectRoot
+
+		log.info(`[SmartBootstrap] Starting for ${targetPath}`)
+
+		const { mode, result } = await smartBootstrap(targetPath, {
+			ownerAgentId,
+			projectName: project.name,
+			scanTasks,
+			force,
+		})
+
+		log.info(`[SmartBootstrap] Complete: mode=${mode}`)
+
+		if (mode === "bootstrap") {
+			const bResult = result as any
+			res.json({
+				success: true,
+				mode: "bootstrap",
+				language: bResult.config?.language,
+				stats: bResult.stats,
+				detectedTasks: bResult.detectedTasks?.length ?? 0,
+			})
+		} else {
+			const sResult = result as any
+			res.json({
+				success: true,
+				mode: "sync",
+				filesAdded: sResult.filesAdded?.length ?? 0,
+				filesRemoved: sResult.filesRemoved?.length ?? 0,
+				tasksAdded: sResult.tasksAdded?.length ?? 0,
+			})
+		}
+	} catch (error) {
+		log.error(`[SmartBootstrap] Error: ${error}`)
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/projects/:id/bootstrap-status - Check if bootstrap files exist
+ */
+app.get("/api/projects/:id/bootstrap-status", async (req, res): Promise<void> => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+
+		const projectRoot = projectStore.projectDir(project.id)
+		const { subPath } = req.query
+		const targetPath = subPath ? path.join(projectRoot, String(subPath)) : projectRoot
+
+		const status = await hasBootstrapFiles(targetPath)
+
+		res.json({
+			path: subPath || "/",
+			...status,
+			bootstrapped: status.hasFiles || status.hasPlan,
+		})
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+// ============================================================================
+// MANAGED TASKS API - Stable IDs & State Machine (Proposals 1, 2)
+// ============================================================================
+
+/**
+ * POST /api/projects/:id/managed-tasks - Create a managed task with stable ID
+ * Body: { title, description, createdBy, priority?, parentTaskId?, dependsOn?, context?, prefixOverride? }
+ */
+app.post("/api/projects/:id/managed-tasks", (req, res): void => {
+	try {
+		const { title, description, createdBy, priority, parentTaskId, dependsOn, context, prefixOverride } = req.body
+		
+		if (!title || !description || !createdBy) {
+			res.status(400).json({ error: "title, description, and createdBy are required" })
+			return
+		}
+
+		const task = projectStore.createManagedTask(req.params.id, {
+			title,
+			description,
+			createdBy,
+			priority,
+			parentTaskId,
+			dependsOn,
+			context,
+			prefixOverride,
+		})
+
+		if (!task) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+
+		res.json(task)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/projects/:id/managed-tasks - Get all managed tasks
+ * Query: ?status=in_progress,blocked&assignedTo=agentId
+ */
+app.get("/api/projects/:id/managed-tasks", (req, res): void => {
+	try {
+		let tasks = projectStore.getManagedTasks(req.params.id)
+		
+		// Filter by status if provided
+		if (req.query.status) {
+			const statuses = String(req.query.status).split(",")
+			tasks = tasks.filter(t => statuses.includes(t.status))
+		}
+		
+		// Filter by assignee if provided
+		if (req.query.assignedTo) {
+			tasks = tasks.filter(t => t.assignedTo === req.query.assignedTo)
+		}
+		
+		// Filter by createdBy if provided
+		if (req.query.createdBy) {
+			tasks = tasks.filter(t => t.createdBy === req.query.createdBy)
+		}
+
+		res.json(tasks)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/projects/:id/managed-tasks/:taskId - Get a specific managed task
+ */
+app.get("/api/projects/:id/managed-tasks/:taskId", (req, res): void => {
+	try {
+		const task = projectStore.getManagedTask(req.params.id, req.params.taskId)
+		if (!task) {
+			res.status(404).json({ error: "Task not found" })
+			return
+		}
+		res.json(task)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/managed-tasks/:taskId/transition - Transition task status
+ * Body: { status, agentId, reason?, metadata? }
+ */
+app.post("/api/projects/:id/managed-tasks/:taskId/transition", (req, res): void => {
+	try {
+		const { status, agentId, reason, metadata } = req.body
+		
+		if (!status || !agentId) {
+			res.status(400).json({ error: "status and agentId are required" })
+			return
+		}
+
+		const task = projectStore.transitionManagedTask(
+			req.params.id,
+			req.params.taskId,
+			status,
+			agentId,
+			{ reason, metadata }
+		)
+
+		if (!task) {
+			res.status(400).json({ error: "Task not found or invalid transition" })
+			return
+		}
+
+		res.json(task)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/managed-tasks/:taskId/delegate - Delegate task to agent
+ * Body: { toAgentId, byAgentId }
+ */
+app.post("/api/projects/:id/managed-tasks/:taskId/delegate", (req, res): void => {
+	try {
+		const { toAgentId, byAgentId } = req.body
+		
+		if (!toAgentId || !byAgentId) {
+			res.status(400).json({ error: "toAgentId and byAgentId are required" })
+			return
+		}
+
+		const task = projectStore.delegateManagedTask(req.params.id, req.params.taskId, toAgentId, byAgentId)
+
+		if (!task) {
+			res.status(400).json({ error: "Task not found or cannot be delegated" })
+			return
+		}
+
+		res.json(task)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/managed-tasks/:taskId/accept - Accept a delegated task
+ * Body: { agentId }
+ */
+app.post("/api/projects/:id/managed-tasks/:taskId/accept", (req, res): void => {
+	try {
+		const { agentId } = req.body
+		
+		if (!agentId) {
+			res.status(400).json({ error: "agentId is required" })
+			return
+		}
+
+		const task = projectStore.acceptManagedTask(req.params.id, req.params.taskId, agentId)
+
+		if (!task) {
+			res.status(400).json({ error: "Task not found or cannot be accepted" })
+			return
+		}
+
+		res.json(task)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/managed-tasks/:taskId/block - Block a task
+ * Body: { agentId, blockingReason: { type, description, blockedByTaskId?, question?, unblockRequires? } }
+ */
+app.post("/api/projects/:id/managed-tasks/:taskId/block", (req, res): void => {
+	try {
+		const { agentId, blockingReason } = req.body
+		
+		if (!agentId || !blockingReason?.type || !blockingReason?.description) {
+			res.status(400).json({ error: "agentId and blockingReason (with type and description) are required" })
+			return
+		}
+
+		const task = projectStore.blockManagedTask(req.params.id, req.params.taskId, agentId, {
+			...blockingReason,
+			since: new Date().toISOString(),
+		})
+
+		if (!task) {
+			res.status(400).json({ error: "Task not found or cannot be blocked" })
+			return
+		}
+
+		io.emit("task-blocked", { projectId: req.params.id, taskId: req.params.taskId, reason: blockingReason.type })
+		res.json(task)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/managed-tasks/:taskId/unblock - Unblock a task
+ * Body: { agentId, resolution }
+ */
+app.post("/api/projects/:id/managed-tasks/:taskId/unblock", (req, res): void => {
+	try {
+		const { agentId, resolution } = req.body
+		
+		if (!agentId || !resolution) {
+			res.status(400).json({ error: "agentId and resolution are required" })
+			return
+		}
+
+		const task = projectStore.unblockManagedTask(req.params.id, req.params.taskId, agentId, resolution)
+
+		if (!task) {
+			res.status(400).json({ error: "Task not found or cannot be unblocked" })
+			return
+		}
+
+		io.emit("task-unblocked", { projectId: req.params.id, taskId: req.params.taskId })
+		res.json(task)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/managed-tasks/:taskId/submit-review - Submit task for review
+ * Body: { agentId, result: { filesCreated?, filesModified?, commitHash?, summary } }
+ */
+app.post("/api/projects/:id/managed-tasks/:taskId/submit-review", (req, res): void => {
+	try {
+		const { agentId, result } = req.body
+		
+		if (!agentId || !result?.summary) {
+			res.status(400).json({ error: "agentId and result.summary are required" })
+			return
+		}
+
+		const task = projectStore.submitManagedTaskForReview(req.params.id, req.params.taskId, agentId, result)
+
+		if (!task) {
+			res.status(400).json({ error: "Task not found or cannot be submitted for review" })
+			return
+		}
+
+		res.json(task)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/managed-tasks/:taskId/approve - Approve task after review
+ * Body: { reviewerAgentId }
+ */
+app.post("/api/projects/:id/managed-tasks/:taskId/approve", (req, res): void => {
+	try {
+		const { reviewerAgentId } = req.body
+		
+		if (!reviewerAgentId) {
+			res.status(400).json({ error: "reviewerAgentId is required" })
+			return
+		}
+
+		const task = projectStore.approveManagedTask(req.params.id, req.params.taskId, reviewerAgentId)
+
+		if (!task) {
+			res.status(400).json({ error: "Task not found or cannot be approved" })
+			return
+		}
+
+		res.json(task)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/managed-tasks/:taskId/verify - Run verification and verify task
+ * Body: { agentId, quickMode? }
+ */
+app.post("/api/projects/:id/managed-tasks/:taskId/verify", async (req, res): Promise<void> => {
+	try {
+		const { agentId, quickMode } = req.body
+		
+		if (!agentId) {
+			res.status(400).json({ error: "agentId is required" })
+			return
+		}
+
+		// Run verification
+		const verification = await projectStore.runTaskVerification(req.params.id, req.params.taskId, { quickMode })
+		if (!verification) {
+			res.status(404).json({ error: "Task not found" })
+			return
+		}
+
+		// If verification passed, mark as verified
+		if (verification.allPassed) {
+			const task = await projectStore.verifyManagedTask(req.params.id, req.params.taskId, agentId, verification)
+			if (task) {
+				res.json({ task, verification })
+				return
+			}
+		}
+
+		// Return verification result even if not passed
+		res.json({ verification, message: verification.allPassed ? "Verified" : "Verification failed" })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/projects/:id/managed-tasks/startable - Get tasks ready to start
+ */
+app.get("/api/projects/:id/managed-tasks/startable", (req, res): void => {
+	try {
+		const tasks = projectStore.getStartableTasks(req.params.id)
+		res.json(tasks)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/projects/:id/managed-tasks/blocked - Get blocked tasks with reasons
+ */
+app.get("/api/projects/:id/managed-tasks/blocked", (req, res): void => {
+	try {
+		const blocked = projectStore.getBlockedTasks(req.params.id)
+		res.json(blocked)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/update-plan - Regenerate PLAN.md from managed tasks
+ */
+app.post("/api/projects/:id/update-plan", async (req, res): Promise<void> => {
+	try {
+		await projectStore.updateProjectPlan(req.params.id)
+		res.json({ success: true })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+// ============================================================================
+// FILE OWNERSHIP API (Proposal 4)
+// ============================================================================
+
+/**
+ * GET /api/projects/:id/files/check - Check if agent can modify a file
+ * Query: ?agentId=xxx&path=src/file.ts
+ */
+app.get("/api/projects/:id/files/check", async (req, res): Promise<void> => {
+	try {
+		const { agentId, path: filePath } = req.query
+		
+		if (!agentId || !filePath) {
+			res.status(400).json({ error: "agentId and path query parameters are required" })
+			return
+		}
+
+		const result = await projectStore.checkFileAccess(req.params.id, String(agentId), String(filePath))
+		res.json(result)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/files/register - Register file ownership
+ * Body: { filePath, owner, description?, taskId? }
+ */
+app.post("/api/projects/:id/files/register", async (req, res): Promise<void> => {
+	try {
+		const { filePath, owner, description, taskId } = req.body
+		
+		if (!filePath || !owner) {
+			res.status(400).json({ error: "filePath and owner are required" })
+			return
+		}
+
+		const ownership = await projectStore.registerFile(req.params.id, filePath, owner, { description, taskId })
+
+		if (!ownership) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+
+		res.json(ownership)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/files/register-batch - Register multiple files
+ * Body: { filePaths: string[], owner, taskId? }
+ */
+app.post("/api/projects/:id/files/register-batch", async (req, res): Promise<void> => {
+	try {
+		const { filePaths, owner, taskId } = req.body
+		
+		if (!filePaths?.length || !owner) {
+			res.status(400).json({ error: "filePaths (array) and owner are required" })
+			return
+		}
+
+		const ownerships = await projectStore.registerFiles(req.params.id, filePaths, owner, taskId)
+		res.json({ registered: ownerships.length, files: ownerships })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/projects/:id/files/owned - Get files owned by an agent
+ * Query: ?agentId=xxx
+ */
+app.get("/api/projects/:id/files/owned", async (req, res): Promise<void> => {
+	try {
+		const { agentId } = req.query
+		
+		if (!agentId) {
+			res.status(400).json({ error: "agentId query parameter is required" })
+			return
+		}
+
+		const files = await projectStore.getAgentFiles(req.params.id, String(agentId))
+		res.json(files)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/files/handoff/request - Request file handoff
+ * Body: { filePath, toAgentId, reason, taskId? }
+ */
+app.post("/api/projects/:id/files/handoff/request", async (req, res): Promise<void> => {
+	try {
+		const { filePath, toAgentId, reason, taskId } = req.body
+		
+		if (!filePath || !toAgentId || !reason) {
+			res.status(400).json({ error: "filePath, toAgentId, and reason are required" })
+			return
+		}
+
+		const handoff = await projectStore.requestFileHandoff(req.params.id, filePath, toAgentId, reason, taskId)
+
+		if (!handoff) {
+			res.status(400).json({ error: "File not registered or project not found" })
+			return
+		}
+
+		res.json(handoff)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/files/handoff/:handoffId/approve - Approve handoff
+ * Body: { approverId }
+ */
+app.post("/api/projects/:id/files/handoff/:handoffId/approve", async (req, res): Promise<void> => {
+	try {
+		const { approverId } = req.body
+		
+		if (!approverId) {
+			res.status(400).json({ error: "approverId is required" })
+			return
+		}
+
+		const handoff = await projectStore.approveFileHandoff(req.params.id, req.params.handoffId, approverId)
+
+		if (!handoff) {
+			res.status(400).json({ error: "Handoff not found or already resolved" })
+			return
+		}
+
+		res.json(handoff)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/files/handoff/:handoffId/deny - Deny handoff
+ * Body: { approverId, reason }
+ */
+app.post("/api/projects/:id/files/handoff/:handoffId/deny", async (req, res): Promise<void> => {
+	try {
+		const { approverId, reason } = req.body
+		
+		if (!approverId || !reason) {
+			res.status(400).json({ error: "approverId and reason are required" })
+			return
+		}
+
+		const handoff = await projectStore.denyFileHandoff(req.params.id, req.params.handoffId, approverId, reason)
+
+		if (!handoff) {
+			res.status(400).json({ error: "Handoff not found or already resolved" })
+			return
+		}
+
+		res.json(handoff)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/files/handoff/:handoffId/complete - Complete approved handoff
+ */
+app.post("/api/projects/:id/files/handoff/:handoffId/complete", async (req, res): Promise<void> => {
+	try {
+		const ownership = await projectStore.completeFileHandoff(req.params.id, req.params.handoffId)
+
+		if (!ownership) {
+			res.status(400).json({ error: "Handoff not found or not approved" })
+			return
+		}
+
+		res.json(ownership)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/projects/:id/files/handoffs/pending - Get pending handoffs for an agent
+ * Query: ?agentId=xxx
+ */
+app.get("/api/projects/:id/files/handoffs/pending", async (req, res): Promise<void> => {
+	try {
+		const { agentId } = req.query
+		
+		if (!agentId) {
+			res.status(400).json({ error: "agentId query parameter is required" })
+			return
+		}
+
+		const handoffs = await projectStore.getAgentPendingHandoffs(req.params.id, String(agentId))
+		res.json(handoffs)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/files/update-registry - Regenerate FILES.md
+ */
+app.post("/api/projects/:id/files/update-registry", async (req, res): Promise<void> => {
+	try {
+		await projectStore.updateFilesRegistry(req.params.id)
+		res.json({ success: true })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+// ============================================================================
+// PLANNING LOG API (Proposal 3)
+// ============================================================================
+
+/**
+ * POST /api/projects/:id/decisions - Create a new decision
+ * Body: { title, category, context, options[], chosenOptionId, decision, rationale, consequences?, relatedTasks?, relatedDecisions?, decidedBy }
+ */
+app.post("/api/projects/:id/decisions", async (req, res): Promise<void> => {
+	try {
+		const decision = await projectStore.createDecision(req.params.id, req.body)
+		if (!decision) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+		io.emit("decision-created", { projectId: req.params.id, decision })
+		res.json(decision)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/decisions/propose - Propose a decision for review
+ * Body: { title, category, context, options[], recommendedOptionId?, decidedBy, relatedTasks? }
+ */
+app.post("/api/projects/:id/decisions/propose", async (req, res): Promise<void> => {
+	try {
+		const decision = await projectStore.proposeDecision(req.params.id, req.body)
+		if (!decision) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+		io.emit("decision-created", { projectId: req.params.id, decision })
+		res.json(decision)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/decisions/:decisionId/accept - Accept a proposed decision
+ * Body: { chosenOptionId, decision, rationale, consequences?, acceptedBy }
+ */
+app.post("/api/projects/:id/decisions/:decisionId/accept", async (req, res): Promise<void> => {
+	try {
+		const decision = await projectStore.acceptPlanningDecision(
+			req.params.id,
+			req.params.decisionId,
+			req.body
+		)
+		if (!decision) {
+			res.status(404).json({ error: "Decision not found or not in proposed status" })
+			return
+		}
+		io.emit("decision-updated", { projectId: req.params.id, decisionId: req.params.decisionId, status: "accepted", decision })
+		res.json(decision)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/decisions/:decisionId/implement - Mark decision as implemented
+ * Body: { implementedBy }
+ */
+app.post("/api/projects/:id/decisions/:decisionId/implement", async (req, res): Promise<void> => {
+	try {
+		const { implementedBy } = req.body
+		if (!implementedBy) {
+			res.status(400).json({ error: "implementedBy is required" })
+			return
+		}
+		const decision = await projectStore.markDecisionImplemented(
+			req.params.id,
+			req.params.decisionId,
+			implementedBy
+		)
+		if (!decision) {
+			res.status(404).json({ error: "Decision not found or not in accepted status" })
+			return
+		}
+		io.emit("decision-updated", { projectId: req.params.id, decisionId: req.params.decisionId, status: "implemented", decision })
+		res.json(decision)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/decisions/:decisionId/supersede - Supersede with a new decision
+ * Body: { title, category, context, options[], chosenOptionId, decision, rationale, ... }
+ */
+app.post("/api/projects/:id/decisions/:decisionId/supersede", async (req, res): Promise<void> => {
+	try {
+		const result = await projectStore.supersedeDecision(
+			req.params.id,
+			req.params.decisionId,
+			req.body
+		)
+		if (!result) {
+			res.status(404).json({ error: "Decision not found" })
+			return
+		}
+		io.emit("decision-updated", { projectId: req.params.id, decisionId: req.params.decisionId, status: "superseded", result })
+		res.json(result)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/decisions/:decisionId/reject - Reject a proposed decision
+ * Body: { reason, rejectedBy }
+ */
+app.post("/api/projects/:id/decisions/:decisionId/reject", async (req, res): Promise<void> => {
+	try {
+		const { reason, rejectedBy } = req.body
+		if (!reason || !rejectedBy) {
+			res.status(400).json({ error: "reason and rejectedBy are required" })
+			return
+		}
+		const decision = await projectStore.rejectDecision(
+			req.params.id,
+			req.params.decisionId,
+			{ reason, rejectedBy }
+		)
+		if (!decision) {
+			res.status(404).json({ error: "Decision not found or not in proposed status" })
+			return
+		}
+		io.emit("decision-updated", { projectId: req.params.id, decisionId: req.params.decisionId, status: "rejected", decision })
+		res.json(decision)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/decisions/:decisionId/defer - Defer a decision
+ * Body: { reason, deferredBy, deferUntil? }
+ */
+app.post("/api/projects/:id/decisions/:decisionId/defer", async (req, res): Promise<void> => {
+	try {
+		const { reason, deferredBy, deferUntil } = req.body
+		if (!reason || !deferredBy) {
+			res.status(400).json({ error: "reason and deferredBy are required" })
+			return
+		}
+		const decision = await projectStore.deferDecision(
+			req.params.id,
+			req.params.decisionId,
+			{ reason, deferredBy, deferUntil }
+		)
+		if (!decision) {
+			res.status(404).json({ error: "Decision not found" })
+			return
+		}
+		io.emit("decision-updated", { projectId: req.params.id, decisionId: req.params.decisionId, status: "deferred", decision })
+		res.json(decision)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/projects/:id/decisions - Get all decisions
+ * Query: ?status=accepted,implemented&category=architecture&taskId=T-001
+ */
+app.get("/api/projects/:id/decisions", async (req, res): Promise<void> => {
+	try {
+		const { status, category, taskId } = req.query
+
+		if (taskId) {
+			const decisions = await projectStore.getDecisionsForTask(req.params.id, String(taskId))
+			res.json(decisions)
+			return
+		}
+
+		if (status === "pending" || status === "proposed") {
+			const decisions = await projectStore.getPendingDecisions(req.params.id)
+			res.json(decisions)
+			return
+		}
+
+		// Default: get active decisions
+		const decisions = await projectStore.getActiveDecisions(req.params.id)
+		res.json(decisions)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/update-planning - Regenerate PLANNING.md
+ */
+app.post("/api/projects/:id/update-planning", async (req, res): Promise<void> => {
+	try {
+		await projectStore.updatePlanningLog(req.params.id)
+		res.json({ success: true })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+// ============================================================================
+// SUPERVISOR OVERRIDE API (Proposal 5)
+// ============================================================================
+
+/**
+ * POST /api/projects/:id/supervisor/force-unblock - Force unblock a blocked task
+ * Body: { taskId, supervisorId, reason, resolution }
+ */
+app.post("/api/projects/:id/supervisor/force-unblock", (req, res): void => {
+	try {
+		const { taskId, supervisorId, reason, resolution } = req.body
+		if (!taskId || !supervisorId || !reason || !resolution) {
+			res.status(400).json({ error: "taskId, supervisorId, reason, and resolution are required" })
+			return
+		}
+
+		const result = projectStore.supervisorForceUnblock(
+			req.params.id,
+			taskId,
+			supervisorId,
+			reason,
+			resolution
+		)
+
+		if (!result) {
+			res.status(400).json({ error: "Task not found or not blocked" })
+			return
+		}
+
+		io.emit("supervisor-override", { projectId: req.params.id, action: "force-unblock", taskId, by: supervisorId })
+		io.emit("task-unblocked", { projectId: req.params.id, taskId })
+		res.json(result)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/supervisor/force-reassign - Force reassign a task
+ * Body: { taskId, supervisorId, newAgentId, reason }
+ */
+app.post("/api/projects/:id/supervisor/force-reassign", (req, res): void => {
+	try {
+		const { taskId, supervisorId, newAgentId, reason } = req.body
+		if (!taskId || !supervisorId || !newAgentId || !reason) {
+			res.status(400).json({ error: "taskId, supervisorId, newAgentId, and reason are required" })
+			return
+		}
+
+		const result = projectStore.supervisorForceReassign(
+			req.params.id,
+			taskId,
+			supervisorId,
+			newAgentId,
+			reason
+		)
+
+		if (!result) {
+			res.status(400).json({ error: "Task not found or cannot be reassigned" })
+			return
+		}
+
+		io.emit("supervisor-override", { projectId: req.params.id, action: "force-reassign", taskId, newAgentId, by: supervisorId })
+		res.json(result)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/supervisor/force-status - Force a task to a specific status
+ * Body: { taskId, supervisorId, newStatus, reason }
+ */
+app.post("/api/projects/:id/supervisor/force-status", (req, res): void => {
+	try {
+		const { taskId, supervisorId, newStatus, reason } = req.body
+		if (!taskId || !supervisorId || !newStatus || !reason) {
+			res.status(400).json({ error: "taskId, supervisorId, newStatus, and reason are required" })
+			return
+		}
+
+		const result = projectStore.supervisorForceStatus(
+			req.params.id,
+			taskId,
+			supervisorId,
+			newStatus,
+			reason
+		)
+
+		if (!result) {
+			res.status(400).json({ error: "Task not found" })
+			return
+		}
+
+		io.emit("supervisor-override", { projectId: req.params.id, action: "force-status", taskId, newStatus, by: supervisorId })
+		res.json(result)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/supervisor/force-cancel - Force cancel a task
+ * Body: { taskId, supervisorId, reason }
+ */
+app.post("/api/projects/:id/supervisor/force-cancel", (req, res): void => {
+	try {
+		const { taskId, supervisorId, reason } = req.body
+		if (!taskId || !supervisorId || !reason) {
+			res.status(400).json({ error: "taskId, supervisorId, and reason are required" })
+			return
+		}
+
+		const result = projectStore.supervisorForceCancel(
+			req.params.id,
+			taskId,
+			supervisorId,
+			reason
+		)
+
+		if (!result) {
+			res.status(400).json({ error: "Task not found or cannot be cancelled" })
+			return
+		}
+
+		io.emit("supervisor-override", { projectId: req.params.id, action: "force-cancel", taskId, by: supervisorId })
+		res.json(result)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/supervisor/change-priority - Change task priority
+ * Body: { taskId, supervisorId, newPriority (1-5: 1=critical, 5=low), reason }
+ */
+app.post("/api/projects/:id/supervisor/change-priority", (req, res): void => {
+	try {
+		const { taskId, supervisorId, newPriority, reason } = req.body
+		if (!taskId || !supervisorId || newPriority === undefined || !reason) {
+			res.status(400).json({ error: "taskId, supervisorId, newPriority, and reason are required" })
+			return
+		}
+
+		// Validate priority is 1-5
+		const priority = Number(newPriority)
+		if (![1, 2, 3, 4, 5].includes(priority)) {
+			res.status(400).json({ error: "newPriority must be 1 (critical) to 5 (low)" })
+			return
+		}
+
+		const result = projectStore.supervisorChangePriority(
+			req.params.id,
+			taskId,
+			supervisorId,
+			priority as 1 | 2 | 3 | 4 | 5,
+			reason
+		)
+
+		if (!result) {
+			res.status(400).json({ error: "Task not found" })
+			return
+		}
+
+		io.emit("supervisor-override", { projectId: req.params.id, action: "change-priority", taskId, newPriority: priority, by: supervisorId })
+		res.json(result)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/projects/:id/supervisor/overrides - Get all supervisor overrides
+ * Query: ?taskId=T-001
+ */
+app.get("/api/projects/:id/supervisor/overrides", (req, res): void => {
+	try {
+		const { taskId } = req.query
+
+		if (taskId) {
+			const overrides = projectStore.getTaskOverrides(req.params.id, String(taskId))
+			res.json(overrides)
+			return
+		}
+
+		const overrides = projectStore.getSupervisorOverrides(req.params.id)
+		res.json(overrides)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
  * POST /api/projects/:id/agents - Add an agent to a project
  */
 app.post("/api/projects/:id/agents", (req, res): void => {
@@ -6059,8 +7324,8 @@ If you don't know, say so. Be concise.`,
 				targetAgent.homeFolder || "/",
 				`[Message from ${agentConfig.name}]\n\n${message}`,
 				"agent",
-				false,
 				agentConfig.name,
+				false,
 			)
 
 			// Execute the message via handleSupervisorChat for the target agent
@@ -6086,8 +7351,8 @@ If you don't know, say so. Be concise.`,
 					agentConfig.homeFolder || "/",
 					`[Response from ${targetAgent.name}]\n\n${responsePreview}`,
 					"agent",
-					false,
 					targetAgent.name,  // From the target agent
+					false,
 				)
 				
 				if (wait_for_response) {
@@ -6722,9 +7987,42 @@ Initial delegation: ${task}
 				log.error(`[delegate_task] Failed to save desired state: ${err.message}`)
 			}
 			
+			// Society Agent - Create tracked delegation with stable task ID
+			const projectDir = projectStore.projectDir(project.id)
+			let taskId = "(untracked)"
+			try {
+				const delegationRequest: DelegationRequest = {
+					projectId: project.id,
+					fromAgentId: agentConfig.id,
+					fromAgentName: agentConfig.name,
+					toAgentId: agent_id,
+					toAgentName: targetAgent.name,
+					task,
+					desiredState: desired_state,
+					acceptanceCriteria: acceptance_criteria,
+					constraints,
+					context,
+					priority: priority as "low" | "medium" | "high" | "critical" | undefined,
+				}
+				
+				const delegation = createDelegation(projectDir, delegationRequest)
+				taskId = delegation.taskId
+				
+				// Save task to storage
+				saveTask(projectDir, delegation.task)
+				
+				// Add task to subordinate's PLAN.md
+				addTaskToPlan(targetHomeDir, delegation.task, agentConfig.name)
+				
+				log.info(`[delegate_task] Created tracked task ${taskId}`)
+			} catch (err: any) {
+				log.warn(`[delegate_task] Task tracking failed (continuing anyway): ${err.message}`)
+			}
+			
 			// Emit delegation event with full details
 			io.emit("task-delegated", {
 				projectId: project.id,
+				taskId, // Stable task ID (e.g., T-FRO-001)
 				fromAgent: agentConfig.id,
 				fromAgentName: agentConfig.name,
 				toAgent: agent_id,
@@ -6742,6 +8040,8 @@ Initial delegation: ${task}
 			
 			// Build comprehensive delegation message with specs
 			const delegationMessage = `# 📋 Task Delegation from ${agentConfig.name}
+
+## Task ID: ${taskId}
 
 ## Task
 ${task}
@@ -6769,6 +8069,7 @@ ${context || "No additional context."}
 			
 			io.emit("delegation-message", {
 				projectId: project.id,
+				taskId, // Stable task ID
 				toAgentId: targetAgent.id,
 				toAgentName: targetAgent.name,
 				fromAgentId: agentConfig.id,
@@ -6803,7 +8104,7 @@ ${context || "No additional context."}
 				} catch {}
 				
 				return { 
-					result: `✅ **Delegation to ${targetAgent.name} complete**\n\n**Response:**\n${result.fullResponse.substring(0, 2000)}${result.fullResponse.length > 2000 ? '...(truncated)' : ''}`, 
+					result: `✅ **Delegation to ${targetAgent.name} complete** (${taskId})\n\n**Response:**\n${result.fullResponse.substring(0, 2000)}${result.fullResponse.length > 2000 ? '...(truncated)' : ''}`, 
 					filesCreated: result.totalFilesCreated 
 				}
 			} catch (err: any) {
@@ -8815,9 +10116,22 @@ function getOrCreateProjectAgent(
 
 	// Resolve project workspace path
 	const projectDir = projectStore.agentHomeDir(project.id, agentConfig.id)
+	const projectRoot = projectStore.projectDir(project.id)
 
 	// Build system prompt with project + agent context + file creation instructions
-	let fullPrompt = buildFullSystemPrompt(agentConfig.systemPrompt || `You are ${agentConfig.name}, part of project ${project.name}.`)
+	// Society Agent start - Use project-aware prompt when config is cached
+	let fullPrompt: string
+	const cachedConfig = projectConfigCache.get(projectRoot)
+	if (cachedConfig) {
+		const projectSection = generateProjectPromptSection(cachedConfig.config)
+		fullPrompt = buildFullSystemPrompt(agentConfig.systemPrompt || `You are ${agentConfig.name}, part of project ${project.name}.`)
+		fullPrompt += "\n\n" + projectSection
+	} else {
+		fullPrompt = buildFullSystemPrompt(agentConfig.systemPrompt || `You are ${agentConfig.name}, part of project ${project.name}.`)
+		// Async load config for next time (fire and forget)
+		getProjectConfigCached(projectRoot).catch(() => {})
+	}
+	// Society Agent end
 	// Society Agent start - Tell the agent where its project folder is so it creates files there
 	fullPrompt += `\n\n## File Creation Instructions
 You are working in project "${project.name}". Your project folder is: ${projectDir}
@@ -9022,7 +10336,7 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 			projectStore.recordActivity(found.project.id, agentId)
 			log.info(`[${found.agent.name}@${found.project.name}] chat: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
 			// Society Agent start - activity log: incoming user message
-			agentActivityLogger.logChatIn(found.project.id, agentId, found.project.folder, found.agent.homeFolder || "/", description || "[attachment only]", "user", !!(attachments && attachments.length > 0))
+			agentActivityLogger.logChatIn(found.project.id, agentId, found.project.folder, found.agent.homeFolder || "/", description || "[attachment only]", "user", undefined, !!(attachments && attachments.length > 0))
 			// Society Agent end
 
 			// Society Agent start - All agents use tool-based agentic loop

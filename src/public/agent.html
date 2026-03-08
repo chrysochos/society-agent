@@ -472,6 +472,7 @@
   <div class="agent-stats" id="agentStats"></div>
   <!-- Society Agent start - Theme, Export and Pause buttons -->
   <button class="btn btn-sm" id="themeBtn" onclick="toggleTheme()" style="margin-right:8px;padding:4px 10px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer" title="Toggle dark/light theme">🌙</button>
+  <button class="btn btn-sm" id="bootstrapBtn" onclick="bootstrapAgentFolder()" style="margin-right:8px;padding:4px 10px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer" title="Bootstrap agent folder with FILES.md, PLAN.md">📄 Bootstrap</button>
   <button class="btn btn-sm" id="exportBtn" onclick="exportChat()" style="margin-right:8px;padding:4px 10px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer" title="Export chat as Markdown">📥 Export</button>
   <button class="btn btn-sm" id="pauseBtn" onclick="toggleSystemPause()" style="margin-right:8px;padding:4px 10px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer">🔧 Maintenance</button>
   <span class="pause-indicator" id="pauseIndicator">System Paused</span>
@@ -496,6 +497,7 @@
     <h2 style="display:flex;align-items:center;gap:6px">
       Files
       <span style="flex:1"></span>
+      <button class="act-btn" onclick="syncAgentFiles()" title="Sync FILES.md" style="font-size:11px;background:none;border:none;color:var(--muted);cursor:pointer">&#128260;</button>
       <button class="act-btn" onclick="promptNewFile('')" title="New File" style="font-size:13px;background:none;border:none;color:var(--muted);cursor:pointer">&#128196;+</button>
       <button class="act-btn" onclick="promptNewFolder('')" title="New Folder" style="font-size:13px;background:none;border:none;color:var(--muted);cursor:pointer">&#128193;+</button>
       <button class="act-btn" onclick="refreshFiles()" title="Refresh" style="font-size:12px;background:none;border:none;color:var(--muted);cursor:pointer">&#8635;</button>
@@ -565,6 +567,32 @@
     </div>
     <!-- Society Agent end - Problems Panel -->
     
+    <!-- Society Agent start - Supervisor Override Panel -->
+    <div id="supervisorPanel" style="display:none;margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;cursor:pointer" onclick="toggleSupervisorPanel()">
+        <span class="chevron" id="supervisorChevron">▼</span>
+        <span style="font-size:12px;font-weight:600;color:var(--yellow)">⚡ Blocked Tasks</span>
+        <span id="blockedBadge" style="background:var(--yellow);color:#000;padding:1px 6px;border-radius:10px;font-size:10px;font-weight:600">0</span>
+        <span style="flex:1"></span>
+        <button onclick="event.stopPropagation(); refreshBlockedTasks()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px" title="Refresh">&#8635;</button>
+      </div>
+      <div id="blockedList" style="font-size:11px;max-height:200px;overflow-y:auto"></div>
+    </div>
+    <!-- Society Agent end - Supervisor Override Panel -->
+    
+    <!-- Society Agent start - Decision Review Panel -->
+    <div id="decisionPanel" style="display:none;margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;cursor:pointer" onclick="toggleDecisionPanel()">
+        <span class="chevron" id="decisionChevron">▼</span>
+        <span style="font-size:12px;font-weight:600;color:var(--accent)">🎯 Decisions</span>
+        <span id="decisionBadge" style="background:var(--accent);color:#000;padding:1px 6px;border-radius:10px;font-size:10px;font-weight:600">0</span>
+        <span style="flex:1"></span>
+        <button onclick="event.stopPropagation(); refreshDecisions()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px" title="Refresh">&#8635;</button>
+      </div>
+      <div id="decisionList" style="font-size:11px;max-height:200px;overflow-y:auto"></div>
+    </div>
+    <!-- Society Agent end - Decision Review Panel -->
+
     <div id="fileTree" class="file-tree">
       <div style="padding:16px;color:var(--muted);font-size:12px">No files yet</div>
     </div>
@@ -945,6 +973,8 @@ async function loadAgent() {
     refreshFiles();
     refreshApprovals();
     refreshProblems();
+    refreshBlockedTasks();
+    refreshDecisions();
   } catch (e) {
     addLog('error', `Failed to load agent: ${e.message}`);
   }
@@ -1633,6 +1663,13 @@ socket.on('task-claimed', (data) => {
 
 socket.on('file-deleted', () => { refreshFiles(); refreshProblems(); });
 socket.on('file-moved', () => { refreshFiles(); refreshProblems(); });
+
+// Task and decision events
+socket.on('task-blocked', () => refreshBlockedTasks());
+socket.on('task-unblocked', () => refreshBlockedTasks());
+socket.on('supervisor-override', () => refreshBlockedTasks());
+socket.on('decision-created', () => refreshDecisions());
+socket.on('decision-updated', () => refreshDecisions());
 
 // Live diagnostics updates from background watchers — scoped to agent's own folder
 socket.on('diagnostics-update', (data) => {
@@ -2515,6 +2552,324 @@ let treeEventsDelegated = false; // Society Agent - track if delegated events at
 function agentFileApi(endpoint, opts) {
   // All file operations scoped to /api/agent/:id/workspace/...
   return fetch(`${API}/api/agent/${AGENT_ID}/workspace${endpoint}`, opts);
+}
+
+async function bootstrapAgentFolder() {
+  if (!agentProfile) {
+    showToast('Agent not loaded', 'error');
+    return;
+  }
+  
+  // Get agent's home folder - this is the subfolder path relative to project
+  const homeFolder = (agentProfile.homeFolder || '').replace(/^\/+|\/+$/g, '');
+  
+  // Skip if agent is at project root
+  if (!homeFolder || homeFolder === '') {
+    showToast('This agent is at project root. Use project Bootstrap button instead.', 'info');
+    return;
+  }
+  
+  if (!confirm(`Bootstrap folder for ${agentProfile.name}?\nThis will create FILES.md, PLAN.md, AGENTS.md in ${homeFolder}/`)) return;
+  
+  try {
+    showToast(`Bootstrapping ${homeFolder}/...`, 'info');
+    const res = await fetch(`${API}/api/projects/${PROJECT_ID}/bootstrap/subfolder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        subPath: homeFolder,
+        ownerAgentId: AGENT_ID,
+        scanTasks: true,
+        overwrite: false
+      })
+    });
+    
+    if (res.ok) {
+      const data = await res.json();
+      const msg = `Bootstrap complete: ${data.filesWritten?.length || 0} files written`;
+      showToast(msg, 'success');
+      refreshFiles();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to bootstrap folder', 'error');
+  }
+}
+
+// ============================================================================
+// Sync Files
+// ============================================================================
+
+async function syncAgentFiles() {
+  if (!agentProfile) {
+    showToast('Agent not loaded', 'error');
+    return;
+  }
+  
+  const homeFolder = (agentProfile.homeFolder || '').replace(/^\/+|\/+$/g, '');
+  const subPath = homeFolder || undefined;
+  
+  try {
+    showToast('Syncing files...', 'info');
+    const res = await fetch(`${API}/api/projects/${PROJECT_ID}/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        subPath,
+        scanNewTasks: true,
+        preserveRemovedFiles: true,
+        addOnly: false
+      })
+    });
+    
+    if (res.ok) {
+      const data = await res.json();
+      const msg = `Sync: +${data.filesAdded?.length || 0} -${data.filesRemoved?.length || 0}`;
+      showToast(msg, 'success');
+      refreshFiles();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to sync files', 'error');
+  }
+}
+
+// ============================================================================
+// Supervisor Override (Blocked Tasks)
+// ============================================================================
+
+let supervisorPanelOpen = true;
+
+function toggleSupervisorPanel() {
+  supervisorPanelOpen = !supervisorPanelOpen;
+  const list = document.getElementById('blockedList');
+  const chevron = document.getElementById('supervisorChevron');
+  list.style.display = supervisorPanelOpen ? 'block' : 'none';
+  chevron.textContent = supervisorPanelOpen ? '▼' : '▶';
+}
+
+async function refreshBlockedTasks() {
+  try {
+    const res = await fetch(`${API}/api/projects/${PROJECT_ID}/tasks`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const blocked = (data.tasks || []).filter(t => t.status === 'blocked');
+    renderBlockedTasks(blocked);
+  } catch (e) {
+    console.error('Failed to load blocked tasks:', e);
+  }
+}
+
+function renderBlockedTasks(tasks) {
+  const panel = document.getElementById('supervisorPanel');
+  const badge = document.getElementById('blockedBadge');
+  const list = document.getElementById('blockedList');
+  
+  badge.textContent = tasks.length;
+  
+  if (tasks.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  
+  panel.style.display = 'block';
+  
+  list.innerHTML = tasks.map(t => `
+    <div style="background:var(--bg);border:1px solid var(--yellow);border-radius:6px;padding:8px;margin-bottom:6px">
+      <div style="font-weight:600;margin-bottom:4px">${escapeHtml(t.title)}</div>
+      <div style="color:var(--yellow);font-size:10px;margin-bottom:6px">🚧 ${escapeHtml(t.blockedReason || 'Unknown')}</div>
+      <div style="display:flex;gap:4px">
+        <button onclick="supervisorUnblock('${t.id}')" style="flex:1;padding:3px 6px;font-size:10px;background:rgba(210,153,34,0.15);border:1px solid var(--yellow);color:var(--yellow);border-radius:4px;cursor:pointer">⚡ Unblock</button>
+        <button onclick="supervisorReassign('${t.id}')" style="flex:1;padding:3px 6px;font-size:10px;background:rgba(88,166,255,0.15);border:1px solid var(--accent);color:var(--accent);border-radius:4px;cursor:pointer">🔄 Reassign</button>
+        <button onclick="supervisorCancel('${t.id}')" style="padding:3px 6px;font-size:10px;background:rgba(248,81,73,0.15);border:1px solid var(--red);color:var(--red);border-radius:4px;cursor:pointer">✗</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function supervisorUnblock(taskId) {
+  const resolution = prompt('Resolution for unblocking:');
+  if (!resolution) return;
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${PROJECT_ID}/supervisor/force-unblock`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId, resolution, by: 'human-supervisor' })
+    });
+    if (res.ok) {
+      showToast('Task unblocked', 'success');
+      refreshBlockedTasks();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to unblock task', 'error');
+  }
+}
+
+async function supervisorReassign(taskId) {
+  const newAgent = prompt('Reassign to which agent?');
+  if (!newAgent) return;
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${PROJECT_ID}/supervisor/force-reassign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId, newAgentId: newAgent, reason: 'Supervisor override', by: 'human-supervisor' })
+    });
+    if (res.ok) {
+      showToast('Task reassigned', 'success');
+      refreshBlockedTasks();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to reassign task', 'error');
+  }
+}
+
+async function supervisorCancel(taskId) {
+  if (!confirm('Cancel this task?')) return;
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${PROJECT_ID}/supervisor/force-cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId, reason: 'Supervisor override', by: 'human-supervisor' })
+    });
+    if (res.ok) {
+      showToast('Task cancelled', 'success');
+      refreshBlockedTasks();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to cancel task', 'error');
+  }
+}
+
+// ============================================================================
+// Decision Review
+// ============================================================================
+
+let decisionPanelOpen = true;
+
+function toggleDecisionPanel() {
+  decisionPanelOpen = !decisionPanelOpen;
+  const list = document.getElementById('decisionList');
+  const chevron = document.getElementById('decisionChevron');
+  list.style.display = decisionPanelOpen ? 'block' : 'none';
+  chevron.textContent = decisionPanelOpen ? '▼' : '▶';
+}
+
+async function refreshDecisions() {
+  try {
+    const res = await fetch(`${API}/api/projects/${PROJECT_ID}/decisions`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const pending = (data.decisions || []).filter(d => d.status === 'proposed');
+    renderDecisions(pending);
+  } catch (e) {
+    console.error('Failed to load decisions:', e);
+  }
+}
+
+function renderDecisions(decisions) {
+  const panel = document.getElementById('decisionPanel');
+  const badge = document.getElementById('decisionBadge');
+  const list = document.getElementById('decisionList');
+  
+  badge.textContent = decisions.length;
+  
+  if (decisions.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  
+  panel.style.display = 'block';
+  
+  list.innerHTML = decisions.map(d => `
+    <div style="background:var(--bg);border:1px solid var(--accent);border-radius:6px;padding:8px;margin-bottom:6px">
+      <div style="display:flex;gap:6px;margin-bottom:4px">
+        <span style="font-size:9px;padding:1px 4px;background:rgba(88,166,255,0.1);color:var(--accent);border-radius:3px">${escapeHtml(d.category)}</span>
+      </div>
+      <div style="font-weight:600;margin-bottom:4px">${escapeHtml(d.title)}</div>
+      <div style="color:var(--muted);font-size:10px;margin-bottom:6px">${escapeHtml(d.context || '').substring(0, 100)}...</div>
+      <div style="display:flex;gap:4px">
+        <button onclick="acceptDecision('${d.id}')" style="flex:1;padding:3px 6px;font-size:10px;background:rgba(63,185,80,0.15);border:1px solid var(--green);color:var(--green);border-radius:4px;cursor:pointer">✓ Accept</button>
+        <button onclick="rejectDecision('${d.id}')" style="flex:1;padding:3px 6px;font-size:10px;background:rgba(248,81,73,0.15);border:1px solid var(--red);color:var(--red);border-radius:4px;cursor:pointer">✗ Reject</button>
+        <button onclick="deferDecision('${d.id}')" style="padding:3px 6px;font-size:10px;background:rgba(139,148,158,0.15);border:1px solid var(--muted);color:var(--muted);border-radius:4px;cursor:pointer">⏸</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function acceptDecision(decisionId) {
+  try {
+    const res = await fetch(`${API}/api/projects/${PROJECT_ID}/decisions/${decisionId}/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ acceptedBy: 'human-supervisor' })
+    });
+    if (res.ok) {
+      showToast('Decision accepted', 'success');
+      refreshDecisions();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to accept decision', 'error');
+  }
+}
+
+async function rejectDecision(decisionId) {
+  const reason = prompt('Reason for rejection:');
+  if (!reason) return;
+  
+  try {
+    const res = await fetch(`${API}/api/projects/${PROJECT_ID}/decisions/${decisionId}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rejectedBy: 'human-supervisor', reason })
+    });
+    if (res.ok) {
+      showToast('Decision rejected', 'success');
+      refreshDecisions();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to reject decision', 'error');
+  }
+}
+
+async function deferDecision(decisionId) {
+  try {
+    const res = await fetch(`${API}/api/projects/${PROJECT_ID}/decisions/${decisionId}/defer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deferredBy: 'human-supervisor', reason: 'Deferred for later' })
+    });
+    if (res.ok) {
+      showToast('Decision deferred', 'success');
+      refreshDecisions();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to defer decision', 'error');
+  }
 }
 
 async function refreshFiles() {
