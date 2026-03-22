@@ -478,3 +478,119 @@ export async function createOneShot(
 	return result
 }
 
+// ============================================================================
+// Context Window Configuration
+// ============================================================================
+
+/**
+ * Context window sizes for different providers/models (in tokens)
+ * These are the actual limits - we'll use 70% as the threshold for summarization
+ */
+export const CONTEXT_WINDOWS: Record<string, number> = {
+	// Anthropic Claude
+	"claude-3-5-sonnet": 200000,
+	"claude-3-5-haiku": 200000,
+	"claude-3-opus": 200000,
+	"claude-3-sonnet": 200000,
+	"claude-3-haiku": 200000,
+	"claude-4": 200000,
+	
+	// OpenAI
+	"gpt-4o": 128000,
+	"gpt-4o-mini": 128000,
+	"gpt-4-turbo": 128000,
+	"gpt-4": 8192,
+	"gpt-3.5-turbo": 16385,
+	"o1": 200000,
+	"o1-mini": 128000,
+	"o1-preview": 128000,
+	"o3": 200000,
+	"o3-mini": 200000,
+	
+	// MiniMax
+	"minimax": 204800,
+	"MiniMax-Text-01": 1000000,
+	"abab6.5s-chat": 245760,
+	"abab6.5g-chat": 8192,
+	"abab5.5-chat": 16384,
+	
+	// DeepSeek
+	"deepseek-chat": 64000,
+	"deepseek-coder": 64000,
+	"deepseek-reasoner": 64000,
+	
+	// Gemini
+	"gemini-1.5-pro": 2000000,
+	"gemini-1.5-flash": 1000000,
+	"gemini-2.0-flash": 1000000,
+	"gemini-pro": 32000,
+	
+	// Groq
+	"llama-3.3-70b-versatile": 128000,
+	"llama-3.1-70b-versatile": 131072,
+	"llama-3.1-8b-instant": 131072,
+	"mixtral-8x7b-32768": 32768,
+	
+	// Mistral
+	"mistral-large": 128000,
+	"mistral-medium": 32000,
+	"mistral-small": 32000,
+	"codestral": 32000,
+	
+	// Defaults by provider
+	"_anthropic": 200000,
+	"_openai": 128000,
+	"_minimax": 200000,  // Conservative - leave room for tools
+	"_deepseek": 64000,
+	"_gemini": 1000000,
+	"_groq": 128000,
+	"_mistral": 128000,
+	"_openrouter": 128000,
+	"_custom": 128000,
+}
+
+/**
+ * Get context window size for a model or provider
+ * @param model - Model ID (e.g., "claude-3-5-sonnet", "gpt-4o")
+ * @param provider - Provider type (fallback if model not found)
+ * @returns Context window size in tokens
+ */
+export function getContextWindowSize(model?: string, provider?: ProviderType): number {
+	// Try exact model match first
+	if (model) {
+		// Exact match
+		if (CONTEXT_WINDOWS[model]) {
+			return CONTEXT_WINDOWS[model]
+		}
+		// Partial match (e.g., "claude-3-5-sonnet-20241022" contains "claude-3-5-sonnet")
+		for (const [key, value] of Object.entries(CONTEXT_WINDOWS)) {
+			if (!key.startsWith("_") && model.toLowerCase().includes(key.toLowerCase())) {
+				return value
+			}
+		}
+	}
+	
+	// Fall back to provider default
+	if (provider) {
+		const providerKey = `_${provider}`
+		if (CONTEXT_WINDOWS[providerKey]) {
+			return CONTEXT_WINDOWS[providerKey]
+		}
+	}
+	
+	// Ultimate fallback - conservative
+	return 128000
+}
+
+/**
+ * Get safe context threshold (percentage of window to use before summarizing)
+ * Smaller models need more headroom for tools
+ */
+export function getSafeContextThreshold(contextWindow: number): number {
+	if (contextWindow >= 500000) return 80  // Large models can use more
+	if (contextWindow >= 200000) return 70  // Standard Claude/GPT-4
+	if (contextWindow >= 100000) return 65  // Medium models
+	if (contextWindow >= 50000) return 60   // Smaller models need more headroom
+	return 50  // Very small models - be conservative
+}
+

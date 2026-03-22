@@ -579,6 +579,13 @@
       <span class="value" id="limitDisplay" style="color:var(--green)">$100</span>
     </div>
     <!-- Society Agent end -->
+    
+    <!-- Society Agent start - Port allocation display -->
+    <div class="stat-row" title="Click to see port allocations" style="cursor:pointer" onclick="showPortsDialog()">
+      <span class="label">🔌 Ports</span>
+      <span class="value" id="portsDisplay">0</span>
+    </div>
+    <!-- Society Agent end -->
 
     <!-- File Explorer -->
     <h2 style="margin-top:12px;display:flex;align-items:center;gap:6px">
@@ -1256,6 +1263,173 @@ async function resetUsage() {
 }
 
 setTimeout(fetchLimits, 1500);
+// Society Agent end
+
+// Society Agent start - Port allocation dialog
+let cachedPorts = { total: 0, allocations: [], protectedSystemPorts: [] };
+
+async function fetchPorts() {
+  try {
+    const res = await fetch('/api/ports');
+    cachedPorts = await res.json();
+    updatePortsDisplay();
+  } catch (e) {
+    console.error('Failed to fetch ports:', e);
+  }
+}
+
+function updatePortsDisplay() {
+  const el = document.getElementById('portsDisplay');
+  if (el) {
+    const count = cachedPorts.total;
+    el.textContent = count > 0 ? count : '0';
+    el.style.color = count > 0 ? 'var(--blue)' : 'var(--muted)';
+  }
+}
+
+async function showPortsDialog() {
+  await fetchPorts();
+  
+  // Also fetch projects for the dropdown
+  let projects = [];
+  try {
+    const res = await fetch('/api/projects');
+    projects = await res.json();
+  } catch (e) {
+    console.error('Failed to fetch projects:', e);
+  }
+  
+  const systemPorts = cachedPorts.protectedSystemPorts || [];
+  const allocations = cachedPorts.allocations || [];
+  
+  let allocationsHtml = '';
+  if (allocations.length === 0) {
+    allocationsHtml = '<div style="color:var(--muted);padding:8px">No ports allocated yet</div>';
+  } else {
+    allocationsHtml = allocations.map(a => `
+      <div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);align-items:center">
+        <span style="font-weight:600;font-family:monospace;min-width:50px">${a.port}</span>
+        <span style="flex:1">${escapeHtml(a.serviceName)} ${a.description ? '<span style="color:var(--muted)">— ' + escapeHtml(a.description) + '</span>' : ''}</span>
+        <span style="color:var(--muted);font-size:11px">${escapeHtml(a.projectId)}</span>
+        <button class="btn btn-sm" onclick="releasePort(${a.port}, '${escapeHtml(a.projectId)}')" title="Release this port" style="padding:2px 6px;font-size:10px">✕</button>
+      </div>
+    `).join('');
+  }
+  
+  const projectOptions = projects.length > 0 
+    ? projects.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name || p.id)}</option>`).join('')
+    : '<option value="">No projects</option>';
+  
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal" style="max-width:550px">
+    <h3>🔌 Port Allocations</h3>
+    
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+      Agents request ports using <code>request_port({ service_name: "api", port: 3000 })</code>. 
+      Allocated ports are protected from other projects.
+    </div>
+    
+    <h4 style="margin:12px 0 8px">Allocate New Port</h4>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;margin-bottom:12px">
+      <div>
+        <label style="font-size:11px;color:var(--muted)">Project</label>
+        <select id="allocPort-project" style="width:100%;padding:4px;border:1px solid var(--border);border-radius:4px;background:var(--surface)">
+          ${projectOptions}
+        </select>
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--muted)">Service Name *</label>
+        <input type="text" id="allocPort-service" placeholder="e.g. api, frontend" style="width:100%;padding:4px;border:1px solid var(--border);border-radius:4px;box-sizing:border-box">
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--muted)">Port (optional)</label>
+        <input type="number" id="allocPort-port" placeholder="Auto" min="1024" max="65535" style="width:100%;padding:4px;border:1px solid var(--border);border-radius:4px;box-sizing:border-box">
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--muted)">Description</label>
+        <input type="text" id="allocPort-desc" placeholder="Optional" style="width:100%;padding:4px;border:1px solid var(--border);border-radius:4px;box-sizing:border-box">
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="allocatePortManual()" style="margin-bottom:12px">+ Allocate Port</button>
+    
+    <h4 style="margin:12px 0 8px">Allocated Ports (${allocations.length})</h4>
+    <div style="max-height:200px;overflow-y:auto">
+      ${allocationsHtml}
+    </div>
+    
+    <h4 style="margin:16px 0 8px">System Protected Ports</h4>
+    <div style="font-size:13px;color:var(--muted)">
+      ${systemPorts.length > 0 ? systemPorts.map(p => `<span style="font-family:monospace;background:var(--surface);padding:2px 6px;border-radius:4px;margin:2px">${p}</span>`).join(' ') : 'No additional protected ports (4000 always protected)'}
+    </div>
+    
+    <div class="actions" style="margin-top:16px;display:flex;gap:8px">
+      <button class="btn" onclick="fetchPorts().then(() => showPortsDialog())" style="margin-right:auto">↻ Refresh</button>
+      <button class="btn" onclick="this.closest('.modal-overlay').remove()">Close</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function allocatePortManual() {
+  const projectId = document.getElementById('allocPort-project')?.value;
+  const serviceName = document.getElementById('allocPort-service')?.value?.trim();
+  const port = document.getElementById('allocPort-port')?.value;
+  const description = document.getElementById('allocPort-desc')?.value?.trim();
+  
+  if (!projectId) {
+    alert('Please select a project');
+    return;
+  }
+  if (!serviceName) {
+    alert('Service name is required');
+    return;
+  }
+  
+  try {
+    const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/ports/allocate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceName, port: port || undefined, description: description || undefined })
+    });
+    const data = await res.json();
+    if (data.success) {
+      addLog('info', `Allocated port ${data.port} for ${serviceName}`);
+      document.querySelector('.modal-overlay')?.remove();
+      await fetchPorts();
+      showPortsDialog();
+    } else {
+      alert('Failed to allocate: ' + (data.error || 'Unknown error'));
+    }
+  } catch (e) {
+    alert('Failed to allocate port: ' + e.message);
+  }
+}
+
+async function releasePort(port, projectId) {
+  if (!confirm(`Release port ${port}? This will allow other projects to use it.`)) return;
+  
+  try {
+    const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/ports/${port}/release`, {
+      method: 'POST'
+    });
+    const data = await res.json();
+    if (data.success) {
+      addLog('info', `Released port ${port}`);
+      document.querySelector('.modal-overlay')?.remove();
+      await fetchPorts();
+      showPortsDialog();
+    } else {
+      alert('Failed to release: ' + (data.error || 'Unknown error'));
+    }
+  } catch (e) {
+    alert('Failed to release port: ' + e.message);
+  }
+}
+
+// Fetch ports on load
+setTimeout(fetchPorts, 2000);
 // Society Agent end
 
 // Society Agent - Three-level turn management

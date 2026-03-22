@@ -1,0 +1,20 @@
+[
+  {
+    "port": 5173,
+    "projectId": "architect",
+    "serviceName": "frontend",
+    "allocatedBy": "frontend-specialist",
+    "allocatedAt": "2026-03-22T15:24:30.110Z",
+    "description": "React/TypeScript frontend development server (Vite)",
+    "lastUsed": "2026-03-22T15:24:30.110Z"
+  },
+  {
+    "port": 6001,
+    "projectId": "architect",
+    "serviceName": "backend",
+    "allocatedBy": "backend-specialist",
+    "allocatedAt": "2026-03-22T15:28:36.823Z",
+    "description": "Express.js backend API server",
+    "lastUsed": "2026-03-22T15:28:36.823Z"
+  }
+]

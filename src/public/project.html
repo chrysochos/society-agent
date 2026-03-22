@@ -716,7 +716,7 @@
     </div>
     <div class="form-group">
       <label>Reports To (Boss)</label>
-      <select id="agentFormReportsTo">
+      <select id="agentFormReportsTo" onchange="updateWorkspaceModeVisibility()">
         <option value="">(None - Top Level)</option>
       </select>
     </div>
@@ -728,10 +728,23 @@
       <label>Home Folder (relative to project root)</label>
       <input type="text" id="agentFormHome" placeholder="/ (full project access)">
     </div>
+    <div class="form-group" id="agentWorkspaceModeGroup" style="display:none">
+      <label>Workspace Mode</label>
+      <select id="agentFormWorkspaceMode" onchange="onWorkspaceModeChange()">
+        <option value="isolated">Isolated (own subfolder under supervisor)</option>
+        <option value="shared">Shared (same folder as supervisor, turn-based access)</option>
+      </select>
+      <p id="workspaceModeTip" style="font-size:11px;color:var(--muted);margin-top:4px">
+        Shared mode: Architect plans, then hands off to Developer to implement. Turn-based write access.
+      </p>
+    </div>
     <div class="form-group">
       <div class="checkbox-row">
-        <input type="checkbox" id="agentFormSpawn" checked>
+        <input type="checkbox" id="agentFormSpawn" checked onchange="toggleCustodianNote()">
         <label for="agentFormSpawn" style="margin-bottom:0">Persistent agent (uncheck for ephemeral worker)</label>
+      </div>
+      <div id="custodianNote" style="margin-top:8px;padding:8px 12px;background:var(--warning-bg, #fff3cd);border:1px solid var(--warning-border, #ffc107);border-radius:4px;font-size:11px;color:var(--warning-text, #856404);">
+        <strong>📋 Custodian Mode:</strong> Permanent agents govern folders but cannot write code files. They can only write <code>.md</code> and <code>.txt</code> files, and run read-only commands (<code>ls</code>, <code>cat</code>, <code>git status</code>, etc.). Use <code>spawn_worker()</code> to create ephemeral workers for code implementation.
       </div>
     </div>
     <div class="form-group">
@@ -752,6 +765,9 @@
         <div class="checkbox-row">
           <input type="checkbox" id="agentPermMessage" checked>
           <label for="agentPermMessage" style="margin-bottom:0">Can message other agents</label>
+        </div>
+        <div id="custodianPermNote" style="margin-top:6px;font-size:10px;color:var(--muted);font-style:italic;">
+          ⚠️ Custodians: File writes restricted to .md/.txt; commands restricted to read-only
         </div>
       </div>
     </div>
@@ -1495,17 +1511,22 @@ function showAddAgentModal(parentAgentId = null) {
     // Adding sub-agent - set parent and hide dropdown
     reportsToSelect.value = parentAgentId;
     reportsToSelect.closest('.form-group').style.display = 'none';
+    // Show workspace mode since we have a supervisor
+    updateWorkspaceModeVisibility();
   } else if (hasTopLevel) {
     // Already has top-level - must select a boss
     reportsToSelect.value = '';
     reportsToSelect.closest('.form-group').style.display = 'block';
+    updateWorkspaceModeVisibility();
   } else {
     // No top-level yet - this will be the lead agent
     reportsToSelect.value = '';
     reportsToSelect.closest('.form-group').style.display = 'none';
+    updateWorkspaceModeVisibility();
   }
   
   document.getElementById('addAgentModal').style.display = 'flex';
+  toggleCustodianNote(); // Initialize custodian note visibility
 }
 
 function editAgentInProject(agentId) {
@@ -1537,6 +1558,7 @@ function editAgentInProject(agentId) {
   populateReportsToDropdown(agentId);
   document.getElementById('agentFormReportsTo').value = agent.reportsTo || '';
   document.getElementById('addAgentModal').style.display = 'flex';
+  toggleCustodianNote(); // Initialize custodian note visibility
 }
 
 function populateReportsToDropdown(excludeId = null) {
@@ -1551,10 +1573,52 @@ function hideAgentModal() {
   editingAgentId = null;
 }
 
+// Toggle custodian note visibility based on persistent checkbox
+function toggleCustodianNote() {
+  const isPersistent = document.getElementById('agentFormSpawn').checked;
+  const custodianNote = document.getElementById('custodianNote');
+  const custodianPermNote = document.getElementById('custodianPermNote');
+  if (isPersistent) {
+    custodianNote.style.display = 'block';
+    custodianPermNote.style.display = 'block';
+  } else {
+    custodianNote.style.display = 'none';
+    custodianPermNote.style.display = 'none';
+  }
+}
+
 function updateAgentIdPreview() {
   const name = document.getElementById('agentFormName').value.trim();
   const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   document.getElementById('agentIdValue').textContent = id || '-';
+}
+
+// Show/hide workspace mode option based on whether a supervisor is selected
+function updateWorkspaceModeVisibility() {
+  const reportsTo = document.getElementById('agentFormReportsTo').value;
+  const workspaceModeGroup = document.getElementById('agentWorkspaceModeGroup');
+  if (reportsTo) {
+    workspaceModeGroup.style.display = 'block';
+  } else {
+    workspaceModeGroup.style.display = 'none';
+    // Reset to isolated when no supervisor
+    document.getElementById('agentFormWorkspaceMode').value = 'isolated';
+  }
+}
+
+// Handle workspace mode change
+function onWorkspaceModeChange() {
+  const mode = document.getElementById('agentFormWorkspaceMode').value;
+  const tip = document.getElementById('workspaceModeTip');
+  if (mode === 'shared') {
+    tip.textContent = 'Shared mode: Supervisor plans, then hands off to this agent to implement. Turn-based write access.';
+    // Clear home folder - will use supervisor's folder
+    document.getElementById('agentFormHome').value = '';
+    document.getElementById('agentFormHome').placeholder = "(Will use supervisor's folder)";
+  } else {
+    tip.textContent = 'Isolated mode: Agent gets its own subfolder under the supervisor.';
+    document.getElementById('agentFormHome').placeholder = '/ (full project access)';
+  }
 }
 
 async function submitAgentForm() {
@@ -1568,6 +1632,8 @@ async function submitAgentForm() {
   const isSupervisor = document.getElementById('agentFormSpawn').checked;
   const ephemeral = !isSupervisor;
   const reportsTo = document.getElementById('agentFormReportsTo').value || undefined;
+  // Society Agent - Workspace mode (shared or isolated)
+  const workspaceMode = document.getElementById('agentFormWorkspaceMode')?.value || 'isolated';
   // Get provider and model (empty string means use server default)
   const provider = document.getElementById('agentFormProvider').value || undefined;
   const model = document.getElementById('agentFormModel').value || undefined;
@@ -1596,13 +1662,13 @@ async function submitAgentForm() {
       res = await fetch(`${API}/api/projects/${projectId}/agents/${editingAgentId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, role, capabilities, homeFolder, ephemeral, reportsTo, provider, model, permissions }),
+        body: JSON.stringify({ name, role, capabilities, homeFolder, ephemeral, reportsTo, provider, model, permissions, workspaceMode }),
       });
     } else {
       res = await fetch(`${API}/api/projects/${projectId}/agents`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, name, role, capabilities, homeFolder, ephemeral, reportsTo, provider, model, permissions }),
+        body: JSON.stringify({ id, name, role, capabilities, homeFolder, ephemeral, reportsTo, provider, model, permissions, workspaceMode }),
       });
     }
     const data = await res.json();

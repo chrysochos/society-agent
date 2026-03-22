@@ -44,6 +44,9 @@ import {
 	getAllProviderNames,
 	isValidProvider,
 	ProviderSettings,
+	// Context window management
+	getContextWindowSize,
+	getSafeContextThreshold,
 } from "./provider-config"
 // Society Agent end
 // Society Agent start - persistent agents
@@ -58,11 +61,26 @@ import * as pty from "node-pty"
 // Society Agent start - standalone settings system
 import { settings as standaloneSettings, initializeSettings, getSettingsSummary, PROVIDER_BASE_URLS } from "./settings"
 // Society Agent end
+// Society Agent start - shared workspace support
+import {
+	SharedWorkspaceRegistry,
+	createSharedWorkspaceRegistry,
+	createSharedWorkspace,
+	getSharedWorkspace,
+	canWriteInSharedWorkspace,
+	handoffToSubordinate,
+	returnToSupervisor,
+	getWorkspaceStatusPrompt,
+} from "./file-ownership"
+// Society Agent end
 // Society Agent start - MCP server integration
 import { initMcpManager, getMcpManager } from "./mcp-client"
 // Society Agent end
 // Society Agent start - git loader for project history
 import { initGitLoader, getGitLoader } from "./git-loader"
+// Society Agent end
+// Society Agent start - port allocation system
+import { PortManager, PortAllocation } from "./port-manager"
 // Society Agent end
 // Society Agent start - diagnostics watcher (tsc / ruff / pyright)
 import { DiagnosticsWatcher } from "./diagnostics-watcher"
@@ -95,6 +113,48 @@ const io = new SocketIOServer(server, {
 const PORT = parseInt(process.env.PORT || "4000", 10)
 const NODE_ENV = process.env.NODE_ENV || "development"
 const log = getLog()
+
+// Society Agent - Protected ports that agents cannot kill
+// These ports are protected from being terminated by any agent
+// Set via PROTECTED_PORTS env var (comma-separated): "4000,3000,5000"
+// Port 4000 (system server) is always protected
+const PROTECTED_PORTS: Set<number> = new Set([
+	PORT, // System server port (4000 by default)
+	...(process.env.PROTECTED_PORTS || "")
+		.split(",")
+		.map(p => parseInt(p.trim(), 10))
+		.filter(p => !isNaN(p) && p > 0)
+])
+log.info(`[Security] Protected ports: ${[...PROTECTED_PORTS].join(", ")}`)
+
+// Helper to check if a port is protected
+function isPortProtected(port: number): boolean {
+	return PROTECTED_PORTS.has(port)
+}
+
+// Helper to extract port numbers from a command string
+function extractPortsFromCommand(cmd: string): number[] {
+	const ports: number[] = []
+	// Match patterns like: :3000, -p 3000, --port 3000, PORT=3000, port:3000, -ti:3000
+	const patterns = [
+		/:(\d{2,5})(?!\d)/g,           // :3000
+		/-p\s*(\d{2,5})/gi,            // -p 3000
+		/--port[=\s]+(\d{2,5})/gi,     // --port 3000 or --port=3000
+		/PORT[=:]\s*(\d{2,5})/gi,      // PORT=3000 or PORT:3000
+		/\bport\s*[=:]\s*(\d{2,5})/gi, // port=3000 or port:3000
+		/-ti:?(\d{2,5})/gi,            // -ti:3000 (lsof)
+		/fuser.*?(\d{2,5})\/tcp/gi,    // fuser 3000/tcp
+		/kill-port\s+(\d{2,5})/gi,     // kill-port 3000
+	]
+	for (const pattern of patterns) {
+		let match
+		while ((match = pattern.exec(cmd)) !== null) {
+			const port = parseInt(match[1], 10)
+			if (port > 0 && port < 65536) ports.push(port)
+		}
+	}
+	return [...new Set(ports)]
+}
 
 // Society Agent - Reconnect event buffer: survives client disconnections
 // Buffers the last 400 events per agent so clients can replay missed events on reconnect.
@@ -345,9 +405,21 @@ If the task is ambiguous, write what you understood into PLAN.md and send it bac
 - Use \`report_to_supervisor\` to report: in_progress / completed / blocked / needs_info
 
 ## Protected (never touch)
-- Port 4000 = Society Agent server — kill it and you destroy yourself
-- Never pkill tsx, pkill node (kills the agent runner)
-- Use ports 3000, 5173, 6001, 8080 etc. for your own services
+- **Protected ports** — Port 4000 is always protected (Society Agent server). Additional ports may be protected via PROTECTED_PORTS env var.
+- Use \`get_processes()\` to see the list of protected ports
+- Use \`kill_process({ port: N })\` instead of raw shell commands — it has safety checks
+- Never \`pkill tsx\`, \`pkill node\`, \`killall node\` — kills everything including the agent runner
+- Use ports 3000, 5173, 6001, 8080 etc. for your own services (unless protected)
+
+## Global Skills (curated knowledge)
+Global skills contain curated expertise for specific domains. Check skills before starting unfamiliar work:
+- \`list_global_skills()\` — see available skills
+- \`read_global_skill("skill-name")\` — load the skill's instructions
+
+**IMPORTANT**: If you're a permanent (custodian) agent and need to implement code changes:
+1. Load: \`read_global_skill("workflow-policy")\`
+2. Follow the custodian/worker model — you govern, workers implement
+3. Spawn workers with \`spawn_worker()\` for code implementation
 
 `
 function buildFullSystemPrompt(agentSystemPrompt: string): string {
@@ -383,6 +455,19 @@ async function buildProjectAwarePrompt(agentSystemPrompt: string, projectDir: st
 	}
 }
 // Society Agent end - Build prompt with project-specific config
+
+// Society Agent start - Shared workspace registry per project
+const projectSharedWorkspaces = new Map<string, SharedWorkspaceRegistry>()
+
+function getProjectSharedWorkspaces(projectId: string): SharedWorkspaceRegistry {
+	let registry = projectSharedWorkspaces.get(projectId)
+	if (!registry) {
+		registry = createSharedWorkspaceRegistry()
+		projectSharedWorkspaces.set(projectId, registry)
+	}
+	return registry
+}
+// Society Agent end - Shared workspace registry
 
 // Society Agent end - Base communication rules
 
@@ -887,6 +972,37 @@ function getApiHandlerFromConfig(): ApiHandler {
 
 	return createApiHandler(currentProviderConfig) as ApiHandler
 }
+
+/**
+ * Get current provider context window configuration
+ * Returns appropriate context window size and threshold based on current provider/model
+ */
+function getProviderContextConfig(): { contextWindowSize: number; contextThresholdPercent: number } {
+	let model: string | undefined
+	let provider: ProviderType | undefined
+	
+	// Check standalone settings first
+	if (standaloneSettings.isInitialized()) {
+		const providerConfig = standaloneSettings.getProvider()
+		model = providerConfig.model
+		provider = providerConfig.type as ProviderType
+	} else if (currentProviderSettings) {
+		provider = currentProviderSettings.apiProvider
+		model = currentProviderSettings.apiModelId || 
+			currentProviderSettings.openRouterModelId || 
+			currentProviderSettings.openAiModelId
+	} else if (currentProviderConfig) {
+		provider = currentProviderConfig.provider
+		model = currentProviderConfig.model
+	}
+	
+	const contextWindowSize = getContextWindowSize(model, provider)
+	const contextThresholdPercent = getSafeContextThreshold(contextWindowSize)
+	
+	log.debug(`Context config for ${provider}/${model}: window=${contextWindowSize}, threshold=${contextThresholdPercent}%`)
+	
+	return { contextWindowSize, contextThresholdPercent }
+}
 // Society Agent end
 
 /**
@@ -1034,9 +1150,117 @@ app.get("/api/status", (req, res) => {
 		outputDir: path.join(workspacePath, "projects"),
 		timestamp: new Date().toISOString(),
 		systemPaused, // Society Agent - include pause status
+		protectedPorts: [...PROTECTED_PORTS], // Society Agent - ports that agents cannot kill
 	})
 	// Society Agent end
 })
+
+// Society Agent start - Port allocation API for visibility and management
+/**
+ * GET /api/ports - Get all port allocations across all projects
+ */
+app.get("/api/ports", (req, res) => {
+	const allocations = PortManager.getAllAllocations()
+	res.json({
+		total: allocations.length,
+		protectedSystemPorts: [...PROTECTED_PORTS].filter(p => !allocations.some(a => a.port === p)),
+		allocations: allocations.map(a => ({
+			port: a.port,
+			projectId: a.projectId,
+			serviceName: a.serviceName,
+			description: a.description,
+			allocatedAt: a.allocatedAt,
+			allocatedBy: a.allocatedBy,
+		})),
+	})
+})
+
+/**
+ * GET /api/projects/:id/ports - Get port allocations for a specific project
+ */
+app.get("/api/projects/:id/ports", (req, res) => {
+	const projectId = req.params.id
+	const allocations = PortManager.getProjectPorts(projectId)
+	res.json({
+		projectId,
+		total: allocations.length,
+		allocations: allocations.map(a => ({
+			port: a.port,
+			serviceName: a.serviceName,
+			description: a.description,
+			allocatedAt: a.allocatedAt,
+		})),
+	})
+})
+
+/**
+ * POST /api/projects/:id/ports/:port/release - Manually release a port allocation
+ */
+app.post("/api/projects/:id/ports/:port/release", (req, res): void => {
+	const projectId = req.params.id
+	const port = parseInt(req.params.port)
+	
+	if (isNaN(port)) {
+		res.status(400).json({ success: false, error: "Invalid port number" })
+		return
+	}
+	
+	const result = PortManager.releasePort(port, projectId)
+	
+	if (result.success) {
+		// Remove from protected ports
+		PROTECTED_PORTS.delete(port)
+		res.json({ 
+			success: true, 
+			message: `Port ${port} released and removed from protection`,
+			protectedPorts: [...PROTECTED_PORTS]
+		})
+	} else {
+		res.status(403).json({ 
+			success: false, 
+			error: result.reason 
+		})
+	}
+})
+
+/**
+ * POST /api/projects/:id/ports/allocate - Manually allocate a port for a project
+ */
+app.post("/api/projects/:id/ports/allocate", async (req, res): Promise<void> => {
+	const projectId = req.params.id
+	const { serviceName, port, description } = req.body || {}
+	
+	if (!serviceName) {
+		res.status(400).json({ success: false, error: "serviceName is required" })
+		return
+	}
+	
+	try {
+		const result = await PortManager.requestPort(projectId, serviceName, {
+			description,
+			preferredPort: port ? parseInt(port) : undefined,
+			allocatedBy: "manual-ui",
+		})
+		
+		// Add to protected ports
+		PROTECTED_PORTS.add(result.port)
+		
+		res.json({ 
+			success: true, 
+			port: result.port,
+			isNew: result.isNew,
+			message: result.isNew 
+				? `Allocated port ${result.port} for ${serviceName}`
+				: `Service ${serviceName} already has port ${result.port}`,
+		})
+	} catch (err: any) {
+		res.status(400).json({ 
+			success: false, 
+			error: err.message 
+		})
+	}
+})
+// Society Agent end
 
 // Society Agent start - System pause/resume API for external oversight
 /**
@@ -2362,6 +2586,7 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 
 			// Society Agent start - use provider config instead of hardcoded Anthropic
 			const apiHandler = getApiHandlerFromConfig()
+			const contextConfig = getProviderContextConfig()
 			// Society Agent end
 
 			userAgent = new ConversationAgent({
@@ -2370,6 +2595,9 @@ app.post("/api/purpose/start", async (req, res): Promise<void> => {
 					createdAt: Date.now(),
 				},
 				apiHandler,
+				// Society Agent - provider-specific context limits
+				contextWindowSize: contextConfig.contextWindowSize,
+				contextThresholdPercent: contextConfig.contextThresholdPercent,
 				systemPrompt: buildFullSystemPrompt(`You are Society Agent, an AI assistant powering a multi-agent collaboration system.
 
 Your role:
@@ -2725,6 +2953,7 @@ function getOrCreateAgent(profile: import("./persistent-agent-store").Persistent
 
 	// Society Agent start - use provider config instead of hardcoded Anthropic
 	const apiHandler = getApiHandlerFromConfig()
+	const contextConfig = getProviderContextConfig()
 	// Society Agent end
 
 	// Build system prompt with memory context
@@ -2743,6 +2972,9 @@ function getOrCreateAgent(profile: import("./persistent-agent-store").Persistent
 			createdAt: Date.now(),
 		},
 		apiHandler,
+		// Society Agent - provider-specific context limits
+		contextWindowSize: contextConfig.contextWindowSize,
+		contextThresholdPercent: contextConfig.contextThresholdPercent,
 		systemPrompt: fullPrompt,
 		workspacePath: agentWorkspace, // Society Agent - use agent's folder
 		// Society Agent start - enable history persistence for restart recovery
@@ -3111,13 +3343,16 @@ For simple operational requests, act immediately without over-analyzing:
 
 **DON'T** spend 15 steps checking every file when user just wants you to run something!
 
-## PORT CONFLICTS - KILL FIRST, ASK LATER
+## PORT CONFLICTS - CHECK BEFORE KILLING
 If you get "EADDRINUSE" (port already in use):
-1. DON'T waste time investigating - just kill it: \`fuser -k PORT/tcp\` or \`pkill -f "node.*PORT"\`
-2. Then start your server
-3. Example: \`fuser -k 3001/tcp; npm start\` (kill port 3001, then start)
+1. First check what's on that port: \`get_processes({ port: PORT })\`
+2. If it's YOUR project's process, kill it: \`kill_process({ port: PORT })\`
+3. If it's something else, ASK THE USER before killing or use a different port
 
-Other projects may have servers running - don't be polite, just take the port.
+**IMPORTANT:** Some ports are protected and cannot be killed:
+- Port 4000 is ALWAYS protected (Society Agent system server)
+- User can protect additional ports via PROTECTED_PORTS env var
+- Never use \`fuser -k\` or \`pkill node\` - use kill_process({ port }) which has safety checks
 
 ## First Steps - READ DOCUMENTATION FIRST (for NEW projects only)
 1. Use \`read_project_file("AGENTS.md")\` to read project documentation (if it exists)
@@ -4531,7 +4766,7 @@ app.get("/api/projects/:id/supervisor/overrides", (req, res): void => {
  */
 app.post("/api/projects/:id/agents", (req, res): void => {
 	try {
-		const { id, name, role, systemPrompt, homeFolder, model, ephemeral, reportsTo, capabilities } = req.body
+		const { id, name, role, systemPrompt, homeFolder, model, ephemeral, reportsTo, capabilities, workspaceMode } = req.body
 		if (!id || !name || !role) {
 			res.status(400).json({ error: "id, name, and role are required" })
 			return
@@ -4548,11 +4783,23 @@ Work collaboratively with other agents in the project. Use available tools to co
 		// Determine home folder - nest under parent if specified
 		const project = projectStore.get(req.params.id)
 		let agentHomeFolder = homeFolder
+		let effectiveWorkspaceMode = workspaceMode || "isolated"
+		let sharedWorkspaceWith: string | undefined
+		
 		if (!agentHomeFolder) {
 			if (reportsTo && project) {
 				const parentAgent = project.agents.find(a => a.id === reportsTo)
 				const parentHome = parentAgent?.homeFolder || reportsTo
-				agentHomeFolder = parentHome === "/" ? id : `${parentHome}/${id}`
+				
+				// Society Agent - Shared workspace mode: use same folder as supervisor
+				if (effectiveWorkspaceMode === "shared") {
+					agentHomeFolder = parentHome  // Same folder as supervisor!
+					sharedWorkspaceWith = reportsTo
+					log.info(`[API] Agent ${id} will share workspace with supervisor ${reportsTo} at ${parentHome}`)
+				} else {
+					// Standard isolated mode - nest under parent
+					agentHomeFolder = parentHome === "/" ? id : `${parentHome}/${id}`
+				}
 			} else {
 				agentHomeFolder = id
 			}
@@ -4565,10 +4812,24 @@ Work collaboratively with other agents in the project. Use available tools to co
 			model,
 			ephemeral: ephemeral || false,
 			reportsTo,
+			workspaceMode: effectiveWorkspaceMode,
+			sharedWorkspaceWith,
 		})
 		if (!agent) {
 			res.status(404).json({ error: "Project not found" })
 			return
+		}
+		
+		// Society Agent - Set up shared workspace if workspaceMode is "shared"
+		if (effectiveWorkspaceMode === "shared" && reportsTo && project) {
+			const wsRegistry = getProjectSharedWorkspaces(req.params.id)
+			try {
+				createSharedWorkspace(wsRegistry, agentHomeFolder, reportsTo, id)
+				log.info(`[API] Created shared workspace: ${agentHomeFolder} (${reportsTo} ↔ ${id})`)
+			} catch (err: any) {
+				// Workspace might already exist - that's OK
+				log.debug(`[API] Shared workspace may already exist: ${err.message}`)
+			}
 		}
 		
 		// Create the agent's home directory
@@ -4933,9 +5194,18 @@ app.post("/api/agent/:agentId/backups-enabled", (req, res): void => {
 /**
  * Helper: resolve agent's workspace directory.
  * Checks project store first (project-based agents), then falls back to legacy agent store.
+ * @param agentId - The agent identifier
+ * @param projectId - Optional project ID (required when agent IDs may be duplicated across projects)
  */
-function agentWorkspaceDir(agentId: string): string {
-	// New: look up via project store
+function agentWorkspaceDir(agentId: string, projectId?: string): string {
+	// If projectId provided, use it directly (avoids ambiguity with duplicate agent IDs)
+	if (projectId) {
+		const project = projectStore.get(projectId)
+		if (project && project.agents?.some(a => a.id === agentId)) {
+			return projectStore.agentHomeDir(projectId, agentId)
+		}
+	}
+	// Fall back to searching (legacy - only works if agent IDs are globally unique)
 	const found = projectStore.findAgentProject(agentId)
 	if (found) {
 		return projectStore.agentHomeDir(found.project.id, agentId)
@@ -5163,6 +5433,39 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 		},
 	},
 	// Society Agent end - MCP
+	// Society Agent start - Shared workspace tools
+	{
+		name: "handoff_workspace",
+		description: "SUPERVISOR ONLY: Hand off workspace write access to your subordinate agent. Use this when you've finished planning and want your developer to implement. The subordinate will get write access while you keep read-only access.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				task_description: { type: "string", description: "Brief description of what the subordinate should implement" },
+			},
+			required: ["task_description"],
+		},
+	},
+	{
+		name: "return_workspace",
+		description: "SUBORDINATE ONLY: Return workspace control to your supervisor. Use this when you've finished implementing and want your supervisor to review. The supervisor will regain write access.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				summary: { type: "string", description: "Summary of what you implemented/changed" },
+			},
+			required: ["summary"],
+		},
+	},
+	{
+		name: "workspace_status",
+		description: "Check the current status of the shared workspace - who has write access and what phase we're in.",
+		input_schema: {
+			type: "object" as const,
+			properties: {},
+			required: [],
+		},
+	},
+	// Society Agent end - Shared workspace tools
 	{
 		name: "list_project_files",
 		description: "List files in any directory within the project. Use this to see what other agents have created, explore the project structure, and understand the codebase you need to test.",
@@ -5264,23 +5567,23 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 	},
 	{
 		name: "get_processes",
-		description: "List running processes - find servers, check if something is running on a port, see what's active.",
+		description: "List running processes - find servers, check if something is running on a port. Also shows which ports are PROTECTED (cannot be killed).",
 		input_schema: {
 			type: "object" as const,
 			properties: {
 				filter: { type: "string", description: "Filter by name (e.g. 'node', 'npm', 'python')" },
-				port: { type: "number", description: "Find process on specific port" },
+				port: { type: "number", description: "Find process on specific port (will indicate if protected)" },
 			},
 			required: [],
 		},
 	},
 	{
 		name: "kill_process",
-		description: "Kill a process by port, PID, or name. Use get_processes to find what's running first. Port 4000 is protected (system server).",
+		description: "Kill a process by port, PID, or name. Use get_processes to find what's running first. PROTECTED PORTS cannot be killed (system port 4000 + any ports in PROTECTED_PORTS env var).",
 		input_schema: {
 			type: "object" as const,
 			properties: {
-				port: { type: "number", description: "Kill process on this port (recommended)" },
+				port: { type: "number", description: "Kill process on this port (recommended). Some ports are protected." },
 				pid: { type: "number", description: "Process ID to kill" },
 				name: { type: "string", description: "Kill processes matching this name (be specific, e.g. 'my-app', not 'node')" },
 			},
@@ -5296,6 +5599,40 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 				path: { type: "string", description: "Path to file" },
 			},
 			required: ["path"],
+		},
+	},
+	// Society Agent - Port allocation tools
+	{
+		name: "request_port",
+		description: "Request a port for a service. If the same service name was used before, returns the same port. Allocated ports are protected from other projects.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				service_name: { type: "string", description: "Name for this service (e.g., 'api', 'frontend', 'database'). Same name = same port." },
+				port: { type: "number", description: "Optional: Request a specific port number. If not provided, one is auto-allocated." },
+				description: { type: "string", description: "Optional description of what this port is used for" },
+			},
+			required: ["service_name"],
+		},
+	},
+	{
+		name: "release_port",
+		description: "Release a port that was allocated to this project. The port becomes available for other projects.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				port: { type: "number", description: "Port number to release" },
+			},
+			required: ["port"],
+		},
+	},
+	{
+		name: "list_project_ports",
+		description: "List all ports allocated to this project, with their service names and status.",
+		input_schema: {
+			type: "object" as const,
+			properties: {},
+			required: [],
 		},
 	},
 	{
@@ -5528,6 +5865,77 @@ const EPHEMERAL_TOOLS: Anthropic.Tool[] = AGENT_TOOLS.filter(
 	tool => !EPHEMERAL_EXCLUDED_TOOLS.has(tool.name)
 )
 
+// Society Agent start - Custodian restrictions (workflow policy)
+// Custodians govern folders but don't write code - "custodians govern, workers implement"
+const CUSTODIAN_ALLOWED_EXTENSIONS = new Set(['.md', '.txt'])
+const CUSTODIAN_CODE_EXTENSIONS = new Set([
+	'.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+	'.py', '.pyw', '.pyi',
+	'.java', '.kt', '.scala',
+	'.c', '.cpp', '.h', '.hpp', '.cc',
+	'.cs', '.fs',
+	'.go', '.rs', '.rb', '.php',
+	'.swift', '.m', '.mm',
+	'.vue', '.svelte', '.astro',
+	'.html', '.css', '.scss', '.sass', '.less',
+	'.json', '.yaml', '.yml', '.toml', '.xml',
+	'.sql', '.graphql', '.prisma',
+	'.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
+	'.dockerfile', '.containerfile',
+])
+const CUSTODIAN_READ_ONLY_COMMANDS = new Set([
+	'ls', 'cat', 'head', 'tail', 'less', 'more',
+	'tree', 'find', 'grep', 'awk', 'sed', 'wc',
+	'file', 'stat', 'du', 'df',
+	'git status', 'git log', 'git diff', 'git show', 'git branch', 'git remote',
+	'npm list', 'npm ls', 'npm outdated', 'npm view',
+	'node --version', 'npm --version', 'python --version',
+	'pwd', 'echo', 'date', 'whoami', 'env', 'printenv',
+])
+
+// Check if a file extension is allowed for custodian writes
+function canCustodianWriteFile(filePath: string): { allowed: boolean; reason?: string } {
+	const ext = path.extname(filePath).toLowerCase()
+	if (CUSTODIAN_ALLOWED_EXTENSIONS.has(ext)) {
+		return { allowed: true }
+	}
+	if (CUSTODIAN_CODE_EXTENSIONS.has(ext) || ext === '') {
+		return { 
+			allowed: false, 
+			reason: `Custodians cannot write code files (${ext || 'no extension'}). ` +
+				`Spawn a worker with spawn_worker() to implement code changes. ` +
+				`Custodians can only write: ${[...CUSTODIAN_ALLOWED_EXTENSIONS].join(', ')}`
+		}
+	}
+	// Unknown extension - allow with warning for now
+	return { allowed: true }
+}
+
+// Check if a command is read-only (allowed for custodians)
+function isCustodianCommandAllowed(command: string): { allowed: boolean; reason?: string } {
+	const trimmed = command.trim().toLowerCase()
+	// Check if command starts with any allowed read-only command
+	for (const allowed of CUSTODIAN_READ_ONLY_COMMANDS) {
+		if (trimmed === allowed || trimmed.startsWith(allowed + ' ') || trimmed.startsWith(allowed + '\t')) {
+			return { allowed: true }
+		}
+	}
+	// Check for piped commands - first command must be read-only
+	const firstCmd = trimmed.split(/[|;&]/).map(s => s.trim())[0]
+	for (const allowed of CUSTODIAN_READ_ONLY_COMMANDS) {
+		if (firstCmd === allowed || firstCmd.startsWith(allowed + ' ')) {
+			return { allowed: true }
+		}
+	}
+	return { 
+		allowed: false, 
+		reason: `Custodians can only run read-only commands. ` +
+			`"${command.substring(0, 50)}..." is not allowed. ` +
+			`Spawn a worker with spawn_worker() to run commands that modify state.`
+	}
+}
+// Society Agent end - Custodian restrictions
+
 /**
  * Execute a single tool call for suprevisor agents.
  * Returns the tool result as a string.
@@ -5690,6 +6098,15 @@ async function executeAgentTool(
 				return { result: `❌ Error writing file: 'content' parameter is missing or undefined. Call write_file with both 'path' and 'content' arguments.`, filesCreated: 0 }
 			}
 			
+			// Society Agent start - Custodian file write restriction
+			if (!agentConfig.ephemeral) {
+				const custodianCheck = canCustodianWriteFile(filePath)
+				if (!custodianCheck.allowed) {
+					return { result: `🚫 **Custodian write blocked**\n\n${custodianCheck.reason}\n\n💡 Use \`read_global_skill("workflow-policy")\` to understand the custodian/worker model.`, filesCreated: 0 }
+				}
+			}
+			// Society Agent end - Custodian file write restriction
+			
 			// Society Agent - Reject absolute paths
 			if (filePath && filePath.startsWith("/")) {
 				return { result: `❌ Use relative paths only! Your working folder is: ${workingFolder}\nTry: write_file("src/App.js", content)`, filesCreated: 0 }
@@ -5702,6 +6119,22 @@ async function executeAgentTool(
 			if (!fullPath.startsWith(workingFolder)) {
 				return { result: `❌ Error: Cannot write files outside your working directory`, filesCreated: 0 }
 			}
+			
+			// Society Agent start - Shared workspace write check
+			if (agentConfig.workspaceMode === "shared") {
+				const wsRegistry = getProjectSharedWorkspaces(project.id)
+				const wsCheck = canWriteInSharedWorkspace(wsRegistry, workingFolder, agentConfig.id)
+				if (!wsCheck.success) {
+					return { 
+						result: `❌ **Shared workspace access denied**\n\n${wsCheck.reason}\n\n` +
+							`Current owner: ${wsCheck.currentOwner}\n` +
+							`Phase: ${wsCheck.currentPhase}\n\n` +
+							`Use \`workspace_status\` to check access or coordinate with your partner.`,
+						filesCreated: 0 
+					}
+				}
+			}
+			// Society Agent end - Shared workspace write check
 			
 			// Society Agent - Guard: reject empty or no-op writes
 		if (!content || content.trim() === "") {
@@ -5745,6 +6178,16 @@ async function executeAgentTool(
 		// Society Agent start - patch_file for targeted edits
 		case "patch_file": {
 			const { path: filePath, old_text, new_text } = toolInput as { path: string; old_text: string; new_text: string }
+			
+			// Society Agent start - Custodian file write restriction
+			if (!agentConfig.ephemeral) {
+				const custodianCheck = canCustodianWriteFile(filePath)
+				if (!custodianCheck.allowed) {
+					return { result: `🚫 **Custodian write blocked**\n\n${custodianCheck.reason}\n\n💡 Use \`read_global_skill("workflow-policy")\` to understand the custodian/worker model.`, filesCreated: 0 }
+				}
+			}
+			// Society Agent end - Custodian file write restriction
+			
 			// Society Agent - Use workingFolder for file operations
 			const fullPath = path.join(workingFolder, filePath)
 			
@@ -5752,6 +6195,22 @@ async function executeAgentTool(
 			if (!fullPath.startsWith(workingFolder)) {
 				return { result: `❌ Error: Cannot edit files outside your working directory`, filesCreated: 0 }
 			}
+			
+			// Society Agent start - Shared workspace write check
+			if (agentConfig.workspaceMode === "shared") {
+				const wsRegistry = getProjectSharedWorkspaces(project.id)
+				const wsCheck = canWriteInSharedWorkspace(wsRegistry, workingFolder, agentConfig.id)
+				if (!wsCheck.success) {
+					return { 
+						result: `❌ **Shared workspace access denied**\n\n${wsCheck.reason}\n\n` +
+							`Current owner: ${wsCheck.currentOwner}\n` +
+							`Phase: ${wsCheck.currentPhase}\n\n` +
+							`Use \`workspace_status\` to check access or coordinate with your partner.`,
+						filesCreated: 0 
+					}
+				}
+			}
+			// Society Agent end - Shared workspace write check
 			
 			try {
 				if (!fs.existsSync(fullPath)) {
@@ -5861,6 +6320,15 @@ async function executeAgentTool(
 				log.error(`[Worker ${agentConfig.name}] run_command received invalid command: ${JSON.stringify(toolInput)}`)
 				return { result: `❌ Error: run_command requires a valid 'command' string parameter. Received: ${JSON.stringify(toolInput)}`, filesCreated: 0 }
 			}
+			
+			// Society Agent start - Custodian command restriction
+			if (!agentConfig.ephemeral) {
+				const cmdCheck = isCustodianCommandAllowed(command)
+				if (!cmdCheck.allowed) {
+					return { result: `🚫 **Custodian command blocked**\n\n${cmdCheck.reason}\n\n💡 Use \`read_global_skill("workflow-policy")\` to understand the custodian/worker model.`, filesCreated: 0 }
+				}
+			}
+			// Society Agent end - Custodian command restriction
 
 			// Society Agent - Fix incorrect paths that miss the projects/<project-id> folder
 			// Common mistake: /workspaces/society-agent/backend-specialist
@@ -5899,15 +6367,24 @@ async function executeAgentTool(
 			// CRITICAL: Block commands that would kill the system server or its runner
 			// Test each semicolon/&&-separated segment individually to avoid false positives
 			// (e.g. "kill 123; cd /workspaces/society-agent/..." must NOT be blocked)
+			const SYSTEM_PORT = parseInt(process.env.PORT || "4000", 10)
 			const dangerousPatterns = [
-				/kill.*4000/i,
-				/pkill.*4000/i,
-				/fuser.*-k.*4000/i,
-				/lsof.*-t.*4000.*\|.*kill/i,
+				// Port 4000 (system server) - comprehensive patterns
+				new RegExp(`kill.*${SYSTEM_PORT}`, 'i'),
+				new RegExp(`pkill.*${SYSTEM_PORT}`, 'i'),
+				new RegExp(`fuser.*-k.*${SYSTEM_PORT}`, 'i'),
+				new RegExp(`fuser.*${SYSTEM_PORT}.*-k`, 'i'),           // fuser 4000/tcp -k
+				new RegExp(`lsof.*${SYSTEM_PORT}.*kill`, 'i'),          // any lsof+4000+kill combo
+				new RegExp(`lsof.*-ti?:?${SYSTEM_PORT}`, 'i'),          // lsof -ti:4000 or -t -i:4000
+				new RegExp(`kill.*\\$\\(.*${SYSTEM_PORT}`, 'i'),        // kill $(anything with 4000)
+				new RegExp(`npx\\s+kill-port\\s+${SYSTEM_PORT}`, 'i'),  // npx kill-port 4000
+				new RegExp(`kill-port\\s+${SYSTEM_PORT}`, 'i'),         // kill-port 4000
+				// Society server process patterns
 				/kill.*society.{0,30}server/i,   // kill society-server process
 				/pkill.*society/i,               // pkill targeting society
+				// System-wide node/tsx killing (would kill everything)
 				/pkill.*-f.*["']?tsx["']?/i,     // pkill -f "tsx" kills the agent runner itself
-				/pkill.*tsx/i,                   // any tsx pkill
+				/pkill\s+tsx/i,                  // pkill tsx (without -f)
 				/pkill\s+-f\s+["']?node["']?/i,  // pkill -f "node" kills all node including system
 				/pkill\s+["']?node["']?/i,       // pkill node (without -f)
 				/killall\s+node/i,               // killall node
@@ -5926,6 +6403,21 @@ async function executeAgentTool(
 				return { 
 					result: `🚨 **BLOCKED: This command would kill the system server or its process runner!**\n\nBlocked segment: \`${blockedBy.seg}\`\n\n✅ To restart your project server: use kill_process({ port: YOUR_PORT }) then run_command to start it.\n✅ Use a different port for YOUR server (6001, 8080, 3000, etc.)\n❌ Never pkill tsx or kill port 4000 — that destroys the agent framework.`, 
 					filesCreated: 0 
+				}
+			}
+			
+			// Society Agent - Check for protected ports in kill/fuser commands
+			// This catches attempts to kill user's other protected services
+			const isKillCommand = /kill|fuser.*-k|pkill/i.test(fixedCommand)
+			if (isKillCommand) {
+				const portsInCommand = extractPortsFromCommand(fixedCommand)
+				const protectedPortHit = portsInCommand.find(p => isPortProtected(p))
+				if (protectedPortHit) {
+					log.warn(`[BLOCKED] Agent ${agentConfig.name} tried to kill protected port ${protectedPortHit}`)
+					return { 
+						result: `🚨 **BLOCKED: Port ${protectedPortHit} is protected!**\n\nThis port is in the protected list and cannot be killed by agents.\n\nProtected ports: ${[...PROTECTED_PORTS].join(", ")}\n\n💡 To protect additional ports, set PROTECTED_PORTS environment variable:\n\`PROTECTED_PORTS=3000,5000,8080 npm start\``, 
+						filesCreated: 0 
+					}
 				}
 			}
 			// Society Agent end
@@ -6931,6 +7423,132 @@ If you don't know, say so. Be concise.`,
 		}
 		// Society Agent end - MCP
 
+		// Society Agent start - Shared workspace tool implementations
+		case "handoff_workspace": {
+			const { task_description } = toolInput as { task_description: string }
+			const registry = getProjectSharedWorkspaces(project.id)
+			
+			// Find shared workspace for this agent
+			const workspace = registry.workspaces.find(
+				w => w.supervisorId === agentConfig.id || w.subordinateId === agentConfig.id
+			)
+			
+			if (!workspace) {
+				return { result: `❌ You are not part of a shared workspace. This tool is only available when workspaceMode is "shared".`, filesCreated: 0 }
+			}
+			
+			if (workspace.supervisorId !== agentConfig.id) {
+				return { result: `❌ Only the supervisor (${workspace.supervisorId}) can hand off to the subordinate.`, filesCreated: 0 }
+			}
+			
+			const result = handoffToSubordinate(registry, workspace.folder, agentConfig.id, task_description)
+			
+			if (!result.success) {
+				return { result: `❌ Handoff failed: ${result.reason}`, filesCreated: 0 }
+			}
+			
+			// Notify the subordinate
+			const subordinate = project.agents.find(a => a.id === workspace.subordinateId)
+			const message = `🔄 **Workspace handoff from ${agentConfig.name}**\n\n` +
+				`You now have write access to ${workspace.folder}.\n\n` +
+				`**Task:** ${task_description}\n\n` +
+				`When done, use \`return_workspace\` to give control back.`
+			
+			io.emit("agent-message", {
+				projectId: project.id,
+				fromAgentId: agentConfig.id,
+				toAgentId: workspace.subordinateId,
+				message,
+				timestamp: Date.now(),
+			})
+			
+			return { 
+				result: `✅ Workspace handed off to ${subordinate?.name || workspace.subordinateId}.\n\n` +
+					`Phase: **implementation**\n` +
+					`Task: ${task_description}\n\n` +
+					`You now have READ-ONLY access. Wait for them to \`return_workspace\`.`,
+				filesCreated: 0 
+			}
+		}
+		
+		case "return_workspace": {
+			const { summary } = toolInput as { summary: string }
+			const registry = getProjectSharedWorkspaces(project.id)
+			
+			// Find shared workspace for this agent
+			const workspace = registry.workspaces.find(
+				w => w.supervisorId === agentConfig.id || w.subordinateId === agentConfig.id
+			)
+			
+			if (!workspace) {
+				return { result: `❌ You are not part of a shared workspace. This tool is only available when workspaceMode is "shared".`, filesCreated: 0 }
+			}
+			
+			if (workspace.subordinateId !== agentConfig.id) {
+				return { result: `❌ Only the subordinate (${workspace.subordinateId}) can return to the supervisor.`, filesCreated: 0 }
+			}
+			
+			const result = returnToSupervisor(registry, workspace.folder, agentConfig.id, summary)
+			
+			if (!result.success) {
+				return { result: `❌ Return failed: ${result.reason}`, filesCreated: 0 }
+			}
+			
+			// Notify the supervisor
+			const supervisor = project.agents.find(a => a.id === workspace.supervisorId)
+			const message = `🔄 **Workspace returned from ${agentConfig.name}**\n\n` +
+				`You now have write access to ${workspace.folder} for review.\n\n` +
+				`**Summary:** ${summary}`
+			
+			io.emit("agent-message", {
+				projectId: project.id,
+				fromAgentId: agentConfig.id,
+				toAgentId: workspace.supervisorId,
+				message,
+				timestamp: Date.now(),
+			})
+			
+			return { 
+				result: `✅ Workspace returned to ${supervisor?.name || workspace.supervisorId}.\n\n` +
+					`Phase: **review**\n` +
+					`Summary: ${summary}\n\n` +
+					`You now have READ-ONLY access.`,
+				filesCreated: 0 
+			}
+		}
+		
+		case "workspace_status": {
+			const registry = getProjectSharedWorkspaces(project.id)
+			
+			const workspace = registry.workspaces.find(
+				w => w.supervisorId === agentConfig.id || w.subordinateId === agentConfig.id
+			)
+			
+			if (!workspace) {
+				return { result: `ℹ️ You are not part of a shared workspace. You have standard isolated workspace access.`, filesCreated: 0 }
+			}
+			
+			const isSupervisor = workspace.supervisorId === agentConfig.id
+			const hasAccess = workspace.activeAgentId === agentConfig.id
+			const partner = isSupervisor ? workspace.subordinateId : workspace.supervisorId
+			const partnerAgent = project.agents.find(a => a.id === partner)
+			
+			return {
+				result: `📋 **Shared Workspace Status**\n\n` +
+					`- **Folder:** ${workspace.folder}\n` +
+					`- **Your role:** ${isSupervisor ? "Supervisor" : "Subordinate"}\n` +
+					`- **Partner:** ${partnerAgent?.name || partner}\n` +
+					`- **Current phase:** ${workspace.currentPhase}\n` +
+					`- **Write access:** ${hasAccess ? "✅ YOU" : `❌ ${workspace.activeAgentId}`}\n` +
+					`- **Phase started:** ${workspace.phaseStartedAt}\n\n` +
+					(hasAccess && isSupervisor ? `💡 Use \`handoff_workspace\` when ready to delegate.` :
+					 hasAccess && !isSupervisor ? `💡 Use \`return_workspace\` when done implementing.` :
+					 `💡 Wait for workspace access or coordinate with ${partnerAgent?.name || partner}.`),
+				filesCreated: 0
+			}
+		}
+		// Society Agent end - Shared workspace tools
+
 		// Society Agent start - Additional development tools implementations
 		case "search_in_files": {
 			const { pattern, path: searchPath, file_pattern } = toolInput as { pattern: string; path?: string; file_pattern?: string }
@@ -7141,17 +7759,27 @@ If you don't know, say so. Be concise.`,
 			const { filter, port } = toolInput as { filter?: string; port?: number }
 			const { execSync } = await import("child_process")
 			
+			// Society Agent - Include protected ports info in output
+			const protectedPortsInfo = `\n\n⚠️ **Protected ports** (cannot be killed): ${[...PROTECTED_PORTS].join(", ")}`
+			
 			try {
 				let cmd = "ps aux"
+				let header = "🔄 **Processes:**"
 				if (port) {
 					cmd = `lsof -i :${port} 2>/dev/null || echo "Nothing on port ${port}"`
+					// Check if this port is protected
+					if (isPortProtected(port)) {
+						header = `🔄 **Process on port ${port}** (⚠️ PROTECTED - cannot be killed):`
+					} else {
+						header = `🔄 **Process on port ${port}:**`
+					}
 				} else if (filter) {
 					cmd = `ps aux | grep -i "${filter}" | grep -v grep | head -20`
 				} else {
 					cmd = "ps aux | head -20"
 				}
 				const output = execSync(cmd, { encoding: "utf-8", timeout: 5000 })
-				return { result: `🔄 **Processes:**\n\`\`\`\n${output}\n\`\`\``, filesCreated: 0 }
+				return { result: `${header}\n\`\`\`\n${output}\n\`\`\`${protectedPortsInfo}`, filesCreated: 0 }
 			} catch (err: any) {
 				return { result: `❌ Error: ${err.message}`, filesCreated: 0 }
 			}
@@ -7161,24 +7789,35 @@ If you don't know, say so. Be concise.`,
 			const { pid, port, name } = toolInput as { pid?: number; port?: number; name?: string }
 			const { execSync } = await import("child_process")
 			
-			// Society Agent - CRITICAL: Block killing the system server
-			const SYSTEM_PORT = parseInt(process.env.PORT || "4000", 10)
+			// Society Agent - CRITICAL: Block killing protected ports and system processes
 			const SYSTEM_PID = process.pid
 			
 			// Need at least one parameter
 			if (!port && !pid && !name) {
 				return { 
-					result: `❌ **Specify port, pid, or name!**\n\nUse get_processes to see what's running:\n\n✅ kill_process({ port: 3000 })\n✅ kill_process({ name: "my-server" })`, 
+					result: `❌ **Specify port, pid, or name!**\n\nUse get_processes to see what's running:\n\n✅ kill_process({ port: 3000 })\n✅ kill_process({ name: "my-server" })\n\n⚠️ Protected ports (cannot be killed): ${[...PROTECTED_PORTS].join(", ")}`, 
 					filesCreated: 0 
 				}
 			}
 			
-			// Block killing the system port
-			if (port === SYSTEM_PORT) {
-				log.warn(`[BLOCKED] Agent ${agentConfig.name} tried to kill system port ${SYSTEM_PORT}`)
+			// Block killing any protected port
+			if (port && isPortProtected(port)) {
+				log.warn(`[BLOCKED] Agent ${agentConfig.name} tried to kill protected port ${port}`)
 				return { 
-					result: `🚨 **BLOCKED: Cannot kill port ${SYSTEM_PORT}!**\n\nThis is the Society Agent system server. Killing it would destroy yourself and all other agents.\n\n✅ Use a different port for YOUR server\n❌ Never kill port ${SYSTEM_PORT}`, 
+					result: `🚨 **BLOCKED: Port ${port} is protected!**\n\nProtected ports cannot be killed by agents.\n\nProtected ports: ${[...PROTECTED_PORTS].join(", ")}\n\n💡 To protect additional ports, set PROTECTED_PORTS environment variable:\n\`PROTECTED_PORTS=3000,5000,8080 npm start\``, 
 					filesCreated: 0 
+				}
+			}
+			
+			// Check port ownership: only the allocating project can kill its ports
+			if (port) {
+				const canKill = PortManager.canProjectKillPort(port, project.id)
+				if (!canKill.allowed) {
+					log.warn(`[BLOCKED] Agent ${agentConfig.name} (project ${project.id}) tried to kill port ${port} owned by another project: ${canKill.reason}`)
+					return {
+						result: `🚨 **BLOCKED: Port ${port} belongs to another project!**\n\n${canKill.reason}\n\n✅ You can only kill ports allocated to YOUR project.\n✅ Use \`list_project_ports\` to see your ports.\n✅ Use \`request_port\` to allocate your own ports.`,
+						filesCreated: 0
+					}
 				}
 			}
 			
@@ -7254,6 +7893,90 @@ If you don't know, say so. Be concise.`,
 			} catch (err: any) {
 				return { result: `❌ Error: ${err.message}`, filesCreated: 0 }
 			}
+		}
+
+		// Society Agent - Port allocation tools
+		case "request_port": {
+			const { service_name, description, port: preferredPort } = toolInput as { service_name: string; description?: string; port?: number }
+			
+			if (!service_name || typeof service_name !== "string") {
+				return { result: `❌ service_name is required (e.g., "api", "frontend", "database")`, filesCreated: 0 }
+			}
+			
+			try {
+				const { port, isNew } = await PortManager.requestPort(project.id, service_name, {
+					description,
+					allocatedBy: agentConfig.id,
+					preferredPort: preferredPort,
+				})
+				
+				if (isNew) {
+					return { 
+						result: `✅ **Allocated port ${port}** for service "${service_name}"\n\n` +
+							`This port is now protected - only your project can kill it.\n` +
+							`Use this port in your server configuration.\n\n` +
+							`Example: \`PORT=${port} npm start\``,
+						filesCreated: 0 
+					}
+				} else {
+					return { 
+						result: `✅ **Port ${port}** is already allocated for service "${service_name}"\n\n` +
+							`Same service = same port. Your port is protected.`,
+						filesCreated: 0 
+					}
+				}
+			} catch (err: any) {
+				return { result: `❌ Port allocation failed: ${err.message}`, filesCreated: 0 }
+			}
+		}
+
+		case "release_port": {
+			const { port } = toolInput as { port: number }
+			
+			if (!port || typeof port !== "number") {
+				return { result: `❌ port number is required`, filesCreated: 0 }
+			}
+			
+			const result = PortManager.releasePort(port, project.id)
+			
+			if (result.success) {
+				return { result: `✅ Released port ${port}. It's now available for other projects.`, filesCreated: 0 }
+			} else {
+				return { result: `❌ Cannot release port: ${result.reason}`, filesCreated: 0 }
+			}
+		}
+
+		case "list_project_ports": {
+			const allocations = PortManager.getProjectPorts(project.id)
+			
+			if (allocations.length === 0) {
+				return { 
+					result: `📭 No ports allocated to this project yet.\n\n` +
+						`Use \`request_port({ service_name: "api" })\` to allocate a port for your service.`,
+					filesCreated: 0 
+				}
+			}
+			
+			const { execSync } = await import("child_process")
+			
+			let result = `🔌 **Ports allocated to project "${project.id}":**\n\n`
+			for (const alloc of allocations) {
+				// Check if port is in use
+				let status = "⚪ idle"
+				try {
+					execSync(`lsof -i :${alloc.port} 2>/dev/null`, { encoding: "utf-8" })
+					status = "🟢 in use"
+				} catch {
+					// No process on port
+				}
+				
+				result += `| Port ${alloc.port} | ${alloc.serviceName} | ${status} |\n`
+				if (alloc.description) result += `|  | ${alloc.description} |\n`
+				result += `|  | Allocated: ${alloc.allocatedAt} |\n`
+			}
+			
+			result += `\n⚠️ These ports are protected - only your project can kill them.`
+			return { result, filesCreated: 0 }
 		}
 
 		case "compare_files": {
@@ -9688,7 +10411,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 	]
 	
 	let fullResponse = ""
-	const MAX_ITERATIONS = 20
+	const MAX_ITERATIONS = 100 // Society Agent - increased from 20 to allow workers to complete more complex tasks
 	let taskCompleted = false
 	let hasWrittenFiles = false // Track if agent made any modifications
 	const READ_ONLY_TOOLS = new Set(["read_project_file", "list_project_files", "read_file", "list_dir", "get_team_info"])
@@ -10074,6 +10797,18 @@ You will self-destruct after completing or failing. Focus on your task.`
 	const exitReason = taskCompleted ? "end_turn" : "max_iterations"
 	agentActivityLogger.logLoopExit(project.id, workerId, project.folder, workerHomeFolder, exitReason, actualIterations, totalToolCalls, workerStartTime, taskCompleted ? "Task completed" : "Worker loop ended")
 	
+	// Society Agent - Warn if worker hit max iterations without completing
+	if (!taskCompleted) {
+		log.warn(`[Worker ${workerName}] Hit max iterations (${MAX_ITERATIONS}) without completing task`)
+		io.emit("agent-added", {
+			type: "system",
+			agentId: workerId,
+			projectId: project.id,
+			message: `⚠️ Worker ${workerName} hit max iterations (${MAX_ITERATIONS}). Task may be incomplete. Consider spawning another worker or simplifying the task.`,
+			timestamp: Date.now(),
+		})
+	}
+	
 	// Emit worker finished
 	io.emit("worker-finished", {
 		projectId: project.id,
@@ -10112,6 +10847,7 @@ function getOrCreateProjectAgent(
 
 	// Society Agent start - use provider config instead of hardcoded Anthropic
 	const apiHandler = getApiHandlerFromConfig()
+	const contextConfig = getProviderContextConfig()
 	// Society Agent end
 
 	// Resolve project workspace path
@@ -10226,6 +10962,9 @@ Your direct reports:
 			createdAt: Date.now(),
 		},
 		apiHandler,
+		// Society Agent - provider-specific context limits
+		contextWindowSize: contextConfig.contextWindowSize,
+		contextThresholdPercent: contextConfig.contextThresholdPercent,
 		systemPrompt: fullPrompt,
 		workspacePath: projectDir, // Society Agent - files go to project folder
 		onMessage: (message) => {
@@ -10436,7 +11175,8 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
  */
 app.get("/api/agent/:agentId/workspace/files", async (req, res): Promise<void> => {
 	try {
-		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const projectId = req.query.projectId as string | undefined
+		const agentDir = agentWorkspaceDir(req.params.agentId, projectId)
 		const files: { path: string; size: number; modified: string; isDir: boolean }[] = []
 
 		// Society Agent - Skip heavy directories that slow down file listing
@@ -10482,9 +11222,10 @@ app.get("/api/agent/:agentId/workspace/files", async (req, res): Promise<void> =
 app.get("/api/agent/:agentId/workspace/file", async (req, res): Promise<void> => {
 	try {
 		const filePath = req.query.path as string
+		const projectId = req.query.projectId as string | undefined
 		if (!filePath) { res.status(400).json({ error: "path query parameter required" }); return }
 
-		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const agentDir = agentWorkspaceDir(req.params.agentId, projectId)
 		const check = securePath(agentDir, filePath)
 		if (!check.ok) { res.status(403).json({ error: check.error }); return }
 
@@ -10505,9 +11246,10 @@ app.get("/api/agent/:agentId/workspace/file", async (req, res): Promise<void> =>
 app.get("/api/agent/:agentId/workspace/file/raw", async (req, res): Promise<void> => {
 	try {
 		const filePath = req.query.path as string
+		const projectId = req.query.projectId as string | undefined
 		if (!filePath) { res.status(400).json({ error: "path query parameter required" }); return }
 
-		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const agentDir = agentWorkspaceDir(req.params.agentId, projectId)
 		const check = securePath(agentDir, filePath)
 		if (!check.ok) { res.status(403).json({ error: check.error }); return }
 
@@ -10583,10 +11325,10 @@ app.get("/api/agent/:agentId/workspace/file/raw", async (req, res): Promise<void
  */
 app.post("/api/agent/:agentId/workspace/file", async (req, res): Promise<void> => {
 	try {
-		const { path: filePath, content, encoding } = req.body
+		const { path: filePath, content, encoding, projectId } = req.body
 		if (!filePath || content === undefined) { res.status(400).json({ error: "'path' and 'content' required" }); return }
 
-		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const agentDir = agentWorkspaceDir(req.params.agentId, projectId || req.query.projectId as string)
 		const check = securePath(agentDir, filePath)
 		if (!check.ok) { res.status(403).json({ error: check.error }); return }
 
@@ -10611,9 +11353,10 @@ app.post("/api/agent/:agentId/workspace/file", async (req, res): Promise<void> =
 app.delete("/api/agent/:agentId/workspace/file", async (req, res): Promise<void> => {
 	try {
 		const filePath = req.query.path as string
+		const projectId = req.query.projectId as string | undefined
 		if (!filePath) { res.status(400).json({ error: "path query parameter required" }); return }
 
-		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const agentDir = agentWorkspaceDir(req.params.agentId, projectId)
 		const check = securePath(agentDir, filePath)
 		if (!check.ok) { res.status(403).json({ error: check.error }); return }
 
@@ -10640,10 +11383,10 @@ app.delete("/api/agent/:agentId/workspace/file", async (req, res): Promise<void>
  */
 app.post("/api/agent/:agentId/workspace/dir", async (req, res): Promise<void> => {
 	try {
-		const { path: dirPath } = req.body
+		const { path: dirPath, projectId } = req.body
 		if (!dirPath) { res.status(400).json({ error: "'path' required" }); return }
 
-		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const agentDir = agentWorkspaceDir(req.params.agentId, projectId || req.query.projectId as string)
 		const check = securePath(agentDir, dirPath)
 		if (!check.ok) { res.status(403).json({ error: check.error }); return }
 
@@ -10659,10 +11402,10 @@ app.post("/api/agent/:agentId/workspace/dir", async (req, res): Promise<void> =>
  */
 app.post("/api/agent/:agentId/workspace/move", async (req, res): Promise<void> => {
 	try {
-		const { from, to } = req.body
+		const { from, to, projectId } = req.body
 		if (!from || !to) { res.status(400).json({ error: "'from' and 'to' required" }); return }
 
-		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const agentDir = agentWorkspaceDir(req.params.agentId, projectId || req.query.projectId as string)
 		const checkFrom = securePath(agentDir, from)
 		const checkTo = securePath(agentDir, to)
 		if (!checkFrom.ok) { res.status(403).json({ error: checkFrom.error }); return }
@@ -10687,13 +11430,14 @@ app.post("/api/agent/:agentId/workspace/move", async (req, res): Promise<void> =
 app.get("/api/agent/:agentId/workspace/sqlite", async (req, res): Promise<void> => {
 	try {
 		const filePath = req.query.path as string
+		const projectId = req.query.projectId as string | undefined
 		const tableName = req.query.table as string | undefined
 		const customQuery = req.query.query as string | undefined
 		const limit = parseInt(req.query.limit as string) || 100
 
 		if (!filePath) { res.status(400).json({ error: "path query parameter required" }); return }
 
-		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const agentDir = agentWorkspaceDir(req.params.agentId, projectId)
 		const check = securePath(agentDir, filePath)
 		if (!check.ok) { res.status(403).json({ error: check.error }); return }
 
@@ -10757,11 +11501,11 @@ app.get("/api/agent/:agentId/workspace/sqlite", async (req, res): Promise<void> 
  */
 app.post("/api/agent/:agentId/workspace/sqlite", async (req, res): Promise<void> => {
 	try {
-		const { path: filePath, query, table, rowid, column, value } = req.body
+		const { path: filePath, query, table, rowid, column, value, projectId } = req.body
 
 		if (!filePath) { res.status(400).json({ error: "path required" }); return }
 
-		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const agentDir = agentWorkspaceDir(req.params.agentId, projectId || req.query.projectId as string)
 		const check = securePath(agentDir, filePath)
 		if (!check.ok) { res.status(403).json({ error: check.error }); return }
 
@@ -10830,7 +11574,8 @@ app.post("/api/agent/:agentId/workspace/sqlite", async (req, res): Promise<void>
  */
 app.get("/api/agent/:agentId/workspace/git-status", async (req, res): Promise<void> => {
 	try {
-		const agentDir = agentWorkspaceDir(req.params.agentId)
+		const projectId = req.query.projectId as string | undefined
+		const agentDir = agentWorkspaceDir(req.params.agentId, projectId)
 		if (!fs.existsSync(agentDir)) {
 			res.json({ isRepo: false, unstaged: 0, staged: 0, untracked: 0, branch: null })
 			return
@@ -11193,6 +11938,24 @@ async function start() {
 		// Society Agent start - initialize git loader for project history
 		initGitLoader(workspacePath)
 		log.info(`Git loader initialized`)
+		// Society Agent end
+
+		// Society Agent start - initialize port manager for project port allocation
+		PortManager.initialize(workspacePath)
+		// Set callback to update PROTECTED_PORTS when allocations change
+		PortManager.setAllocationChangeCallback((allocations) => {
+			// Add all allocated ports to protected set
+			for (const alloc of allocations) {
+				PROTECTED_PORTS.add(alloc.port)
+			}
+			log.info(`[PortManager] Updated protected ports: ${[...PROTECTED_PORTS].join(", ")}`)
+		})
+		// Initialize protected ports from existing allocations
+		const existingAllocations = PortManager.getAllAllocations()
+		for (const alloc of existingAllocations) {
+			PROTECTED_PORTS.add(alloc.port)
+		}
+		log.info(`Port manager initialized with ${existingAllocations.length} existing allocation(s)`)
 		// Society Agent end
 
 		// Society Agent start - start diagnostics watchers for existing projects

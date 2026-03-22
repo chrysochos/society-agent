@@ -805,3 +805,291 @@ export async function syncRegistryWithFilesystem(
 
 	return { untracked, removed, matched }
 }
+
+// ============================================================================
+// SHARED WORKSPACE MODE (Proposal: Architect-Developer Pattern)
+// ============================================================================
+
+/**
+ * Workspace mode - how an agent accesses files
+ * - isolated: Agent has its own folder, can only write there (default)
+ * - shared: Agent shares a folder with supervisor, turn-based access
+ */
+export type WorkspaceMode = "isolated" | "shared"
+
+/**
+ * Workspace phase - determines who can write in shared mode
+ * - planning: Supervisor (architect) is active, can plan and set up structure
+ * - implementation: Subordinate (developer) is active, can implement
+ * - review: Back to supervisor for review
+ */
+export type WorkspacePhase = "planning" | "implementation" | "review" | "idle"
+
+/**
+ * Shared workspace configuration
+ */
+export interface SharedWorkspace {
+	/** The shared folder path (relative to project root) */
+	folder: string
+
+	/** Agent ID of the supervisor (e.g., architect) */
+	supervisorId: string
+
+	/** Agent ID of the subordinate (e.g., developer) */
+	subordinateId: string
+
+	/** Current phase - who has write access */
+	currentPhase: WorkspacePhase
+
+	/** Agent ID currently holding write access */
+	activeAgentId: string
+
+	/** When the current phase started */
+	phaseStartedAt: string
+
+	/** Task being worked on in this workspace */
+	currentTaskId?: string
+
+	/** History of phase transitions */
+	phaseHistory: Array<{
+		phase: WorkspacePhase
+		agentId: string
+		from: string
+		to: string
+		reason?: string
+	}>
+}
+
+/**
+ * Result of attempting to acquire workspace access
+ */
+export interface WorkspaceAccessResult {
+	success: boolean
+	reason?: string
+	currentOwner?: string
+	currentPhase?: WorkspacePhase
+}
+
+/**
+ * Shared workspace registry (stored per project)
+ */
+export interface SharedWorkspaceRegistry {
+	workspaces: SharedWorkspace[]
+}
+
+/**
+ * Create an empty shared workspace registry
+ */
+export function createSharedWorkspaceRegistry(): SharedWorkspaceRegistry {
+	return { workspaces: [] }
+}
+
+/**
+ * Create a new shared workspace between supervisor and subordinate
+ */
+export function createSharedWorkspace(
+	registry: SharedWorkspaceRegistry,
+	folder: string,
+	supervisorId: string,
+	subordinateId: string
+): SharedWorkspace {
+	// Check if workspace already exists
+	const existing = registry.workspaces.find(w => w.folder === folder)
+	if (existing) {
+		throw new Error(`Shared workspace already exists for folder: ${folder}`)
+	}
+
+	const workspace: SharedWorkspace = {
+		folder,
+		supervisorId,
+		subordinateId,
+		currentPhase: "planning",
+		activeAgentId: supervisorId, // Supervisor starts with access
+		phaseStartedAt: new Date().toISOString(),
+		phaseHistory: [],
+	}
+
+	registry.workspaces.push(workspace)
+	getLog().info(`[SharedWorkspace] Created: ${folder} (${supervisorId} ↔ ${subordinateId})`)
+
+	return workspace
+}
+
+/**
+ * Get shared workspace for a folder
+ */
+export function getSharedWorkspace(
+	registry: SharedWorkspaceRegistry,
+	folder: string
+): SharedWorkspace | undefined {
+	return registry.workspaces.find(w => folder.startsWith(w.folder))
+}
+
+/**
+ * Check if an agent can write in a shared workspace
+ */
+export function canWriteInSharedWorkspace(
+	registry: SharedWorkspaceRegistry,
+	folder: string,
+	agentId: string
+): WorkspaceAccessResult {
+	const workspace = getSharedWorkspace(registry, folder)
+	
+	if (!workspace) {
+		// Not a shared workspace - allow (use normal ownership rules)
+		return { success: true }
+	}
+
+	// Check if this agent is part of the workspace
+	if (agentId !== workspace.supervisorId && agentId !== workspace.subordinateId) {
+		return {
+			success: false,
+			reason: `Not a participant in this shared workspace`,
+			currentOwner: workspace.activeAgentId,
+			currentPhase: workspace.currentPhase,
+		}
+	}
+
+	// Check if agent has current access
+	if (workspace.activeAgentId !== agentId) {
+		return {
+			success: false,
+			reason: `Workspace is in ${workspace.currentPhase} phase, owned by ${workspace.activeAgentId}. Use release_workspace to request access.`,
+			currentOwner: workspace.activeAgentId,
+			currentPhase: workspace.currentPhase,
+		}
+	}
+
+	return { success: true, currentPhase: workspace.currentPhase }
+}
+
+/**
+ * Hand off workspace access from supervisor to subordinate (planning → implementation)
+ */
+export function handoffToSubordinate(
+	registry: SharedWorkspaceRegistry,
+	folder: string,
+	supervisorId: string,
+	taskDescription?: string
+): WorkspaceAccessResult {
+	const workspace = getSharedWorkspace(registry, folder)
+	
+	if (!workspace) {
+		return { success: false, reason: "No shared workspace found for this folder" }
+	}
+
+	if (workspace.activeAgentId !== supervisorId) {
+		return { 
+			success: false, 
+			reason: `You don't have workspace access. Current owner: ${workspace.activeAgentId}`,
+			currentOwner: workspace.activeAgentId,
+		}
+	}
+
+	if (workspace.supervisorId !== supervisorId) {
+		return { success: false, reason: "Only the supervisor can hand off to subordinate" }
+	}
+
+	// Record history
+	workspace.phaseHistory.push({
+		phase: workspace.currentPhase,
+		agentId: workspace.activeAgentId,
+		from: workspace.phaseStartedAt,
+		to: new Date().toISOString(),
+		reason: taskDescription,
+	})
+
+	// Transfer to subordinate
+	workspace.currentPhase = "implementation"
+	workspace.activeAgentId = workspace.subordinateId
+	workspace.phaseStartedAt = new Date().toISOString()
+
+	getLog().info(`[SharedWorkspace] Handoff: ${folder} → ${workspace.subordinateId} (implementation phase)`)
+
+	return { success: true, currentPhase: "implementation" }
+}
+
+/**
+ * Return workspace access from subordinate to supervisor (implementation → review)
+ */
+export function returnToSupervisor(
+	registry: SharedWorkspaceRegistry,
+	folder: string,
+	subordinateId: string,
+	summary?: string
+): WorkspaceAccessResult {
+	const workspace = getSharedWorkspace(registry, folder)
+	
+	if (!workspace) {
+		return { success: false, reason: "No shared workspace found for this folder" }
+	}
+
+	if (workspace.activeAgentId !== subordinateId) {
+		return { 
+			success: false, 
+			reason: `You don't have workspace access. Current owner: ${workspace.activeAgentId}`,
+			currentOwner: workspace.activeAgentId,
+		}
+	}
+
+	if (workspace.subordinateId !== subordinateId) {
+		return { success: false, reason: "Only the subordinate can return to supervisor" }
+	}
+
+	// Record history
+	workspace.phaseHistory.push({
+		phase: workspace.currentPhase,
+		agentId: workspace.activeAgentId,
+		from: workspace.phaseStartedAt,
+		to: new Date().toISOString(),
+		reason: summary,
+	})
+
+	// Transfer back to supervisor
+	workspace.currentPhase = "review"
+	workspace.activeAgentId = workspace.supervisorId
+	workspace.phaseStartedAt = new Date().toISOString()
+
+	getLog().info(`[SharedWorkspace] Return: ${folder} → ${workspace.supervisorId} (review phase)`)
+
+	return { success: true, currentPhase: "review" }
+}
+
+/**
+ * Get workspace status summary for agent prompts
+ */
+export function getWorkspaceStatusPrompt(
+	registry: SharedWorkspaceRegistry,
+	agentId: string
+): string {
+	const lines: string[] = []
+
+	for (const workspace of registry.workspaces) {
+		if (workspace.supervisorId === agentId || workspace.subordinateId === agentId) {
+			const isSupervisor = workspace.supervisorId === agentId
+			const hasAccess = workspace.activeAgentId === agentId
+			const role = isSupervisor ? "supervisor" : "subordinate"
+			const partner = isSupervisor ? workspace.subordinateId : workspace.supervisorId
+
+			lines.push(`## Shared Workspace: ${workspace.folder}`)
+			lines.push(`- **Your role**: ${role}`)
+			lines.push(`- **Partner**: ${partner}`)
+			lines.push(`- **Current phase**: ${workspace.currentPhase}`)
+			lines.push(`- **Write access**: ${hasAccess ? "✅ YOU" : `❌ ${workspace.activeAgentId}`}`)
+
+			if (hasAccess && isSupervisor) {
+				lines.push("")
+				lines.push("When ready, use `handoff_workspace` to let your subordinate implement.")
+			} else if (hasAccess && !isSupervisor) {
+				lines.push("")
+				lines.push("When done, use `return_workspace` to return control to supervisor for review.")
+			} else {
+				lines.push("")
+				lines.push("Wait for workspace access or coordinate with your partner.")
+			}
+			lines.push("")
+		}
+	}
+
+	return lines.join("\n")
+}

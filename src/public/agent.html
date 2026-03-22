@@ -2551,7 +2551,10 @@ let treeEventsDelegated = false; // Society Agent - track if delegated events at
 
 function agentFileApi(endpoint, opts) {
   // All file operations scoped to /api/agent/:id/workspace/...
-  return fetch(`${API}/api/agent/${AGENT_ID}/workspace${endpoint}`, opts);
+  // Include projectId for agents that may have duplicate IDs across projects
+  const separator = endpoint.includes('?') ? '&' : '?';
+  const projectParam = PROJECT_ID ? `${separator}projectId=${encodeURIComponent(PROJECT_ID)}` : '';
+  return fetch(`${API}/api/agent/${AGENT_ID}/workspace${endpoint}${projectParam}`, opts);
 }
 
 async function bootstrapAgentFolder() {

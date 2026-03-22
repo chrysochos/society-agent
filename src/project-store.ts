@@ -182,6 +182,19 @@ export interface ProjectAgentConfig {
 		scope?: string
 	}>
 	// Society Agent end
+	// Society Agent start - shared workspace mode
+	/**
+	 * Workspace mode:
+	 * - "isolated" (default): Agent has its own folder, only writes there
+	 * - "shared": Agent shares folder with supervisor, turn-based write access
+	 */
+	workspaceMode?: "isolated" | "shared"
+	/**
+	 * When workspaceMode is "shared", this is the supervisor agent ID
+	 * that this agent shares the workspace with
+	 */
+	sharedWorkspaceWith?: string
+	// Society Agent end
 }
 
 // Society Agent start - Approval queue for permission requests
@@ -846,11 +859,8 @@ export class ProjectStore {
 			throw new Error(`Agent "${input.id}" already exists in project "${projectId}"`)
 		}
 
-		// Check no other project has this agent
-		const existing = this.findAgentProject(input.id)
-		if (existing) {
-			throw new Error(`Agent "${input.id}" already belongs to project "${existing.project.id}"`)
-		}
+		// Agent IDs are unique per project, not globally
+		// Different projects can have agents with the same ID (e.g., "coder" in project A and "coder" in project B)
 
 		const agent: ProjectAgentConfig = {
 			...input,
@@ -1101,8 +1111,8 @@ A task is NOT done until ALL four are true:
 	updateAgent(
 		projectId: string,
 		agentId: string,
-		// Society Agent - added port, serverType, reportsTo, scope, scheduledTasks, ephemeral, inheritedFolders, provider; removed canSpawnWorkers, capabilities, knowledgeSummary
-		updates: Partial<Pick<ProjectAgentConfig, "name" | "role" | "systemPrompt" | "ephemeral" | "homeFolder" | "provider" | "model" | "port" | "serverType" | "reportsTo" | "scope" | "scheduledTasks" | "inheritedFolders">>,
+		// Society Agent - added port, serverType, reportsTo, scope, scheduledTasks, ephemeral, inheritedFolders, provider, workspaceMode, sharedWorkspaceWith; removed canSpawnWorkers, capabilities, knowledgeSummary
+		updates: Partial<Pick<ProjectAgentConfig, "name" | "role" | "systemPrompt" | "ephemeral" | "homeFolder" | "provider" | "model" | "port" | "serverType" | "reportsTo" | "scope" | "scheduledTasks" | "inheritedFolders" | "workspaceMode" | "sharedWorkspaceWith">>,
 	): ProjectAgentConfig | undefined {
 		const project = this.get(projectId)
 		if (!project) return undefined
