@@ -104,6 +104,8 @@ export interface ProjectAgentConfig {
 	role: string
 	/** System prompt — defines personality and expertise. Optional: auto-generated from name+role if not provided */
 	systemPrompt?: string
+	/** Custom instructions appended to the system prompt (user-editable restrictions/guidance) */
+	customInstructions?: string
 	/** Home folder within the project (relative to project root, e.g. "/" or "frontend/") */
 	homeFolder: string
 	/** LLM provider override (defaults to server default) */
@@ -151,6 +153,8 @@ export interface ProjectAgentConfig {
 	// Society Agent start - agent permissions
 	/** Agent's permissions - controls what operations are allowed */
 	permissions?: {
+		/** Custodian mode - can only write .md/.txt files and run read-only commands (default: true for persistent agents) */
+		isCustodian?: boolean
 		/** Can delete files (default: false) */
 		canDeleteFiles?: boolean
 		/** Can run shell commands (default: false) */
@@ -1111,8 +1115,8 @@ A task is NOT done until ALL four are true:
 	updateAgent(
 		projectId: string,
 		agentId: string,
-		// Society Agent - added port, serverType, reportsTo, scope, scheduledTasks, ephemeral, inheritedFolders, provider, workspaceMode, sharedWorkspaceWith; removed canSpawnWorkers, capabilities, knowledgeSummary
-		updates: Partial<Pick<ProjectAgentConfig, "name" | "role" | "systemPrompt" | "ephemeral" | "homeFolder" | "provider" | "model" | "port" | "serverType" | "reportsTo" | "scope" | "scheduledTasks" | "inheritedFolders" | "workspaceMode" | "sharedWorkspaceWith">>,
+		// Society Agent - added port, serverType, reportsTo, scope, scheduledTasks, ephemeral, inheritedFolders, provider, workspaceMode, sharedWorkspaceWith, customInstructions; removed canSpawnWorkers, capabilities, knowledgeSummary
+		updates: Partial<Pick<ProjectAgentConfig, "name" | "role" | "systemPrompt" | "customInstructions" | "ephemeral" | "homeFolder" | "provider" | "model" | "port" | "serverType" | "reportsTo" | "scope" | "scheduledTasks" | "inheritedFolders" | "workspaceMode" | "sharedWorkspaceWith">>,
 	): ProjectAgentConfig | undefined {
 		const project = this.get(projectId)
 		if (!project) return undefined

@@ -156,6 +156,163 @@ function extractPortsFromCommand(cmd: string): number[] {
 	return [...new Set(ports)]
 }
 
+// Society Agent - Hierarchical visibility: check if an agent can access a given path
+// Rules:
+// 1. Agent can read within their homeFolder and subdirectories
+// 2. Agent can read within their scope (if defined)
+// 3. Agent can read their inheritedFolders
+// 4. Supervisors can read subordinate agent folders (recursively)
+// 5. Project root ("/") homeFolder grants full access
+function canAgentAccessPath(
+	agentConfig: ProjectAgentConfig,
+	project: ProjectStoreState,
+	requestedPath: string
+): { allowed: boolean; reason: string } {
+	// Normalize paths - remove leading/trailing slashes for consistent comparison
+	const normalize = (p: string) => p.replace(/^\/+|\/+$/g, "").toLowerCase()
+	const normPath = normalize(requestedPath)
+	const normHome = normalize(agentConfig.homeFolder || "/")
+	
+	// Rule 5: Root homeFolder grants full access (legacy behavior)
+	if (normHome === "" || normHome === "/" || agentConfig.homeFolder === "/") {
+		return { allowed: true, reason: "agent has root access" }
+	}
+	
+	// Rule 1: Agent can read within their homeFolder
+	if (normPath === normHome || normPath.startsWith(normHome + "/")) {
+		return { allowed: true, reason: "within agent homeFolder" }
+	}
+	
+	// Rule 2: Agent can read within their scope
+	if (agentConfig.scope) {
+		const normScope = normalize(agentConfig.scope)
+		if (normPath === normScope || normPath.startsWith(normScope + "/")) {
+			return { allowed: true, reason: "within agent scope" }
+		}
+	}
+	
+	// Rule 3: Agent can read their inheritedFolders
+	if (agentConfig.inheritedFolders && agentConfig.inheritedFolders.length > 0) {
+		for (const inherited of agentConfig.inheritedFolders) {
+			const normInherited = normalize(inherited.path)
+			if (normPath === normInherited || normPath.startsWith(normInherited + "/")) {
+				return { allowed: true, reason: `inherited folder from ${inherited.fromAgentName}` }
+			}
+		}
+	}
+	
+	// Rule 4: Supervisors can read subordinate agent folders (recursively)
+	const allAgents = project.agents || []
+	const getSubordinateFolders = (supervisorId: string, visited: Set<string> = new Set()): string[] => {
+		if (visited.has(supervisorId)) return [] // Prevent cycles
+		visited.add(supervisorId)
+		
+		const folders: string[] = []
+		for (const agent of allAgents) {
+			if (agent.reportsTo === supervisorId) {
+				// Add this subordinate's folder
+				const subHome = normalize(agent.homeFolder || "/")
+				if (subHome && subHome !== "" && subHome !== "/") {
+					folders.push(subHome)
+				}
+				if (agent.scope) {
+					folders.push(normalize(agent.scope))
+				}
+				// Recursively get subordinates of this subordinate
+				folders.push(...getSubordinateFolders(agent.id, visited))
+			}
+		}
+		return folders
+	}
+	
+	const subordinateFolders = getSubordinateFolders(agentConfig.id)
+	for (const subFolder of subordinateFolders) {
+		if (normPath === subFolder || normPath.startsWith(subFolder + "/")) {
+			return { allowed: true, reason: "subordinate agent folder" }
+		}
+	}
+	
+	// Not allowed - build helpful message
+	const allowedPaths: string[] = [agentConfig.homeFolder || "/"]
+	if (agentConfig.scope) allowedPaths.push(agentConfig.scope)
+	if (agentConfig.inheritedFolders) {
+		allowedPaths.push(...agentConfig.inheritedFolders.map(f => f.path))
+	}
+	allowedPaths.push(...subordinateFolders.map(f => `${f}/ (subordinate)`))
+	
+	return {
+		allowed: false,
+		reason: `Access denied. You can only read files within: ${allowedPaths.join(", ")}`
+	}
+}
+
+// Society Agent - Get the list of folders an agent can access (for filtered root listing)
+function getAgentAccessibleFolders(
+	agentConfig: ProjectAgentConfig,
+	project: ProjectStoreState
+): string[] {
+	const normalize = (p: string) => p.replace(/^\/+|\/+$/g, "")
+	const normHome = normalize(agentConfig.homeFolder || "/")
+	
+	// Root homeFolder grants full access - return empty to signal "all"
+	if (normHome === "" || normHome === "/" || agentConfig.homeFolder === "/") {
+		return []
+	}
+	
+	const folders: string[] = []
+	
+	// Agent's home folder (get top-level component)
+	if (normHome) {
+		const topLevel = normHome.split("/")[0]
+		if (topLevel) folders.push(topLevel)
+	}
+	
+	// Agent's scope (get top-level component)
+	if (agentConfig.scope) {
+		const normScope = normalize(agentConfig.scope)
+		const topLevel = normScope.split("/")[0]
+		if (topLevel && !folders.includes(topLevel)) folders.push(topLevel)
+	}
+	
+	// Inherited folders (get top-level component)
+	if (agentConfig.inheritedFolders) {
+		for (const inherited of agentConfig.inheritedFolders) {
+			const topLevel = normalize(inherited.path).split("/")[0]
+			if (topLevel && !folders.includes(topLevel)) folders.push(topLevel)
+		}
+	}
+	
+	// Subordinate folders (get top-level component)
+	const allAgents = project.agents || []
+	const getSubordinateFolders = (supervisorId: string, visited: Set<string> = new Set()): string[] => {
+		if (visited.has(supervisorId)) return []
+		visited.add(supervisorId)
+		const results: string[] = []
+		for (const agent of allAgents) {
+			if (agent.reportsTo === supervisorId) {
+				const subHome = normalize(agent.homeFolder || "/")
+				if (subHome) {
+					const topLevel = subHome.split("/")[0]
+					if (topLevel) results.push(topLevel)
+				}
+				if (agent.scope) {
+					const topLevel = normalize(agent.scope).split("/")[0]
+					if (topLevel) results.push(topLevel)
+				}
+				results.push(...getSubordinateFolders(agent.id, visited))
+			}
+		}
+		return results
+	}
+	
+	const subFolders = getSubordinateFolders(agentConfig.id)
+	for (const f of subFolders) {
+		if (!folders.includes(f)) folders.push(f)
+	}
+	
+	return folders
+}
+
 // Society Agent - Reconnect event buffer: survives client disconnections
 // Buffers the last 400 events per agent so clients can replay missed events on reconnect.
 const RECONNECT_BUFFER_MAX = 400
@@ -4766,19 +4923,26 @@ app.get("/api/projects/:id/supervisor/overrides", (req, res): void => {
  */
 app.post("/api/projects/:id/agents", (req, res): void => {
 	try {
-		const { id, name, role, systemPrompt, homeFolder, model, ephemeral, reportsTo, capabilities, workspaceMode } = req.body
+		const { id, name, role, systemPrompt, customInstructions, homeFolder, model, ephemeral, reportsTo, capabilities, workspaceMode } = req.body
 		if (!id || !name || !role) {
 			res.status(400).json({ error: "id, name, and role are required" })
 			return
 		}
 		
 		// Generate default system prompt if not provided
-		const defaultPrompt = buildFullSystemPrompt(systemPrompt || `You are ${name}, a ${role}.
+		let basePrompt = systemPrompt || `You are ${name}, a ${role}.
 
 Your responsibilities:
 ${capabilities?.length ? capabilities.map((c: string) => `- ${c}`).join('\n') : `- Fulfill your role as ${role}`}
 
-Work collaboratively with other agents in the project. Use available tools to complete tasks.`)
+Work collaboratively with other agents in the project. Use available tools to complete tasks.`
+		
+		// Append custom instructions if provided
+		if (customInstructions) {
+			basePrompt += `\n\n## Custom Instructions\n${customInstructions}`
+		}
+		
+		const defaultPrompt = buildFullSystemPrompt(basePrompt)
 
 		// Determine home folder - nest under parent if specified
 		const project = projectStore.get(req.params.id)
@@ -4808,6 +4972,7 @@ Work collaboratively with other agents in the project. Use available tools to co
 		const agent = projectStore.addAgent(req.params.id, {
 			id, name, role,
 			systemPrompt: defaultPrompt,
+			customInstructions,  // Store separately for editing
 			homeFolder: agentHomeFolder,
 			model,
 			ephemeral: ephemeral || false,
@@ -4852,7 +5017,30 @@ Work collaboratively with other agents in the project. Use available tools to co
  */
 app.put("/api/projects/:projectId/agents/:agentId", (req, res): void => {
 	try {
-		const updated = projectStore.updateAgent(req.params.projectId, req.params.agentId, req.body)
+		const updates = { ...req.body }
+		
+		// If customInstructions changed, regenerate the system prompt
+		if (updates.customInstructions !== undefined) {
+			const agent = projectStore.getAgent(req.params.projectId, req.params.agentId)
+			if (agent) {
+				const name = updates.name || agent.name
+				const role = updates.role || agent.role
+				let basePrompt = `You are ${name}, a ${role}.
+
+Your responsibilities:
+- Fulfill your role as ${role}
+
+Work collaboratively with other agents in the project. Use available tools to complete tasks.`
+				
+				if (updates.customInstructions) {
+					basePrompt += `\n\n## Custom Instructions\n${updates.customInstructions}`
+				}
+				
+				updates.systemPrompt = buildFullSystemPrompt(basePrompt)
+			}
+		}
+		
+		const updated = projectStore.updateAgent(req.params.projectId, req.params.agentId, updates)
 		if (!updated) {
 			res.status(404).json({ error: "Project or agent not found" })
 			return
@@ -5747,6 +5935,43 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 			required: ["agent_id"],
 		},
 	},
+	// Society Agent start - Agent configuration tools for supervisors
+	{
+		name: "get_agent_info",
+		description: "Get detailed information about an agent including their role, homeFolder, and customInstructions. Use this to understand an agent's current configuration before assigning or updating instructions.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				agent_id: { type: "string", description: "The agent ID to get info about (must be yourself, your subordinate, or a peer)" },
+			},
+			required: ["agent_id"],
+		},
+	},
+	{
+		name: "set_agent_instructions",
+		description: `Set or update an agent's customInstructions. Use this to define ownership boundaries, coordination protocols, and constraints.
+
+**Permissions:**
+- Top-level supervisor (no boss): can edit ANY agent including yourself
+- Regular supervisors: can only edit direct subordinates
+
+Supports both REPLACE (default) and APPEND modes for iterative refinement as the project evolves.
+
+Example instructions:
+- Ownership: "You OWN: backend/. You can READ: shared/types/. You must NOT write to: frontend/"
+- Coordination: "Before changing API contracts, notify frontend-specialist via send_message"
+- Constraints: "Always use TypeScript strict mode. Follow the project coding standards."`,
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				agent_id: { type: "string", description: "The agent ID to configure (top-level can edit any; others can only edit subordinates)" },
+				instructions: { type: "string", description: "The customInstructions to set or append" },
+				mode: { type: "string", enum: ["replace", "append"], description: "'replace' (default) overwrites existing instructions. 'append' adds to existing instructions." },
+			},
+			required: ["agent_id", "instructions"],
+		},
+	},
+	// Society Agent end
 	{
 		name: "delegate_task",
 		description: `Delegate a task to another agent with DETAILED SPECIFICATIONS. The agent will work autonomously on these specs.
@@ -7030,6 +7255,96 @@ If you don't know, say so. Be concise.`,
 			
 			return { result, filesCreated: 0 }
 		}
+
+		// Society Agent start - Agent configuration tools
+		case "get_agent_info": {
+			const { agent_id } = toolInput as { agent_id: string }
+			
+			const targetAgent = project.agents.find(a => a.id === agent_id)
+			if (!targetAgent) {
+				const available = project.agents.filter(a => !a.ephemeral).map(a => `  - ${a.id}: ${a.name}`).join('\n')
+				return { result: `❌ Agent "${agent_id}" not found.\n\nAvailable agents:\n${available}`, filesCreated: 0 }
+			}
+			
+			// Permission check: can view self, subordinates, or peers
+			const isSelf = agent_id === agentConfig.id
+			const isSubordinate = targetAgent.reportsTo === agentConfig.id
+			const isPeer = targetAgent.reportsTo === agentConfig.reportsTo
+			const isSupervisor = agentConfig.reportsTo === agent_id
+			if (!isSelf && !isSubordinate && !isPeer && !isSupervisor) {
+				return { result: `❌ You can only view info for yourself, your supervisor, your subordinates, or your peers.`, filesCreated: 0 }
+			}
+			
+			let result = `📋 **Agent: ${targetAgent.name}** (\`${targetAgent.id}\`)\n\n`
+			result += `**Role:** ${targetAgent.role}\n`
+			result += `**Home Folder:** \`${targetAgent.homeFolder}\`\n`
+			result += `**Reports To:** ${targetAgent.reportsTo || "(top-level)"}\n`
+			result += `**Ephemeral:** ${targetAgent.ephemeral ? "Yes" : "No"}\n`
+			if (targetAgent.model) result += `**Model:** ${targetAgent.model}\n`
+			
+			if (targetAgent.customInstructions) {
+				result += `\n**Custom Instructions:**\n\`\`\`\n${targetAgent.customInstructions}\n\`\`\``
+			} else {
+				result += `\n**Custom Instructions:** _(none set)_`
+			}
+			
+			// Show subordinates if any
+			const subordinates = project.agents.filter(a => !a.ephemeral && a.reportsTo === agent_id)
+			if (subordinates.length > 0) {
+				result += `\n\n**Subordinates:** ${subordinates.map(a => `${a.name} (${a.id})`).join(", ")}`
+			}
+			
+			return { result, filesCreated: 0 }
+		}
+
+		case "set_agent_instructions": {
+			const { agent_id, instructions, mode } = toolInput as { agent_id: string; instructions: string; mode?: "replace" | "append" }
+			
+			const targetAgent = project.agents.find(a => a.id === agent_id)
+			if (!targetAgent) {
+				const available = project.agents.filter(a => !a.ephemeral).map(a => `  - ${a.id}: ${a.name}`).join('\n')
+				return { result: `❌ Agent "${agent_id}" not found.\n\nAvailable agents:\n${available}`, filesCreated: 0 }
+			}
+			
+			// Permission check:
+			// - Top-level supervisor (no boss) can edit ANY agent including self
+			// - Regular supervisors can only edit direct subordinates
+			const isTopLevel = !agentConfig.reportsTo
+			const isDirectSubordinate = targetAgent.reportsTo === agentConfig.id
+			const isSelf = targetAgent.id === agentConfig.id
+			
+			if (!isTopLevel && !isDirectSubordinate) {
+				if (isSelf) {
+					return { result: `❌ You cannot modify your own instructions. Ask your supervisor to update them.`, filesCreated: 0 }
+				}
+				return { result: `❌ You can only set instructions for your direct subordinates. "${targetAgent.name}" reports to "${targetAgent.reportsTo || "(no one)"}".`, filesCreated: 0 }
+			}
+			
+			// Build new instructions based on mode
+			const existingInstructions = targetAgent.customInstructions || ""
+			const useAppend = mode === "append"
+			const newInstructions = useAppend && existingInstructions 
+				? `${existingInstructions}\n\n${instructions}`
+				: instructions
+			
+			// Update in project store (persisted to disk)
+			projectStore.updateAgent(project.id, agent_id, { customInstructions: newInstructions })
+			
+			// Also update in-memory agent config
+			targetAgent.customInstructions = newInstructions
+			
+			const action = useAppend ? "appended to" : "set for"
+			const selfNote = isSelf ? " (self)" : ""
+			let result = `✅ Instructions ${action} **${targetAgent.name}**${selfNote} (\`${agent_id}\`).\n\n`
+			result += `**Current Instructions:**\n\`\`\`\n${newInstructions}\n\`\`\`\n\n`
+			result += isSelf 
+				? `💡 These take effect on your next conversation.`
+				: `💡 These take effect on the agent's next conversation. Consider notifying them via \`send_message\`.`
+			
+			log.info(`[set_agent_instructions] ${agentConfig.name} ${action} ${targetAgent.name}${selfNote}: ${instructions.substring(0, 100)}...`)
+			
+			return { result, filesCreated: 0 }
+		}
 		// Society Agent end
 
 		// Society Agent start - Allow workers to READ from project (other agents' folders)
@@ -7108,6 +7423,13 @@ If you don't know, say so. Be concise.`,
 			// Security: ensure path is within project folder
 			if (!fullPath.startsWith(projectDir)) {
 				return { result: `❌ Error: Cannot read files outside the project`, filesCreated: 0 }
+			}
+			
+			// Society Agent - Hierarchical visibility check
+			const visibilityCheck = canAgentAccessPath(agentConfig, project, filePath)
+			if (!visibilityCheck.allowed) {
+				log.warn(`[Agent ${agentConfig.name}] Visibility blocked: ${filePath} - ${visibilityCheck.reason}`)
+				return { result: `❌ ${visibilityCheck.reason}`, filesCreated: 0 }
 			}
 			
 			try {
@@ -7241,21 +7563,48 @@ If you don't know, say so. Be concise.`,
 				return { result: `❌ Error: Cannot list files outside the project`, filesCreated: 0 }
 			}
 			
+			// Society Agent - Hierarchical visibility check (special handling for root)
+			const isRootListing = !dirPath || dirPath === "." || dirPath === "/"
+			const accessibleFolders = getAgentAccessibleFolders(agentConfig, project)
+			const hasFullAccess = accessibleFolders.length === 0 // Empty = full access
+			
+			if (!isRootListing) {
+				// For non-root listings, check visibility
+				const visibilityCheck = canAgentAccessPath(agentConfig, project, dirPath || "")
+				if (!visibilityCheck.allowed) {
+					log.warn(`[Agent ${agentConfig.name}] Visibility blocked: ${dirPath} - ${visibilityCheck.reason}`)
+					return { result: `❌ ${visibilityCheck.reason}`, filesCreated: 0 }
+				}
+			}
+			
 			try {
 				if (!fs.existsSync(fullPath)) {
 					// Society Agent - Suggest available folders when directory not found
-					const projectFolders = fs.readdirSync(projectDir, { withFileTypes: true })
+					let projectFolders = fs.readdirSync(projectDir, { withFileTypes: true })
 						.filter(d => d.isDirectory() && !d.name.startsWith(".") && d.name !== "node_modules")
 						.map(d => d.name)
+					// Filter for visibility if not full access
+					if (!hasFullAccess) {
+						projectFolders = projectFolders.filter(f => accessibleFolders.includes(f))
+					}
 					let suggestion = ""
 					if (projectFolders.length > 0) {
 						suggestion = `\n\n📁 Available folders in project:\n${projectFolders.map(f => `  - ${f}/`).join("\n")}`
 					}
 					return { result: `❌ Directory not found: ${dirPath}${suggestion}`, filesCreated: 0 }
 				}
-				const items = fs.readdirSync(fullPath, { withFileTypes: true })
+				let items = fs.readdirSync(fullPath, { withFileTypes: true })
 				// Filter out noise
 				const ignoreDirs = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.cache', 'coverage', '__pycache__'])
+				
+				// Filter for visibility if listing root and not full access
+				if (isRootListing && !hasFullAccess) {
+					items = items.filter(i => {
+						if (!i.isDirectory()) return false // Only show accessible folders at root
+						return accessibleFolders.includes(i.name)
+					})
+				}
+				
 				const listing = items
 					.filter(i => {
 						if (i.name.startsWith(".") && i.name !== ".env") return false
@@ -7264,7 +7613,10 @@ If you don't know, say so. Be concise.`,
 					})
 					.map(i => i.isDirectory() ? `📁 ${i.name}/` : `📄 ${i.name}`)
 					.join("\n")
-				return { result: `📂 **Project: ${dirPath || "."}** (READ ONLY):\n${listing || "(empty)"}`, filesCreated: 0 }
+				const visibilityNote = (!hasFullAccess && isRootListing) 
+					? `\n\n📝 _Note: Showing only folders you have access to._` 
+					: ""
+				return { result: `📂 **Project: ${dirPath || "."}** (READ ONLY):\n${listing || "(empty)"}${visibilityNote}`, filesCreated: 0 }
 			} catch (err: any) {
 				return { result: `❌ Error listing directory: ${err.message}`, filesCreated: 0 }
 			}
@@ -8023,6 +8375,34 @@ If you don't know, say so. Be concise.`,
 			if (targetAgent.id === agentConfig.id) {
 				return { result: `❌ You cannot message yourself. Save your own notes with write_file.`, filesCreated: 0 }
 			}
+			
+			// Society Agent - Detect FORMAL task assignment disguised as a message
+			// Allow: collaboration requests, API change requests, questions
+			// Block: structured task assignments with formal task syntax
+			const taskPatterns = [
+				/^##?\s*task/im,                        // Markdown task header
+				/task\s*(id|:)\s*\d/i,                  // "Task ID: 123" or "Task: 1"
+				/desired\s*state\s*:/i,                 // Formal task structure
+				/acceptance\s*criteria\s*:/i,          // Formal task structure
+				/task\s*delegation\s*:/i,              // Explicit delegation
+				/your\s+task\s+is\s+to\s/i,            // "Your task is to..."
+				/i('m)?\s+(assigning|delegating)\s+(you|this)/i, // "I'm assigning you..."
+			]
+			const isPeer = targetAgent.reportsTo === agentConfig.reportsTo && targetAgent.reportsTo !== undefined
+			const isSubordinate = targetAgent.reportsTo === agentConfig.id
+			
+			const looksLikeFormalTaskAssignment = taskPatterns.some(p => p.test(message))
+			
+			if (looksLikeFormalTaskAssignment && isPeer && !isSubordinate) {
+				return {
+					result: `⚠️ This message uses formal task assignment syntax, but you cannot assign tasks to peers.\n\n` +
+						`✅ **You CAN ask peers for help:** "Can you add an endpoint for X?" or "Could you expose Y via API?"\n` +
+						`📋 **Use \`delegate_task\`** for formal task assignments (only to your subordinates)\n` +
+						`📋 **Tell your supervisor** if peer won't help or needs to prioritize your request\n\n` +
+						`💡 Rephrase as a request/question rather than a formal task assignment.`,
+					filesCreated: 0
+				}
+			}
 
 			// If ephemeral worker, just save to inbox (they can't be triggered)
 			if (targetAgent.ephemeral) {
@@ -8402,17 +8782,15 @@ If you don't know, say so. Be concise.`,
 			
 			const spawnedWorkers: string[] = []
 			
+			// Get supervisor's custom instructions to pass to workers
+			const supervisorInstructions = agentConfig.customInstructions
+			
 			for (let i = 0; i < canSpawn; i++) {
 				const workerId = `worker-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
 				const workerName = `Worker ${spawnedWorkers.length + activeWorkers + 1}`
 				
-				// Create ephemeral worker agent
-				const workerConfig: ProjectAgentConfig = {
-					id: workerId,
-					name: workerName,
-					role: "Ephemeral worker - claims and executes tasks from the pool",
-					homeFolder: agentConfig.homeFolder || "/",
-					systemPrompt: buildFullSystemPrompt(`You are an ephemeral worker agent. Your job is to:
+				// Build worker system prompt with supervisor's instructions inherited
+				let workerPromptContent = `You are an ephemeral worker agent. Your job is to:
 1. Claim a task from the pool with \`claim_task()\`
 2. Read the task details and understand what needs to be done
 3. Execute the task using available tools (read_file, write_file, run_command, etc.)
@@ -8430,7 +8808,20 @@ If you're stuck, confused, or need clarification:
   - "QUESTION: The file already exists - should I overwrite or add to it?"
 
 You will self-destruct after completing or failing your task. Focus on the task at hand.
-DO NOT spawn more workers or create new tasks - that's the supervisor's job.`),
+DO NOT spawn more workers or create new tasks - that's the supervisor's job.`
+				
+				// Inherit supervisor's custom instructions (e.g., "only work on backend code")
+				if (supervisorInstructions) {
+					workerPromptContent += `\n\n## Inherited Instructions from Supervisor\n${supervisorInstructions}`
+				}
+				
+				// Create ephemeral worker agent
+				const workerConfig: ProjectAgentConfig = {
+					id: workerId,
+					name: workerName,
+					role: "Ephemeral worker - claims and executes tasks from the pool",
+					homeFolder: agentConfig.homeFolder || "/",
+					systemPrompt: buildFullSystemPrompt(workerPromptContent),
 					ephemeral: true,
 					reportsTo: agentConfig.id,
 				}
@@ -8648,6 +9039,58 @@ You report to ${parentName}.`),
 				return { 
 					result: `❌ Agent "${agent_id}" not found or is ephemeral.\n\nAvailable persistent agents:\n${available.map(a => `  - ${a.id}: ${a.name}`).join('\n') || '(none)'}`, 
 					filesCreated: 0 
+				}
+			}
+			
+			// Society Agent - Hierarchy validation: only delegates to subordinates
+			// Check if target reports to sender (direct subordinate)
+			// Or if both report to the same boss (peers can't delegate to each other)
+			const isSubordinate = targetAgent.reportsTo === agentConfig.id
+			const isPeer = targetAgent.reportsTo === agentConfig.reportsTo && targetAgent.reportsTo !== undefined
+			const isSupervisor = agentConfig.reportsTo === targetAgent.id
+			
+			if (isSupervisor) {
+				return {
+					result: `❌ Cannot delegate to your supervisor (${targetAgent.name}).\n\n💡 Use \`report_to_supervisor\` to communicate with your boss instead.`,
+					filesCreated: 0
+				}
+			}
+			
+			if (isPeer && !isSubordinate) {
+				// Peers can't delegate to each other - they should ask shared supervisor
+				return {
+					result: `❌ Cannot delegate to peer agent (${targetAgent.name}).\n\n` +
+						`📋 **Hierarchy rules:**\n` +
+						`- You can only delegate to agents that report to you (subordinates)\n` + 
+						`- To coordinate with peers, ask your shared supervisor\n` +
+						`- If this is your task to complete, do it yourself\n\n` +
+						`💡 **Your subordinates:** ${project.agents.filter(a => a.reportsTo === agentConfig.id && !a.ephemeral).map(a => a.name).join(', ') || '(none)'}\n` +
+						`💡 **Your supervisor:** ${project.agents.find(a => a.id === agentConfig.reportsTo)?.name || '(none - you are top-level)'}`,
+					filesCreated: 0
+				}
+			}
+			
+			// Society Agent - Scope validation: warn if task involves sender's folder, not target's
+			const senderHome = (agentConfig.homeFolder || "/").replace(/^\/+|\/+$/g, "").toLowerCase()
+			const targetHome = (targetAgent.homeFolder || "/").replace(/^\/+|\/+$/g, "").toLowerCase()
+			const taskLower = task.toLowerCase()
+			const desiredStateLower = (desired_state || "").toLowerCase()
+			
+			// Check if the task mentions the sender's folder but not the target's folder
+			const mentionsSenderFolder = senderHome && senderHome !== "/" && 
+				(taskLower.includes(senderHome) || desiredStateLower.includes(senderHome))
+			const mentionsTargetFolder = targetHome && targetHome !== "/" && 
+				(taskLower.includes(targetHome) || desiredStateLower.includes(targetHome))
+			
+			if (mentionsSenderFolder && !mentionsTargetFolder && senderHome !== targetHome) {
+				return {
+					result: `❌ Invalid delegation: Task involves your folder (${senderHome}/) not ${targetAgent.name}'s folder (${targetHome}/).\n\n` +
+						`📋 **Scope rules:**\n` +
+						`- Tasks involving YOUR folder should be done by YOU (or your workers)\n` +
+						`- ${targetAgent.name} can only work in ${targetHome}/\n` +
+						`- Don't delegate cleanup of your mess to other agents\n\n` +
+						`💡 **To clean up ${senderHome}/:** Do it yourself using \`run_command\` or spawn workers.`,
+					filesCreated: 0
 				}
 			}
 			
@@ -10420,6 +10863,21 @@ You will self-destruct after completing or failing. Focus on your task.`
 	
 	for (let iteration = 0; iteration < MAX_ITERATIONS && !taskCompleted; iteration++) {
 		actualIterations = iteration + 1
+		
+		// Society Agent - Check if worker should stop
+		if (stoppedAgents.has(workerId)) {
+			log.info(`[Worker ${workerName}] Stop requested by user`)
+			stoppedAgents.delete(workerId)
+			io.emit("agent-message", {
+				agentId: workerId,
+				agentName: workerName,
+				projectId: project.id,
+				message: `\n🛑 **Worker stopped by user**`,
+				timestamp: Date.now(),
+				isStreaming: false,
+			})
+			break
+		}
 
 		// Society Agent - Trim old tool results if approaching context limit
 		// 16.7A: cap history to last N turns before trimming
@@ -10869,8 +11327,16 @@ function getOrCreateProjectAgent(
 	}
 	// Society Agent end
 	// Society Agent start - Tell the agent where its project folder is so it creates files there
+	const homeFolderName = (agentConfig.homeFolder || agentConfig.id).replace(/^\/+|\/+$/g, "").split("/").pop() || agentConfig.id
 	fullPrompt += `\n\n## File Creation Instructions
 You are working in project "${project.name}". Your project folder is: ${projectDir}
+
+**IMPORTANT: You are ALREADY inside your folder "${homeFolderName}/"**
+- All file paths in write_file/create_file are RELATIVE to YOUR folder
+- Do NOT include your folder name in paths — it will create nested duplicates!
+✅ CORRECT: write_file("src/index.ts", content)
+❌ WRONG:   write_file("${homeFolderName}/src/index.ts", content)  ← Creates ${homeFolderName}/${homeFolderName}/src/index.ts!
+
 When asked to create files, code, or any project artifacts, ALWAYS include the files in your response using this JSON format:
 \`\`\`json
 {
@@ -10900,6 +11366,7 @@ This ensures files are automatically saved in your project folder. Do NOT just d
 	fullPrompt += `\n\n## Team & Task Tools
 **Ephemeral workers (one-off tasks):** \`create_task()\` → \`spawn_worker(count)\` → \`list_tasks()\` → \`get_worker_status()\`
 **Persistent agents:** \`list_team\` · \`delegate_task\` · \`delegate_tasks_parallel\` · \`propose_new_agent\`
+**Agent configuration:** \`get_agent_info(id)\` · \`set_agent_instructions(id, instructions, mode)\`
 **Other agents (${siblingAgents.length}):** ${siblingAgents.length > 0 ? siblingAgents.map(a => `${a.id} (${a.name})`).join(" · ") : "none yet"}
 - Ephemeral: best for one-off tasks · Persistent: best for ongoing roles with memory`
 
@@ -10946,7 +11413,23 @@ Your direct reports:
 - ❌ NEVER run commands intended for a subagent — send them the task instead
 - ❌ NEVER mark your PLAN.md \`[x]\` without a commit hash from the subagent
 - ✅ Read subagent progress (read-only): \`read_project_file("<subagent-folder>/PLAN.md")\`
-- ✅ Your own files: AGENTS.md, PLAN.md, FILES.md, ERRORS.md — in YOUR folder only`
+- ✅ Your own files: AGENTS.md, PLAN.md, FILES.md, ERRORS.md — in YOUR folder only
+
+### When user describes the project
+Extract and act on these from conversation:
+1. **Goals** — what are we building? Save to your PLAN.md
+2. **Architecture** — tech stack, ports, patterns? Create agents for each domain
+3. **Boundaries** — who owns what? Use \`set_agent_instructions\` for each subordinate
+4. **Coordination** — shared resources? Define protocols in instructions
+5. **Confirm** — tell user what you set up, offer to adjust
+
+### Configuring subordinates
+Use \`get_agent_info(id)\` to view a subordinate's current instructions.
+Use \`set_agent_instructions(id, instructions, mode)\` to set ownership boundaries, coordination rules, and constraints:
+- **mode: "replace"** (default) — overwrites existing instructions
+- **mode: "append"** — adds to existing instructions (use as project evolves)
+
+Example: \`set_agent_instructions("backend", "You OWN: backend/, shared/types/. Coordinate API changes with frontend.", "replace")\``
 	}
 
 	if (project.knowledge) {
@@ -11179,15 +11662,11 @@ app.get("/api/agent/:agentId/workspace/files", async (req, res): Promise<void> =
 		const agentDir = agentWorkspaceDir(req.params.agentId, projectId)
 		const files: { path: string; size: number; modified: string; isDir: boolean }[] = []
 
-		// Society Agent - Skip heavy directories that slow down file listing
-		const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".next", ".cache", "coverage", "__pycache__", ".git"])
-
 		async function walkDir(dir: string, prefix: string = "") {
 			try {
 				const entries = await fs.promises.readdir(dir, { withFileTypes: true })
 				for (const entry of entries) {
 					if (entry.name.startsWith(".")) continue
-					if (SKIP_DIRS.has(entry.name)) continue // Society Agent - skip heavy dirs
 					const fullPath = path.join(dir, entry.name)
 					const relPath = prefix ? `${prefix}/${entry.name}` : entry.name
 					if (entry.isDirectory()) {

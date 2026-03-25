@@ -68,7 +68,7 @@
   .stat-row .label { color: var(--muted); }
 
   /* File tree */
-  .file-tree { font-size: 12px; user-select: none; overflow-y: auto; flex: 1; }
+  .file-tree { font-size: 12px; user-select: none; }
   .tree-row { display: flex; align-items: center; gap: 4px; padding: 3px 8px; cursor: pointer;
     white-space: nowrap; border: 2px solid transparent; transition: background 0.1s; }
   .tree-row:hover { background: rgba(88,166,255,0.08); }
@@ -308,10 +308,19 @@
   .worker-card.running { border-left: 3px solid var(--accent); }
   .worker-card.completed { border-left: 3px solid #3fb950; opacity: 0.7; }
   .worker-card.error { border-left: 3px solid #f85149; }
-  .worker-card-name { font-weight: 600; color: var(--text); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+  .worker-card-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .worker-card-name { font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 6px; cursor: pointer; flex: 1; min-width: 0; }
+  .worker-card-name:hover { color: var(--accent); }
   .worker-card-task { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .worker-card-status { display: flex; align-items: center; gap: 4px; margin-top: 4px; color: var(--muted); }
   .worker-card-status .spinner { width: 10px; height: 10px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
+  .worker-stop-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); width: 20px; height: 20px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; transition: background 0.15s, color 0.15s; }
+  .worker-stop-btn:hover { background: #f85149; border-color: #f85149; color: white; }
+  .worker-activity { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
+  .worker-activity-item { color: var(--muted); font-size: 10px; padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .worker-activity-item:before { content: '→ '; color: var(--accent); }
+  .worker-last-message { margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 4px; font-size: 11px; max-height: 150px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+  .worker-expand { font-size: 8px; transition: transform 0.2s; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
   /* Terminal */
@@ -1043,11 +1052,26 @@ socket.on('agent-reset', (data) => {
 let streamDidFire = false;
 let lastStreamChunk = ''; // Detect repeated chunks
 let repeatCount = 0;
+
+// Society Agent - Track worker streaming state separately
+const workerStreams = new Map(); // workerId -> { el, text }
+
 socket.on('agent-message', (data) => {
   console.log('[socket] agent-message received:', data.agentId, 'isStreaming:', data.isStreaming, 'isDone:', data.isDone, 'msg:', (data.message||'').substring(0,50));
-  // Only handle messages for THIS agent
-  if (data.agentId !== AGENT_ID && data.agentId !== 'user-agent') {
-    console.log('[socket] Ignored - agentId mismatch. Expected:', AGENT_ID, 'Got:', data.agentId);
+  
+  // Check if this is a worker spawned by this agent
+  const isWorker = workers.has(data.agentId);
+  const workerInfo = isWorker ? workers.get(data.agentId) : null;
+  
+  // Only handle messages for THIS agent OR its workers
+  if (data.agentId !== AGENT_ID && data.agentId !== 'user-agent' && !isWorker) {
+    console.log('[socket] Ignored - agentId mismatch. Expected:', AGENT_ID, 'or worker. Got:', data.agentId);
+    return;
+  }
+  
+  // Handle worker messages differently - show in collapsed worker activity stream
+  if (isWorker) {
+    handleWorkerMessage(data, workerInfo);
     return;
   }
 
@@ -1271,7 +1295,25 @@ socket.on('agent-thinking', (data) => {
 
 socket.on('tool-execution', (data) => {
   console.log('[socket] tool-execution:', data.agentId, data.toolName, data.status);
-  // Only show for THIS agent
+  
+  // Check if this is a worker tool execution
+  const isWorker = workers.has(data.agentId);
+  if (isWorker && (data.status === 'completed' || data.status === 'error')) {
+    const w = workers.get(data.agentId);
+    if (w) {
+      if (!w.activity) w.activity = [];
+      const icon = data.status === 'error' ? '❌' : '✓';
+      const detail = data.toolInput?.path || data.toolInput?.command?.substring(0, 30) || '';
+      w.activity.push(`${icon} ${data.toolName}${detail ? ': ' + detail : ''}`);
+      if (w.activity.length > 20) {
+        w.activity = w.activity.slice(-20);
+      }
+      updateWorkersUI();
+    }
+    return;
+  }
+  
+  // Only show full tool cards for THIS agent
   if (data.agentId !== AGENT_ID) {
     addLog('info', `[${data.agentName || data.agentId}] ${data.details || data.toolName}`);
     return;
@@ -1456,16 +1498,108 @@ function updateWorkersUI() {
       statusHtml = `<div class="worker-card-status">❌ ${w.error || 'Error'}</div>`;
     }
     
+    // Show recent activity (last 3 messages)
+    const recentActivity = (w.activity || []).slice(-3);
+    const activityHtml = recentActivity.length > 0 
+      ? `<div class="worker-activity">${recentActivity.map(a => 
+          `<div class="worker-activity-item">${esc(a)}</div>`
+        ).join('')}</div>`
+      : '';
+    
     card.innerHTML = `
-      <div class="worker-card-name">
-        <span>${esc(w.name)}</span>
-        ${w.status === 'running' ? '<span style="color:var(--accent)">●</span>' : ''}
+      <div class="worker-card-header">
+        <div class="worker-card-name" onclick="toggleWorkerDetails('${id}')">
+          <span class="worker-expand">${w.expanded ? '▼' : '▶'}</span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.name)}</span>
+          ${w.status === 'running' ? '<span style="color:var(--accent)">●</span>' : ''}
+        </div>
+        <button class="worker-stop-btn" onclick="stopWorker('${id}', event)" title="Stop worker">✕</button>
       </div>
       ${w.task ? `<div class="worker-card-task" title="${esc(w.task)}">${esc(w.task)}</div>` : ''}
       ${statusHtml}
+      ${w.expanded ? activityHtml : ''}
+      ${w.expanded && w.lastMessage ? `<div class="worker-last-message">${formatMarkdown(w.lastMessage.substring(0, 500))}</div>` : ''}
     `;
     list.appendChild(card);
   });
+}
+
+// Society Agent - Handle worker messages and show in worker activity
+function handleWorkerMessage(data, workerInfo) {
+  if (!workerInfo) return;
+  
+  // Initialize activity array if needed
+  if (!workerInfo.activity) workerInfo.activity = [];
+  
+  const msg = data.message || '';
+  
+  if (data.isStreaming) {
+    // Accumulate streaming text
+    if (!workerInfo.streamText) workerInfo.streamText = '';
+    workerInfo.streamText += msg;
+  } else if (data.isDone) {
+    // Finalize message
+    const finalText = workerInfo.streamText || msg;
+    workerInfo.lastMessage = finalText;
+    workerInfo.streamText = '';
+    
+    // Extract a short preview for activity
+    const lines = finalText.split('\n').filter(l => l.trim());
+    const preview = lines[0]?.substring(0, 60) || 'Response received';
+    workerInfo.activity.push(preview);
+    
+    // Keep activity log manageable
+    if (workerInfo.activity.length > 20) {
+      workerInfo.activity = workerInfo.activity.slice(-20);
+    }
+    
+    updateWorkersUI();
+  } else if (msg) {
+    // Non-streaming message
+    workerInfo.lastMessage = msg;
+    const preview = msg.split('\n')[0]?.substring(0, 60) || msg.substring(0, 60);
+    workerInfo.activity.push(preview);
+    if (workerInfo.activity.length > 20) {
+      workerInfo.activity = workerInfo.activity.slice(-20);
+    }
+    updateWorkersUI();
+  }
+}
+
+// Society Agent - Toggle worker details expansion
+function toggleWorkerDetails(workerId) {
+  const w = workers.get(workerId);
+  if (w) {
+    w.expanded = !w.expanded;
+    updateWorkersUI();
+  }
+}
+
+// Society Agent - Stop an ephemeral worker
+async function stopWorker(workerId, event) {
+  event.stopPropagation();
+  const w = workers.get(workerId);
+  if (!w) return;
+  
+  if (!confirm(`Stop worker "${w.name}"? This will cancel any running work.`)) return;
+  
+  try {
+    // Emit stop signal to cancel running work
+    socket.emit('stop-agent', { agentId: workerId });
+    
+    // Delete the worker agent
+    const res = await fetch(`${API}/api/projects/${agentProfile?.projectId}/agents/${workerId}`, { method: 'DELETE' });
+    if (res.ok) {
+      addLog('info', `🛑 Stopped worker: ${w.name}`);
+      workers.delete(workerId);
+      updateWorkersUI();
+    } else {
+      const err = await res.json().catch(() => ({}));
+      addLog('error', `Failed to stop worker: ${err.error || 'Unknown error'}`);
+    }
+  } catch (e) {
+    addLog('error', `Error stopping worker: ${e.message}`);
+  }
 }
 
 function toggleWorkersPanel() {
@@ -1596,14 +1730,32 @@ async function fixProblemsWithAgent() {
 
 socket.on('worker-spawned', (data) => {
   if (data.projectId !== agentProfile?.projectId) return;
+  // Only show workers spawned by THIS agent
+  if (data.spawnedBy !== AGENT_ID) return;
+  
+  // Auto-expand first worker so user can immediately see what it does
+  const isFirst = workers.size === 0;
   workers.set(data.workerId, {
     name: data.workerName,
     status: 'spawned',
     spawnedBy: data.spawnedBy,
     startTime: data.timestamp,
+    activity: [],
+    expanded: isFirst,  // Auto-expand first worker
   });
   updateWorkersUI();
-  addLog('info', `Worker spawned: ${data.workerName}`);
+  addLog('info', `🧑‍🔧 Worker spawned: ${data.workerName}`);
+  
+  // Also show a brief notification in chat
+  const chatEl = document.getElementById('messages');
+  if (chatEl) {
+    const notice = document.createElement('div');
+    notice.className = 'tool-card';
+    notice.style.cssText = 'background:var(--surface);border-left:3px solid var(--accent);cursor:default';
+    notice.innerHTML = `<span>🧑‍🔧</span><span>Worker Spawned</span><span class="tool-card-detail">${data.workerName}</span><span class="tool-card-meta">see Workers panel ↓</span>`;
+    chatEl.appendChild(notice);
+    scrollToBottom();
+  }
 });
 
 socket.on('worker-started', (data) => {
@@ -1630,8 +1782,39 @@ socket.on('worker-finished', (data) => {
   const w = workers.get(data.workerId);
   if (w) {
     w.status = data.completed ? 'completed' : 'error';
+    // Use captured completion result from task-completed event
+    const summary = w.completionResult?.summary || '';
+    
+    // Only add completion activity if task-completed didn't already add it
+    if (!w.completionResult) {
+      if (!w.activity) w.activity = [];
+      w.activity.push(data.completed ? '✅ Task completed' : '❌ Task failed');
+    }
     updateWorkersUI();
-    addLog('info', `Worker ${data.workerName} ${data.completed ? 'completed' : 'finished'}`);
+    addLog('info', `🧑‍🔧 ${data.workerName} ${data.completed ? '✅ completed' : '❌ finished'}${summary ? ': ' + summary : ''}`);
+    
+    // Show completion in chat
+    const chatEl = document.getElementById('messages');
+    if (chatEl) {
+      // Use captured completion result from task-completed event
+      const summary = w.completionResult?.summary || '';
+      const filesCreated = w.completionResult?.filesCreated?.length || 0;
+      const filesModified = w.completionResult?.filesModified?.length || 0;
+      const fileInfo = (filesCreated || filesModified) ? ` (${filesCreated} created, ${filesModified} modified)` : '';
+      
+      const notice = document.createElement('div');
+      notice.className = `tool-card ${data.completed ? '' : 'error'}`;
+      notice.style.cssText = `background:var(--surface);border-left:3px solid ${data.completed ? '#3fb950' : '#f85149'};cursor:default`;
+      notice.innerHTML = `
+        <span>${data.completed ? '✅' : '❌'}</span>
+        <span>Worker ${data.completed ? 'Completed' : 'Failed'}</span>
+        <span class="tool-card-detail">${data.workerName}${fileInfo}</span>
+        <span class="tool-card-meta">${summary.substring(0, 50)}${summary.length > 50 ? '...' : ''}</span>
+      `;
+      chatEl.appendChild(notice);
+      scrollToBottom();
+    }
+    
     // Remove after a delay
     setTimeout(() => {
       workers.delete(data.workerId);
@@ -1651,12 +1834,36 @@ socket.on('worker-error', (data) => {
   }
 });
 
+// Listen for task-completed to capture worker's completion details
+socket.on('task-completed', (data) => {
+  if (data.projectId !== agentProfile?.projectId) return;
+  const w = workers.get(data.agentId);
+  if (w) {
+    // Store completion result for worker-finished to display
+    w.completionResult = data.result;
+    w.taskTitle = data.taskTitle;
+    if (!w.activity) w.activity = [];
+    const summary = data.result?.summary || 'Task completed';
+    const filesCreated = data.result?.filesCreated?.length || 0;
+    const filesModified = data.result?.filesModified?.length || 0;
+    w.activity.push(`✅ Completed: ${summary.substring(0, 60)}${summary.length > 60 ? '...' : ''}`);
+    if (filesCreated > 0 || filesModified > 0) {
+      w.activity.push(`📁 Files: ${filesCreated} created, ${filesModified} modified`);
+    }
+    updateWorkersUI();
+  }
+});
+
 socket.on('task-claimed', (data) => {
   if (data.projectId !== agentProfile?.projectId) return;
   const w = workers.get(data.agentId);
   if (w) {
     w.task = data.taskTitle;
+    if (!w.activity) w.activity = [];
+    w.activity.push(`📋 Claimed: ${data.taskTitle}`);
+    w.expanded = true;  // Auto-expand when claiming task
     updateWorkersUI();
+    addLog('info', `🧑‍🔧 ${w.name} claimed task: ${data.taskTitle}`);
   }
 });
 // Society Agent end

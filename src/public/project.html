@@ -695,6 +695,11 @@
       <input type="text" id="agentFormRole" placeholder="e.g. Full-Stack Developer">
     </div>
     <div class="form-group">
+      <label>Custom Instructions <span style="color:var(--muted);font-weight:normal">(optional)</span></label>
+      <textarea id="agentFormInstructions" rows="3" placeholder="Additional instructions for this agent. E.g.:&#10;- Only work on backend code&#10;- Do NOT create React components" style="resize:vertical;min-height:60px;font-size:12px"></textarea>
+      <p style="font-size:11px;color:var(--muted);margin-top:4px">These instructions are added to the agent's system prompt.</p>
+    </div>
+    <div class="form-group">
       <label>LLM Provider</label>
       <select id="agentFormProvider" onchange="onAgentProviderChange()">
         <option value="">(Use server default)</option>
@@ -743,8 +748,14 @@
         <input type="checkbox" id="agentFormSpawn" checked onchange="toggleCustodianNote()">
         <label for="agentFormSpawn" style="margin-bottom:0">Persistent agent (uncheck for ephemeral worker)</label>
       </div>
+    </div>
+    <div class="form-group" id="custodianModeGroup">
+      <div class="checkbox-row">
+        <input type="checkbox" id="agentFormCustodian" checked onchange="toggleCustodianPermissions()">
+        <label for="agentFormCustodian" style="margin-bottom:0">📋 Custodian Mode</label>
+      </div>
       <div id="custodianNote" style="margin-top:8px;padding:8px 12px;background:var(--warning-bg, #fff3cd);border:1px solid var(--warning-border, #ffc107);border-radius:4px;font-size:11px;color:var(--warning-text, #856404);">
-        <strong>📋 Custodian Mode:</strong> Permanent agents govern folders but cannot write code files. They can only write <code>.md</code> and <code>.txt</code> files, and run read-only commands (<code>ls</code>, <code>cat</code>, <code>git status</code>, etc.). Use <code>spawn_worker()</code> to create ephemeral workers for code implementation.
+        <strong>Custodian agents</strong> govern folders but cannot write code files. They can only write <code>.md</code> and <code>.txt</code> files, and run read-only commands (<code>ls</code>, <code>cat</code>, <code>git status</code>, etc.). Use <code>spawn_worker()</code> to create ephemeral workers for code implementation.
       </div>
     </div>
     <div class="form-group">
@@ -766,7 +777,7 @@
           <input type="checkbox" id="agentPermMessage" checked>
           <label for="agentPermMessage" style="margin-bottom:0">Can message other agents</label>
         </div>
-        <div id="custodianPermNote" style="margin-top:6px;font-size:10px;color:var(--muted);font-style:italic;">
+        <div id="custodianPermNote" style="margin-top:6px;font-size:10px;color:var(--muted);font-style:italic;display:block;">
           ⚠️ Custodians: File writes restricted to .md/.txt; commands restricted to read-only
         </div>
       </div>
@@ -1487,6 +1498,7 @@ function showAddAgentModal(parentAgentId = null) {
     : 'Add the lead agent for this project.';
   document.getElementById('agentFormName').value = '';
   document.getElementById('agentFormRole').value = '';
+  document.getElementById('agentFormInstructions').value = '';
   document.getElementById('agentFormCaps').value = '';
   document.getElementById('agentFormHome').value = '';
   document.getElementById('agentFormSpawn').checked = true; // Persistent agents can spawn workers by default
@@ -1537,6 +1549,7 @@ function editAgentInProject(agentId) {
   document.getElementById('agentModalDesc').textContent = 'Update agent configuration.';
   document.getElementById('agentFormName').value = agent.name;
   document.getElementById('agentFormRole').value = agent.role;
+  document.getElementById('agentFormInstructions').value = agent.customInstructions || '';
   document.getElementById('agentFormCaps').value = (agent.capabilities || []).join(', ');
   document.getElementById('agentFormHome').value = agent.homeFolder || '';
   // Society Agent - Use !ephemeral for supervisor checkbox
@@ -1550,6 +1563,7 @@ function editAgentInProject(agentId) {
   
   // Load permissions
   const perms = agent.permissions || {};
+  document.getElementById('agentFormCustodian').checked = perms.isCustodian !== false && !agent.ephemeral;
   document.getElementById('agentPermOverwrite').checked = perms.canOverwriteFiles !== false;
   document.getElementById('agentPermRunCmd').checked = perms.canRunCommands === true;
   document.getElementById('agentPermDelete').checked = perms.canDeleteFiles === true;
@@ -1573,18 +1587,30 @@ function hideAgentModal() {
   editingAgentId = null;
 }
 
-// Toggle custodian note visibility based on persistent checkbox
+// Toggle custodian mode group visibility based on persistent checkbox
 function toggleCustodianNote() {
   const isPersistent = document.getElementById('agentFormSpawn').checked;
+  const custodianModeGroup = document.getElementById('custodianModeGroup');
+  if (isPersistent) {
+    custodianModeGroup.style.display = 'block';
+    // Default to custodian mode for persistent agents
+    document.getElementById('agentFormCustodian').checked = true;
+    toggleCustodianPermissions();
+  } else {
+    custodianModeGroup.style.display = 'none';
+    // Ephemeral workers are not custodians - they can write code
+    document.getElementById('agentFormCustodian').checked = false;
+    toggleCustodianPermissions();
+  }
+}
+
+// Toggle permission note visibility based on custodian mode
+function toggleCustodianPermissions() {
+  const isCustodian = document.getElementById('agentFormCustodian').checked;
   const custodianNote = document.getElementById('custodianNote');
   const custodianPermNote = document.getElementById('custodianPermNote');
-  if (isPersistent) {
-    custodianNote.style.display = 'block';
-    custodianPermNote.style.display = 'block';
-  } else {
-    custodianNote.style.display = 'none';
-    custodianPermNote.style.display = 'none';
-  }
+  custodianNote.style.display = isCustodian ? 'block' : 'none';
+  custodianPermNote.style.display = isCustodian ? 'block' : 'none';
 }
 
 function updateAgentIdPreview() {
@@ -1626,6 +1652,7 @@ async function submitAgentForm() {
   // Auto-generate ID from name
   const id = editingAgentId || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const role = document.getElementById('agentFormRole').value.trim();
+  const customInstructions = document.getElementById('agentFormInstructions').value.trim() || undefined;
   const capabilities = document.getElementById('agentFormCaps').value.split(',').map(s => s.trim()).filter(Boolean);
   const homeFolder = document.getElementById('agentFormHome').value.trim() || undefined; // Let server auto-generate
   // Society Agent - Use ephemeral (inverted) instead of canSpawnWorkers
@@ -1639,7 +1666,9 @@ async function submitAgentForm() {
   const model = document.getElementById('agentFormModel').value || undefined;
   
   // Get permissions
+  const isCustodian = document.getElementById('agentFormCustodian')?.checked ?? !ephemeral;
   const permissions = {
+    isCustodian: isCustodian,
     canOverwriteFiles: document.getElementById('agentPermOverwrite').checked,
     canRunCommands: document.getElementById('agentPermRunCmd').checked,
     canDeleteFiles: document.getElementById('agentPermDelete').checked,
@@ -1662,13 +1691,13 @@ async function submitAgentForm() {
       res = await fetch(`${API}/api/projects/${projectId}/agents/${editingAgentId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, role, capabilities, homeFolder, ephemeral, reportsTo, provider, model, permissions, workspaceMode }),
+        body: JSON.stringify({ name, role, customInstructions, capabilities, homeFolder, ephemeral, reportsTo, provider, model, permissions, workspaceMode }),
       });
     } else {
       res = await fetch(`${API}/api/projects/${projectId}/agents`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, name, role, capabilities, homeFolder, ephemeral, reportsTo, provider, model, permissions, workspaceMode }),
+        body: JSON.stringify({ id, name, role, customInstructions, capabilities, homeFolder, ephemeral, reportsTo, provider, model, permissions, workspaceMode }),
       });
     }
     const data = await res.json();
