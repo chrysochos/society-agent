@@ -145,6 +145,25 @@
   .ephemeral-card .stop-btn:hover { background: rgba(248,81,73,0.2); }
   .ephemeral-empty { color: var(--muted); font-size: 13px; font-style: italic; }
 
+  /* Recent workers (from task history) */
+  .worker-history-list { display: flex; flex-direction: column; gap: 8px; }
+  .worker-history-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; display: flex; align-items: flex-start; gap: 10px; }
+  .worker-history-card .worker-icon { font-size: 16px; }
+  .worker-history-card .worker-main { flex: 1; min-width: 0; }
+  .worker-history-card .worker-name { font-size: 12px; font-weight: 600; }
+  .worker-history-card .worker-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .worker-history-card .worker-task { font-size: 11px; color: var(--text); margin-top: 6px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .worker-history-card .worker-note { font-size: 10px; color: var(--muted); margin-top: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .worker-status-pill { font-size: 10px; padding: 2px 6px; border-radius: 999px; border: 1px solid var(--border); }
+  .worker-status-pill.in-progress { border-color: var(--yellow); color: var(--yellow); }
+  .worker-status-pill.completed { border-color: var(--green); color: var(--green); }
+  .worker-status-pill.failed { border-color: var(--red); color: var(--red); }
+  .worker-status-pill.ended { border-color: var(--muted); color: var(--muted); }
+  .worker-history-empty { color: var(--muted); font-size: 13px; font-style: italic; }
+
   /* File tree */
   .file-list { max-height: 400px; overflow-y: auto; }
   .file-row { display: flex; align-items: center; gap: 6px; padding: 5px 0; font-size: 13px;
@@ -501,6 +520,21 @@
     <div class="section-body">
       <div class="ephemeral-list" id="ephemeralList">
         <div class="ephemeral-empty">No ephemeral workers active.</div>
+      </div>
+    </div>
+    <div class="resize-handle" onmousedown="startResize(event, this)"></div>
+  </div>
+
+  <!-- Recent Workers section -->
+  <div class="section" id="workerHistorySection" data-section="worker-history" style="display:none">
+    <div class="section-header" onclick="toggleSection(this, event)">
+      <span class="collapse-icon">▼</span>
+      <h3>🧭 Recent Workers</h3>
+      <span class="count" id="workerHistoryCount">0 workers</span>
+    </div>
+    <div class="section-body">
+      <div class="worker-history-list" id="workerHistoryList">
+        <div class="worker-history-empty">No worker history yet.</div>
       </div>
     </div>
     <div class="resize-handle" onmousedown="startResize(event, this)"></div>
@@ -1059,6 +1093,7 @@ const projectId = pathParts[2];
 let project = null;
 let editingAgentId = null;
 let heartbeats = {};  // agentId -> heartbeat entry
+let lastTasks = [];   // cached task list for worker history
 let serverProvider = 'anthropic';  // Current server provider
 let serverModel = null;  // Current server model
 
@@ -1447,11 +1482,14 @@ function renderEphemeralWorkers() {
     const status = hb?.status || 'idle';
     const statusLabel = hb?.currentTask || status;
     const isWorking = status === 'working';
+    // Find owner name
+    const owner = agents.find(a => a.id === w.reportsTo);
+    const ownerLabel = owner ? owner.name : w.reportsTo;
     
     return `<div class="ephemeral-card ${isWorking ? 'working' : ''}">
       <span class="worker-icon" onclick="openAgent('${escapeAttr(w.id)}')" style="cursor:pointer">&#9889;</span>
       <div class="worker-info" onclick="openAgent('${escapeAttr(w.id)}')" style="cursor:pointer">
-        <span class="worker-name">${escapeHtml(w.name)}</span>
+        <span class="worker-name">${ownerLabel ? `<span style="color:var(--muted);font-size:10px">${escapeHtml(ownerLabel)} →</span> ` : ''}${escapeHtml(w.name)}</span>
         <span class="worker-status">${escapeHtml(statusLabel)}</span>
       </div>
       <button class="stop-btn" onclick="stopWorker('${escapeAttr(w.id)}', event)" title="Stop and remove worker">&#x2715;</button>
@@ -1459,6 +1497,83 @@ function renderEphemeralWorkers() {
   }).join('');
 
   list.innerHTML = html || '<div class="ephemeral-empty">No ephemeral workers active.</div>';
+}
+
+function getTaskLastTimestamp(task) {
+  const raw = task.completedAt || task.claimedAt || task.createdAt;
+  const ts = raw ? new Date(raw).getTime() : 0;
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function getWorkerDisplayStatus(task) {
+  if (!task) return 'ended';
+  if (task.status === 'failed' || task.error) return 'failed';
+  if (task.status === 'completed') return 'completed';
+  if (task.status === 'claimed' || task.status === 'in-progress') return 'in-progress';
+  return 'ended';
+}
+
+function renderWorkerHistory(tasks = []) {
+  const section = document.getElementById('workerHistorySection');
+  const list = document.getElementById('workerHistoryList');
+  const count = document.getElementById('workerHistoryCount');
+  if (!section || !list || !count) return;
+
+  const workersById = new Map();
+  const taskRows = Array.isArray(tasks) ? tasks : [];
+
+  // Keep latest task per worker to preserve post-failure visibility.
+  for (const t of taskRows) {
+    if (!t || !t.claimedBy) continue;
+    const prev = workersById.get(t.claimedBy);
+    if (!prev || getTaskLastTimestamp(t) > getTaskLastTimestamp(prev.task)) {
+      workersById.set(t.claimedBy, { workerId: t.claimedBy, task: t });
+    }
+  }
+
+  // Include active ephemeral workers even if they have no claimed task yet.
+  const ephemeral = (project?.agents || []).filter(a => a.ephemeral);
+  for (const w of ephemeral) {
+    if (!workersById.has(w.id)) workersById.set(w.id, { workerId: w.id, task: null });
+  }
+
+  const entries = Array.from(workersById.values())
+    .sort((a, b) => getTaskLastTimestamp(b.task || {}) - getTaskLastTimestamp(a.task || {}));
+
+  if (entries.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = 'block';
+  count.textContent = `${entries.length} worker${entries.length !== 1 ? 's' : ''}`;
+
+  list.innerHTML = entries.map(({ workerId, task }) => {
+    const worker = (project?.agents || []).find(a => a.id === workerId);
+    const name = worker?.name || workerId;
+    const status = getWorkerDisplayStatus(task);
+    const label = status === 'in-progress'
+      ? 'in progress'
+      : status === 'completed'
+      ? 'completed'
+      : status === 'failed'
+      ? 'failed'
+      : 'ended';
+    const taskTitle = task?.title || 'No claimed task yet';
+    const note = task?.error || task?.result?.summary || '';
+    const taskTime = task ? new Date(task.completedAt || task.claimedAt || task.createdAt).toLocaleString() : 'n/a';
+
+    return `<div class="worker-history-card">
+      <div class="worker-icon">⚙️</div>
+      <div class="worker-main">
+        <div class="worker-name" onclick="openAgent('${escapeAttr(workerId)}')" style="cursor:pointer">${escapeHtml(name)}</div>
+        <div class="worker-meta">${escapeHtml(workerId)} · last seen ${escapeHtml(taskTime)}</div>
+        <div class="worker-task">${escapeHtml(taskTitle)}</div>
+        ${note ? `<div class="worker-note">${escapeHtml(note)}</div>` : ''}
+      </div>
+      <span class="worker-status-pill ${status}">${label}</span>
+    </div>`;
+  }).join('');
 }
 
 function openAgent(agentId) {
@@ -1761,6 +1876,9 @@ async function refreshTasks() {
 }
 
 function renderTasks(tasks, counts) {
+  lastTasks = Array.isArray(tasks) ? tasks : [];
+  renderWorkerHistory(lastTasks);
+
   const countEl = document.getElementById('taskCount');
   const statsEl = document.getElementById('taskStats');
   const listEl = document.getElementById('taskList');
@@ -1779,7 +1897,29 @@ function renderTasks(tasks, counts) {
     return;
   }
 
-  listEl.innerHTML = tasks.map(t => {
+  const statusRank = {
+    available: 0,
+    claimed: 1,
+    'in-progress': 2,
+    failed: 3,
+    completed: 4,
+  };
+
+  const sortedTasks = [...tasks].sort((a, b) => {
+    const aRank = statusRank[a.status] ?? 99;
+    const bRank = statusRank[b.status] ?? 99;
+    if (aRank !== bRank) return aRank - bRank;
+
+    const aPriority = Number(a.priority || 0);
+    const bPriority = Number(b.priority || 0);
+    if (aPriority !== bPriority) return bPriority - aPriority;
+
+    const aTime = new Date(a.createdAt || 0).getTime();
+    const bTime = new Date(b.createdAt || 0).getTime();
+    return bTime - aTime;
+  });
+
+  listEl.innerHTML = sortedTasks.map(t => {
     const icon = getTaskIcon(t.status);
     const priorityClass = t.priority >= 8 ? 'high' : (t.priority >= 5 ? 'medium' : '');
     const claimedInfo = t.claimedBy ? `Claimed by ${t.claimedBy}` : '';
@@ -3129,6 +3269,27 @@ socket.on('task-unblocked', () => { refreshTasks(); refreshBlockedTasks(); });
 socket.on('supervisor-override', () => refreshBlockedTasks());
 socket.on('decision-created', () => refreshDecisions());
 socket.on('decision-updated', () => refreshDecisions());
+
+// Worker lifecycle events - keep ephemeral workers panel in sync
+socket.on('worker-spawned', (data) => {
+  if (data.projectId === projectId) {
+    loadProject();
+    refreshTasks();
+  }
+});
+socket.on('worker-finished', (data) => {
+  if (data.projectId === projectId) {
+    loadProject();
+    refreshTasks();
+  }
+});
+socket.on('worker-error', (data) => {
+  if (data.projectId === projectId) {
+    loadProject();
+    refreshTasks();
+    showToast(`Worker error: ${data.error || 'unknown error'}`, 'error');
+  }
+});
 
 // Live diagnostics updates from background watchers
 socket.on('diagnostics-update', (data) => {

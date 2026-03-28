@@ -16,5 +16,14 @@
     "allocatedAt": "2026-03-22T15:28:36.823Z",
     "description": "Express.js backend API server",
     "lastUsed": "2026-03-22T15:28:36.823Z"
+  },
+  {
+    "port": 3000,
+    "projectId": "architect",
+    "serviceName": "backend-rate-limited",
+    "allocatedBy": "worker-1774639086426-qs6ou",
+    "allocatedAt": "2026-03-27T19:21:34.929Z",
+    "description": "Backend server with rate limit headers",
+    "lastUsed": "2026-03-27T19:21:34.929Z"
   }
 ]

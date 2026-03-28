@@ -182,6 +182,82 @@ Ephemeral developers are preferred over second permanent same-folder developers 
 * reduce authority overlap
 * behave more predictably from the current brief and current code state
 
+### When to Execute Directly vs Spawn Ephemeral Agents
+
+The permanent agent should decide whether to execute simple work directly or spawn an ephemeral agent based on task characteristics.
+
+**Execute directly when:**
+
+* the operation is simple and well-understood (build, restart, lint, format)
+* within the agent's domain ownership
+* no cross-cutting concerns or contract changes
+* low risk and easily reversible
+* no task list or multi-step planning required
+* the work is operational rather than implementation
+
+Examples of direct execution:
+
+* `npm run build` after code changes
+* restarting a service the agent owns
+* running tests
+* applying a config change
+* fixing a typo
+
+**Spawn an ephemeral agent when:**
+
+* speed through parallelization is valuable
+* multiple non-conflicting tasks can run simultaneously
+* specialized expertise outside the permanent agent's core domain is needed
+* complex multi-step implementation work is required
+* fresh context or isolated reasoning would be beneficial
+* the task requires focused implementation without distracting the permanent agent
+
+**Key principle: ephemeral agents are primarily for speed and parallel non-conflicting work.**
+
+The permanent agent should not escalate, delegate, or claim permission issues for simple operational tasks within its own scope. Direct execution keeps work efficient and avoids unnecessary overhead.
+
+**Hard rule:** verification-only tasks (build/test/typecheck/lint/status checks) must be executed directly by the permanent agent and must not spawn an ephemeral agent.
+
+### Operational Sequences Must Be Executed as a Unit
+
+When an operational task involves a natural sequence of steps (such as build → restart → verify), the entire sequence should be executed directly by the permanent agent as one cohesive unit.
+
+**Do not split simple operational sequences across ephemeral agents.**
+
+Bad pattern:
+* Agent runs `npm run build` directly
+* Agent spawns worker to restart server
+* Agent spawns another worker to verify
+
+Good pattern:
+* Agent runs `npm run build`
+* Agent restarts server
+* Agent verifies with curl
+* Agent reports completion
+
+The overhead of spawning an ephemeral agent (context transfer, task handoff, worker lifecycle) exceeds the cost of simply executing the next command in a routine sequence. One simple task means one execution context.
+
+### Status Integrity and Completion Claims
+
+Permanent agents must keep status messages consistent with actual verification results.
+
+Required behavior:
+
+* do not report "idle", "all tasks complete", or equivalent completion language while any required check is failing
+* if a check fails, report blocked/failed status and include the failing command plus short error summary
+* only announce completion after required checks pass in the same execution flow
+
+### Idle Mode Behavior (No Pending Work)
+
+When inbox and task pool are empty, the permanent agent should enter idle mode.
+
+Required behavior in idle mode:
+
+* do not initiate ad-hoc implementation verification or codebase-wide checks
+* do not spawn workers for speculative checks
+* run checks only when explicitly requested by supervisor/architect, required by startup policy, or required by scheduled health-check policy
+* report "idle and waiting for new tasks" and stop further execution
+
 ---
 
 ## Strong Recommendation on Same-Folder Roles

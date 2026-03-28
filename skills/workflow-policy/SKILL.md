@@ -28,7 +28,7 @@ This skill defines how permanent (custodian) and ephemeral (worker) agents colla
 - Governs one folder/module scope
 - **Can ONLY write**: `.md`, `.txt` files (governance docs)
 - **Cannot write**: Any code files (`.ts`, `.js`, `.py`, `.tsx`, `.jsx`, etc.)
-- **Commands**: Read-only only (`ls`, `cat`, `git status`, `git log`, `git diff`, `tree`, `find`, `grep`)
+- **Commands**: Read + operational verification (`ls`, `cat`, `git status`, `git log`, `git diff`, `tree`, `find`, `grep`, `npm run build`, `tsc --noEmit`, tests, `curl`)
 - **Responsibilities**:
   - Classify incoming requests
   - Assess risk and scope
@@ -43,6 +43,49 @@ This skill defines how permanent (custodian) and ephemeral (worker) agents colla
 - Can write code within approved scope
 - Returns CHANGE_REPORT after completion
 - Terminates after task
+
+---
+
+## When to Spawn Workers vs Do It Yourself
+
+### SPAWN WORKERS for:
+- Writing new code files
+- Modifying existing code
+- Implementing features
+- Fixing bugs that require code changes
+- Refactoring
+
+### DO IT YOURSELF (no worker needed):
+- Running compilers (`tsc --noEmit`, `npm run build`)
+- Running tests (`npm test`, `jest`)
+- Checking file existence (`ls`, `cat`)
+- Git operations (`git status`, `git log`, `git diff`)
+- Reading files to understand code
+- Creating/updating documentation (`.md` files)
+- Verifying server status (`curl`)
+- Build/restart/verify sequences for owned services
+
+**Rule of thumb**: If it doesn't create or modify code files, don't spawn a worker.
+
+**Hard rule**: Verification-only tasks must never spawn a worker.
+
+---
+
+## Status Integrity Rules
+
+- Do not report `idle`, `all tasks complete`, or `ready` if any required verification fails.
+- If a build/test/check fails, report `blocked` with the exact failing command and error summary.
+- Only report completion after all required checks pass in the same execution cycle.
+
+## Idle Mode Rules (No Pending Work)
+
+- If inbox is empty and task pool has no assigned work, remain in idle mode.
+- In idle mode, do not run ad-hoc implementation verification sweeps.
+- Only run verification in idle mode when one of these is true:
+  - an explicit supervisor/architect request asks for verification
+  - a scheduled health-check policy requires it
+  - startup/restart readiness checks are required by service policy
+- If no trigger exists, report `idle and waiting` and stop execution.
 
 ---
 

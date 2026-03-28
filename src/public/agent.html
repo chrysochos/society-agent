@@ -118,6 +118,7 @@
     border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s; }
   .tab-bar .tab:hover { color: var(--text); }
   .tab-bar .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-bar .tab .badge { background: #f85149; color: white; font-size: 10px; padding: 1px 5px; border-radius: 8px; margin-left: 4px; }
   .tab-content { display: none; flex: 1; flex-direction: column; overflow: hidden; }
   .tab-content.active { display: flex; }
 
@@ -300,6 +301,9 @@
   .workers-panel { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
   .workers-header { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
   .workers-header .count { font-size: 11px; font-weight: normal; color: var(--muted); background: var(--surface); padding: 1px 6px; border-radius: 10px; }
+  .workers-header .actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .workers-header .actions button { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; padding: 2px 6px; font-size: 10px; cursor: pointer; }
+  .workers-header .actions button:hover { color: var(--text); border-color: var(--accent); }
   .workers-header .chevron { color: var(--muted); transition: transform 0.2s; }
   .workers-panel.collapsed .workers-list { display: none; }
   .workers-panel.collapsed .chevron { transform: rotate(-90deg); }
@@ -316,11 +320,31 @@
   .worker-card-status .spinner { width: 10px; height: 10px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
   .worker-stop-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); width: 20px; height: 20px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; transition: background 0.15s, color 0.15s; }
   .worker-stop-btn:hover { background: #f85149; border-color: #f85149; color: white; }
-  .worker-activity { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
+  .worker-dismiss-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); width: 20px; height: 20px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; transition: background 0.15s, color 0.15s; }
+  .worker-dismiss-btn:hover { background: rgba(210,153,34,0.2); border-color: var(--yellow); color: var(--yellow); }
+  .worker-activity { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); max-height: 200px; overflow-y: auto; }
   .worker-activity-item { color: var(--muted); font-size: 10px; padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .worker-activity-item:before { content: '→ '; color: var(--accent); }
+  .worker-activity-item.tool { color: var(--text); }
+  .worker-activity-item.tool:before { content: '⚙ '; color: #58a6ff; }
+  .worker-activity-item.error { color: #f85149; }
+  .worker-activity-item.error:before { content: '✗ '; color: #f85149; }
+  .worker-activity-item.success { color: #3fb950; }
+  .worker-activity-item.success:before { content: '✓ '; color: #3fb950; }
   .worker-last-message { margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 4px; font-size: 11px; max-height: 150px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+  .worker-details { margin-top: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: rgba(255,255,255,0.02); font-size: 11px; }
+  .worker-details .row { display: flex; gap: 8px; margin-bottom: 4px; color: var(--muted); }
+  .worker-details .row:last-child { margin-bottom: 0; }
+  .worker-details .label { min-width: 88px; color: var(--text); font-weight: 600; }
+  .worker-details .value { flex: 1; white-space: pre-wrap; word-break: break-word; }
+  .worker-details .files { margin-top: 6px; }
+  .worker-details .files ul { margin: 4px 0 0 16px; padding: 0; }
+  .worker-details .files li { margin: 2px 0; color: var(--muted); }
   .worker-expand { font-size: 8px; transition: transform 0.2s; }
+  .worker-current-action { background: rgba(88,166,255,0.1); padding: 4px 8px; border-radius: 4px; margin-top: 4px; font-size: 10px; color: #58a6ff; display: flex; align-items: center; gap: 4px; }
+  .worker-current-action .spinner { width: 8px; height: 8px; }
+  .worker-meta { display: flex; gap: 8px; margin-top: 4px; font-size: 10px; color: var(--muted); }
+  .worker-meta-item { display: flex; align-items: center; gap: 3px; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
   /* Terminal */
@@ -612,6 +636,9 @@
         <span class="chevron">▼</span>
         <span>🧑‍🔧 Workers</span>
         <span class="count" id="workersCount">0</span>
+        <div class="actions" onclick="event.stopPropagation()">
+          <button onclick="clearOldWorkers(event)" title="Hide completed/failed workers">Clear old</button>
+        </div>
       </div>
       <div class="workers-list" id="workersList"></div>
     </div>
@@ -624,6 +651,7 @@
       <div class="tab active" onclick="switchTab('chat')" id="tabChat">&#128172; Chat</div>
       <div class="tab" onclick="switchTab('terminal')" id="tabTerminal">&#9000; Terminal</div>
       <div class="tab" onclick="switchTab('activity')" id="tabActivity">&#128203; Activity</div>
+      <div class="tab" onclick="switchTab('tasks')" id="tabTasks">&#128203; Tasks <span id="taskBadge" class="badge" style="display:none">0</span></div>
       <div style="flex:1"></div>
       <button class="btn btn-secondary" id="clearChatBtn" onclick="clearChat()" style="font-size:11px;padding:3px 10px;margin:4px 8px" title="Clear conversation history">&#128465; Clear Chat</button>
     </div>
@@ -699,6 +727,32 @@
       <div class="terminal-container" id="terminalContainer"></div>
     </div>
 
+    <!-- Tasks pane -->
+    <div class="tab-content" id="paneTasks">
+      <div class="activity-toolbar">
+        <span style="color:var(--muted);font-size:12px">Filter:</span>
+        <select id="taskStatusFilter" onchange="renderAgentTasks()">
+          <option value="">All statuses</option>
+          <option value="available">Available</option>
+          <option value="in-progress">In Progress</option>
+          <option value="completed">Completed</option>
+          <option value="failed">Failed</option>
+        </select>
+        <select id="taskOwnerFilter" onchange="renderAgentTasks()">
+          <option value="">All agents</option>
+          <option value="mine">Created by this agent</option>
+          <option value="claimed">Claimed by this agent</option>
+        </select>
+        <input id="taskSearch" placeholder="Search tasks..." oninput="renderAgentTasks()" style="width:160px">
+        <div style="flex:1"></div>
+        <span id="taskCount" style="color:var(--muted);font-size:11px"></span>
+        <button class="btn btn-secondary" onclick="loadAgentTasks()" style="font-size:11px;padding:3px 10px">&#8635; Refresh</button>
+        <button class="btn" onclick="deleteFilteredTasks()" style="font-size:11px;padding:3px 10px;background:rgba(248,81,73,0.15);color:#f85149;border:1px solid rgba(248,81,73,0.3)" title="Delete all tasks matching current filters">&#128465; Delete Filtered</button>
+        <button class="btn btn-secondary" onclick="cleanupStaleTasks()" style="font-size:11px;padding:3px 10px" title="Remove only stale/orphaned tasks">&#128736; Cleanup Stale</button>
+      </div>
+      <div class="task-feed" id="taskFeed" style="flex:1;overflow-y:auto;padding:12px"><span style="color:var(--muted);padding:20px">Loading tasks...</span></div>
+    </div>
+
     <!-- Activity Log pane -->
     <div class="tab-content" id="paneActivity">
       <div class="activity-toolbar">
@@ -765,6 +819,8 @@ socket.on('connect', () => {
   document.body.classList.remove('disconnected');
   // Reload agent data after reconnect
   if (AGENT_ID) loadAgent();
+  // Load tasks for badge
+  loadAgentTasks();
   // On reconnect (not initial load), replay missed events
   if (!_isFirstConnect && _disconnectTime > 0 && AGENT_ID) {
     replayMissedEvents(_disconnectTime);
@@ -792,6 +848,13 @@ let isStreaming = false;
 let currentStreamEl = null;
 let streamText = '';
 let chatAttachments = [];
+let pendingRequestId = null;
+let pendingRequestText = '';
+let pendingRequestAttachmentSig = '';
+
+function makeRequestId() {
+  return `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 // Session error tracking for summary
 let sessionErrors = [];
@@ -883,38 +946,101 @@ async function loadProjectConfig() {
 // ============================================================================
 async function loadAgent() {
   try {
+    console.log('[loadAgent] Starting load for AGENT_ID:', AGENT_ID, 'PROJECT_ID:', PROJECT_ID);
     let res;
+    let projectData = null;
     // Try project-scoped agent first, then fall back to legacy persistent-agents
     if (PROJECT_ID) {
       res = await fetch(`${API}/api/projects/${PROJECT_ID}`);
+      console.log('[loadAgent] Project fetch status:', res.status);
       if (res.ok) {
-        const project = await res.json();
-        const agentConfig = (project.agents || []).find(a => a.id === AGENT_ID);
+        projectData = await res.json();
+        // Store agents globally for socket event lookups
+        window._projectAgents = projectData.agents || [];
+        console.log('[loadAgent] Project agents:', (projectData.agents || []).map(a => a.id));
+        const agentConfig = (projectData.agents || []).find(a => a.id === AGENT_ID);
+        console.log('[loadAgent] Found agentConfig:', agentConfig ? agentConfig.id : 'NOT FOUND');
         if (agentConfig) {
           // Use agent's homeFolder if set, otherwise fall back to project folder
           // Handle leading/trailing slashes and "/" meaning root
-          let agentFolder = project.folder || project.id;
+          let agentFolder = projectData.folder || projectData.id;
           const home = (agentConfig.homeFolder || '').replace(/^\/+|\/+$/g, ''); // trim slashes
           if (home && home !== '') {
             agentFolder = agentFolder ? `${agentFolder}/${home}` : home;
           }
           agentProfile = {
             ...agentConfig,
-            projectId: project.id,
-            projectName: project.name,
+            projectId: projectData.id,
+            projectName: projectData.name,
             workspaceFolder: agentFolder,
           };
+          
+          // Society Agent - Load existing workers that report to this agent
+          const allEphemeral = (projectData.agents || []).filter(a => a.ephemeral);
+          console.log('[loadAgent] All ephemeral agents:', allEphemeral.map(a => ({ id: a.id, name: a.name, reportsTo: a.reportsTo })));
+          const existingWorkers = allEphemeral.filter(a => a.reportsTo === AGENT_ID);
+          console.log('[loadAgent] Workers for AGENT_ID', AGENT_ID, ':', existingWorkers.map(a => a.id));
+          if (existingWorkers.length > 0 || !agentProfile?.ephemeral) {
+            // Fetch tasks to hydrate running + failed/completed worker history.
+            let taskMap = {};
+            try {
+              const tasksRes = await fetch(`${API}/api/projects/${PROJECT_ID}/tasks`);
+              if (tasksRes.ok) {
+                const tasksData = await tasksRes.json();
+                for (const t of (tasksData.tasks || [])) {
+                  // Map worker ID to task title for claimed/in-progress tasks
+                  if (t.claimedBy && ['claimed', 'in-progress'].includes(t.status)) {
+                    taskMap[t.claimedBy] = t.title;
+                  }
+
+                  // Persist worker history for tasks created by this agent.
+                  if (t.claimedBy && t.createdBy === AGENT_ID) {
+                    const owner = projectData.agents.find(a => a.id === AGENT_ID);
+                    upsertWorkerFromTask(t, owner?.name || AGENT_ID);
+                  }
+                }
+              }
+            } catch (e) { 
+              console.error('[Workers] Tasks fetch error:', e);
+            }
+            
+            for (const w of existingWorkers) {
+              if (!workers.has(w.id)) {
+                // Use task title if found, otherwise show awaiting status
+                const taskTitle = taskMap[w.id];
+                // Find owner name from reportsTo
+                const owner = projectData.agents.find(a => a.id === w.reportsTo);
+                workers.set(w.id, {
+                  name: w.name || w.id,
+                  status: taskTitle ? 'running' : 'spawned',
+                  task: taskTitle || 'Awaiting task claim...',
+                  iterations: 0,
+                  startTime: Date.now(),
+                  activity: [],
+                  expanded: false,
+                  spawnedBy: w.reportsTo,
+                  ownerName: owner?.name || w.reportsTo || 'Unknown'
+                });
+              }
+            }
+            updateWorkersUI();
+          }
         }
       }
     }
+    console.log('[loadAgent] agentProfile after project lookup:', agentProfile ? agentProfile.id : 'NOT SET');
     if (!agentProfile) {
+      console.log('[loadAgent] Trying legacy persistent-agents API...');
       res = await fetch(`${API}/api/persistent-agents/${AGENT_ID}`);
+      console.log('[loadAgent] Legacy API status:', res.status);
       if (!res.ok) {
         document.body.innerHTML = `<h2 style="padding:40px;color:#f85149">Agent "${AGENT_ID}" not found</h2>`;
         return;
       }
       agentProfile = await res.json();
+      console.log('[loadAgent] Legacy agentProfile:', agentProfile?.id);
     }
+    console.log('[loadAgent] Final agentProfile:', agentProfile);
     document.title = `${agentProfile.name}${agentProfile.projectName ? ' — ' + agentProfile.projectName : ''} — Society Agent`;
 
     // Header - Society Agent: add null checks
@@ -958,6 +1084,7 @@ async function loadAgent() {
       `${agentProfile.role}. ${(agentProfile.capabilities || []).join(', ')}. Send a message to get started.`;
 
     // Folder info
+    console.log('[loadAgent] workspaceFolder set to:', agentProfile.workspaceFolder);
     if (folderName) folderName.textContent = agentProfile.workspaceFolder || agentProfile.id;
     if (termCwd) termCwd.textContent = `projects/${agentProfile.workspaceFolder || agentProfile.id}/`;
 
@@ -1298,19 +1425,28 @@ socket.on('tool-execution', (data) => {
   
   // Check if this is a worker tool execution
   const isWorker = workers.has(data.agentId);
-  if (isWorker && (data.status === 'completed' || data.status === 'error')) {
+  if (isWorker) {
     const w = workers.get(data.agentId);
     if (w) {
       if (!w.activity) w.activity = [];
-      const icon = data.status === 'error' ? '❌' : '✓';
-      const detail = data.toolInput?.path || data.toolInput?.command?.substring(0, 30) || '';
-      w.activity.push(`${icon} ${data.toolName}${detail ? ': ' + detail : ''}`);
-      if (w.activity.length > 20) {
-        w.activity = w.activity.slice(-20);
+      
+      if (data.status === 'started') {
+        // Show current action
+        const detail = data.toolInput?.path || data.toolInput?.command?.substring(0, 40) || data.toolInput?.query?.substring(0, 40) || '';
+        w.currentAction = `${data.toolName}${detail ? ': ' + detail : ''}`;
+      } else if (data.status === 'completed' || data.status === 'error') {
+        // Clear current action and add to activity
+        w.currentAction = null;
+        const icon = data.status === 'error' ? '❌' : '✓';
+        const detail = data.toolInput?.path || data.toolInput?.command?.substring(0, 30) || '';
+        w.activity.push(`${icon} ${data.toolName}${detail ? ': ' + detail : ''}`);
+        if (w.activity.length > 20) {
+          w.activity = w.activity.slice(-20);
+        }
       }
       updateWorkersUI();
     }
-    return;
+    if (data.status === 'completed' || data.status === 'error') return;
   }
   
   // Only show full tool cards for THIS agent
@@ -1469,59 +1605,197 @@ socket.on('system-event', (data) => {
 
 // Society Agent start - Workers management
 const workers = new Map(); // workerId -> { name, status, task, iterations, startTime }
+const hiddenWorkers = new Set();
+
+function workerHiddenStorageKey() {
+  return `hidden-workers:${PROJECT_ID || 'legacy'}:${AGENT_ID}`;
+}
+
+function loadHiddenWorkers() {
+  try {
+    const raw = localStorage.getItem(workerHiddenStorageKey());
+    if (!raw) return;
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) {
+      hiddenWorkers.clear();
+      arr.forEach((id) => hiddenWorkers.add(String(id)));
+    }
+  } catch (e) {
+    console.warn('[workers] Failed to load hidden workers:', e);
+  }
+}
+
+function saveHiddenWorkers() {
+  try {
+    localStorage.setItem(workerHiddenStorageKey(), JSON.stringify(Array.from(hiddenWorkers)));
+  } catch (e) {
+    console.warn('[workers] Failed to save hidden workers:', e);
+  }
+}
+
+function mapTaskStatusToWorkerStatus(status) {
+  if (status === 'failed') return 'error';
+  if (status === 'completed') return 'completed';
+  if (status === 'claimed' || status === 'in-progress') return 'running';
+  return 'spawned';
+}
+
+function upsertWorkerFromTask(task, ownerName) {
+  const claimant = task?.claimedBy || task?.lastClaimedBy;
+  if (!task || !claimant) return;
+  if (hiddenWorkers.has(claimant) && task.status !== 'claimed' && task.status !== 'in-progress') return;
+  const existing = workers.get(claimant) || {};
+  const status = mapTaskStatusToWorkerStatus(task.status);
+  const tsRaw = task.completedAt || task.claimedAt || task.lastClaimedAt || task.createdAt;
+  const ts = tsRaw ? new Date(tsRaw).getTime() : Date.now();
+  const summary = (task.result && task.result.summary) ? task.result.summary : '';
+
+  workers.set(claimant, {
+    ...existing,
+    name: existing.name || claimant,
+    status,
+    taskId: task.id || existing.taskId,
+    taskStatus: task.status || existing.taskStatus,
+    task: task.title || existing.task || 'Task',
+    ownerName: existing.ownerName || ownerName || AGENT_ID,
+    startTime: existing.startTime || ts,
+    endTime: (status === 'completed' || status === 'error') ? ts : existing.endTime,
+    error: status === 'error' ? (task.error || summary || existing.error) : existing.error,
+    completionResult: task.result || existing.completionResult,
+    claimedAt: task.claimedAt || existing.claimedAt,
+    completedAt: task.completedAt || existing.completedAt,
+    activity: existing.activity || [],
+    expanded: existing.expanded || false,
+  });
+}
+
+function fmtDate(ts) {
+  if (!ts) return 'n/a';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return 'n/a';
+  return d.toLocaleString();
+}
 
 function updateWorkersUI() {
   const panel = document.getElementById('workersPanel');
   const list = document.getElementById('workersList');
   const count = document.getElementById('workersCount');
   
-  if (workers.size === 0) {
+  const visibleWorkers = Array.from(workers.entries()).filter(([id, w]) => {
+    if (!hiddenWorkers.has(id)) return true;
+    return w.status === 'running' || w.status === 'spawned';
+  });
+
+  if (visibleWorkers.length === 0) {
     panel.style.display = 'none';
     return;
   }
   
   panel.style.display = 'block';
-  count.textContent = workers.size;
+  count.textContent = visibleWorkers.length;
   
   list.innerHTML = '';
-  workers.forEach((w, id) => {
+  visibleWorkers.forEach(([id, w]) => {
     const card = document.createElement('div');
     card.className = `worker-card ${w.status}`;
     card.id = `worker-${id}`;
     
     let statusHtml = '';
+    const elapsed = w.startTime ? formatElapsed(Date.now() - w.startTime) : '';
     if (w.status === 'running') {
-      statusHtml = `<div class="worker-card-status"><span class="spinner"></span> Iteration ${w.iterations || 1}</div>`;
+      statusHtml = `<div class="worker-card-status"><span class="spinner"></span> Iteration ${w.iterations || 1} ${elapsed ? '• ' + elapsed : ''}</div>`;
     } else if (w.status === 'completed') {
-      statusHtml = `<div class="worker-card-status">✅ Completed</div>`;
+      statusHtml = `<div class="worker-card-status">✅ Completed ${elapsed ? '• ' + elapsed : ''}</div>`;
     } else if (w.status === 'error') {
-      statusHtml = `<div class="worker-card-status">❌ ${w.error || 'Error'}</div>`;
+      statusHtml = `<div class="worker-card-status">❌ ${w.error || 'Error'} ${elapsed ? '• ' + elapsed : ''}</div>`;
+    } else if (w.status === 'spawned') {
+      statusHtml = `<div class="worker-card-status"><span class="spinner"></span> Starting... ${elapsed ? '• ' + elapsed : ''}</div>`;
     }
     
-    // Show recent activity (last 3 messages)
-    const recentActivity = (w.activity || []).slice(-3);
+    // Show current action if available
+    let currentActionHtml = '';
+    if (w.currentAction && w.status === 'running') {
+      currentActionHtml = `<div class="worker-current-action"><span class="spinner"></span> ${esc(w.currentAction)}</div>`;
+    }
+    
+    // Show recent activity (last 10 when expanded, last 3 when collapsed)
+    const activityCount = w.expanded ? 10 : 3;
+    const recentActivity = (w.activity || []).slice(-activityCount);
     const activityHtml = recentActivity.length > 0 
-      ? `<div class="worker-activity">${recentActivity.map(a => 
-          `<div class="worker-activity-item">${esc(a)}</div>`
-        ).join('')}</div>`
+      ? `<div class="worker-activity">${recentActivity.map(a => {
+          let cls = 'worker-activity-item';
+          if (a.startsWith('✓') || a.startsWith('✅')) cls += ' success';
+          else if (a.startsWith('❌') || a.startsWith('✗')) cls += ' error';
+          else if (a.startsWith('⚙') || a.includes('_task') || a.includes('file')) cls += ' tool';
+          return `<div class="${cls}">${esc(a)}</div>`;
+        }).join('')}</div>`
       : '';
+
+    const summary = w.completionResult?.summary || '';
+    const filesCreated = Array.isArray(w.completionResult?.filesCreated) ? w.completionResult.filesCreated : [];
+    const filesModified = Array.isArray(w.completionResult?.filesModified) ? w.completionResult.filesModified : [];
+    const startedAt = w.claimedAt || w.startTime;
+    const endedAt = w.completedAt || w.endTime;
+    const detailsHtml = w.expanded ? `
+      <div class="worker-details">
+        <div class="row"><div class="label">Worker ID</div><div class="value">${esc(id)}</div></div>
+        <div class="row"><div class="label">Task ID</div><div class="value">${esc(w.taskId || 'n/a')}</div></div>
+        <div class="row"><div class="label">Status</div><div class="value">${esc(w.taskStatus || w.status || 'n/a')}</div></div>
+        <div class="row"><div class="label">Started</div><div class="value">${esc(fmtDate(startedAt))}</div></div>
+        <div class="row"><div class="label">Ended</div><div class="value">${esc(fmtDate(endedAt))}</div></div>
+        ${summary ? `<div class="row"><div class="label">Summary</div><div class="value">${esc(summary)}</div></div>` : ''}
+        ${w.error ? `<div class="row"><div class="label">Error</div><div class="value">${esc(w.error)}</div></div>` : ''}
+        ${(filesCreated.length || filesModified.length) ? `
+          <div class="files">
+            ${filesCreated.length ? `<div><strong>Created:</strong><ul>${filesCreated.slice(0, 10).map(f => `<li>${esc(f)}</li>`).join('')}</ul></div>` : ''}
+            ${filesModified.length ? `<div><strong>Modified:</strong><ul>${filesModified.slice(0, 10).map(f => `<li>${esc(f)}</li>`).join('')}</ul></div>` : ''}
+          </div>` : ''}
+      </div>` : '';
+
+    const showStop = w.status === 'running' || w.status === 'spawned';
+    const showDismiss = !showStop;
     
     card.innerHTML = `
       <div class="worker-card-header">
         <div class="worker-card-name" onclick="toggleWorkerDetails('${id}')">
           <span class="worker-expand">${w.expanded ? '▼' : '▶'}</span>
+          ${w.ownerName && w.ownerName !== AGENT_ID ? `<span style="color:var(--muted);font-weight:400;font-size:10px">${esc(w.ownerName)} →</span>` : ''}
           <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.name)}</span>
           ${w.status === 'running' ? '<span style="color:var(--accent)">●</span>' : ''}
         </div>
-        <button class="worker-stop-btn" onclick="stopWorker('${id}', event)" title="Stop worker">✕</button>
+        ${showStop ? `<button class="worker-stop-btn" onclick="stopWorker('${id}', event)" title="Stop worker">✕</button>` : ''}
+        ${showDismiss ? `<button class="worker-dismiss-btn" onclick="dismissWorker('${id}', event)" title="Hide from panel">🗑</button>` : ''}
       </div>
-      ${w.task ? `<div class="worker-card-task" title="${esc(w.task)}">${esc(w.task)}</div>` : ''}
+      ${w.task ? `<div class="worker-card-task" title="${esc(w.task)}">${esc(w.task)}</div>` : '<div class="worker-card-task" style="font-style:italic">No task claimed yet</div>'}
+      ${currentActionHtml}
       ${statusHtml}
-      ${w.expanded ? activityHtml : ''}
+      ${activityHtml}
+      ${detailsHtml}
       ${w.expanded && w.lastMessage ? `<div class="worker-last-message">${formatMarkdown(w.lastMessage.substring(0, 500))}</div>` : ''}
     `;
     list.appendChild(card);
   });
+}
+
+function dismissWorker(workerId, event) {
+  if (event) event.stopPropagation();
+  hiddenWorkers.add(workerId);
+  saveHiddenWorkers();
+  updateWorkersUI();
+}
+
+function clearOldWorkers(event) {
+  if (event) event.stopPropagation();
+  let count = 0;
+  workers.forEach((w, id) => {
+    if (w.status === 'completed' || w.status === 'error') {
+      if (!hiddenWorkers.has(id)) count += 1;
+      hiddenWorkers.add(id);
+    }
+  });
+  saveHiddenWorkers();
+  updateWorkersUI();
+  addLog('info', `Hidden ${count} old worker${count !== 1 ? 's' : ''}`);
 }
 
 // Society Agent - Handle worker messages and show in worker activity
@@ -1621,7 +1895,10 @@ function toggleProblemsPanel() {
 function filterDiagnosticsForAgent(diagnostics) {
   if (!agentProfile?.workspaceFolder) return diagnostics;
   const prefix = 'projects/' + agentProfile.workspaceFolder + '/';
-  return diagnostics.filter(d => d.file && d.file.startsWith(prefix));
+  console.log('[Diagnostics] Filtering with prefix:', prefix, 'from', diagnostics.length, 'total');
+  const filtered = diagnostics.filter(d => d.file && d.file.startsWith(prefix));
+  console.log('[Diagnostics] Filtered to', filtered.length, 'files:', filtered.map(d => d.file));
+  return filtered;
 }
 
 // Recompute counts from a (possibly filtered) diagnostics array.
@@ -1729,18 +2006,37 @@ async function fixProblemsWithAgent() {
 }
 
 socket.on('worker-spawned', (data) => {
-  if (data.projectId !== agentProfile?.projectId) return;
+  console.log('[worker-spawned] Got event:', { projectId: data.projectId, workerId: data.workerId, spawnedBy: data.spawnedBy });
+  console.log('[worker-spawned] Checking: agentProfile.projectId=', agentProfile?.projectId, 'AGENT_ID=', AGENT_ID);
+  if (data.projectId !== agentProfile?.projectId) {
+    console.log('[worker-spawned] Ignored - project mismatch');
+    return;
+  }
   // Only show workers spawned by THIS agent
-  if (data.spawnedBy !== AGENT_ID) return;
+  if (data.spawnedBy !== AGENT_ID) {
+    console.log('[worker-spawned] Ignored - spawnedBy mismatch:', data.spawnedBy, '!==', AGENT_ID);
+    return;
+  }
+  console.log('[worker-spawned] ADDING worker to UI:', data.workerId);
+  // Ensure newly spawned worker is visible even if an old ID was hidden in browser storage.
+  if (hiddenWorkers.has(data.workerId)) {
+    hiddenWorkers.delete(data.workerId);
+    saveHiddenWorkers();
+  }
   
   // Auto-expand first worker so user can immediately see what it does
   const isFirst = workers.size === 0;
+  // Find owner name from project agents
+  const ownerAgent = (agentProfile && agentProfile.projectId) 
+    ? (window._projectAgents || []).find(a => a.id === data.spawnedBy)
+    : null;
   workers.set(data.workerId, {
     name: data.workerName,
     status: 'spawned',
     spawnedBy: data.spawnedBy,
-    startTime: data.timestamp,
-    activity: [],
+    ownerName: ownerAgent?.name || data.spawnedBy,
+    startTime: Date.now(),
+    activity: ['Worker created'],
     expanded: isFirst,  // Auto-expand first worker
   });
   updateWorkersUI();
@@ -1764,6 +2060,12 @@ socket.on('worker-started', (data) => {
   if (w) {
     w.status = 'running';
     w.iterations = 0;
+    if (!w.activity) w.activity = [];
+    w.activity.push('🚀 Worker started');
+    if (data.task) {
+      w.task = data.task;
+      w.activity.push('📋 Claimed: ' + data.task);
+    }
     updateWorkersUI();
   }
 });
@@ -1782,6 +2084,8 @@ socket.on('worker-finished', (data) => {
   const w = workers.get(data.workerId);
   if (w) {
     w.status = data.completed ? 'completed' : 'error';
+    w.taskStatus = data.completed ? 'completed' : 'failed';
+    w.endTime = Date.now();
     // Use captured completion result from task-completed event
     const summary = w.completionResult?.summary || '';
     
@@ -1815,11 +2119,7 @@ socket.on('worker-finished', (data) => {
       scrollToBottom();
     }
     
-    // Remove after a delay
-    setTimeout(() => {
-      workers.delete(data.workerId);
-      updateWorkersUI();
-    }, 10000);
+    // Keep completed/failed workers visible for post-mortem inspection.
   }
 });
 
@@ -1839,6 +2139,10 @@ socket.on('task-completed', (data) => {
   if (data.projectId !== agentProfile?.projectId) return;
   const w = workers.get(data.agentId);
   if (w) {
+    w.taskId = data.taskId || w.taskId;
+    w.taskStatus = 'completed';
+    w.completedAt = Date.now();
+    w.task = data.taskTitle || w.task;
     // Store completion result for worker-finished to display
     w.completionResult = data.result;
     w.taskTitle = data.taskTitle;
@@ -1858,6 +2162,9 @@ socket.on('task-claimed', (data) => {
   if (data.projectId !== agentProfile?.projectId) return;
   const w = workers.get(data.agentId);
   if (w) {
+    w.taskId = data.taskId || w.taskId;
+    w.taskStatus = data.status || 'in-progress';
+    w.claimedAt = Date.now();
     w.task = data.taskTitle;
     if (!w.activity) w.activity = [];
     w.activity.push(`📋 Claimed: ${data.taskTitle}`);
@@ -1866,7 +2173,27 @@ socket.on('task-claimed', (data) => {
     addLog('info', `🧑‍🔧 ${w.name} claimed task: ${data.taskTitle}`);
   }
 });
+
+socket.on('task-failed', (data) => {
+  if (data.projectId !== agentProfile?.projectId) return;
+  const w = workers.get(data.agentId);
+  if (w) {
+    w.status = 'error';
+    w.taskStatus = 'failed';
+    w.taskId = data.taskId || w.taskId;
+    w.task = data.taskTitle || w.task;
+    w.completedAt = Date.now();
+    w.endTime = Date.now();
+    w.error = data.reason || 'Task failed';
+    if (!w.activity) w.activity = [];
+    w.activity.push(`❌ Failed: ${(data.reason || 'Task failed').substring(0, 80)}`);
+    updateWorkersUI();
+    addLog('warn', `🧑‍🔧 ${w.name} failed: ${data.reason || 'Task failed'}`);
+  }
+});
 // Society Agent end
+
+loadHiddenWorkers();
 
 socket.on('file-deleted', () => { refreshFiles(); refreshProblems(); });
 socket.on('file-moved', () => { refreshFiles(); refreshProblems(); });
@@ -2569,6 +2896,18 @@ async function sendMessage() {
   const text = input.value.trim();
   if ((!text && chatAttachments.length === 0) || isStreaming) return;
 
+  const attachmentSig = JSON.stringify(chatAttachments.map(a => ({
+    name: a.name,
+    type: a.type,
+    size: (a.base64 || '').length,
+  })));
+  const requestId = (pendingRequestId && pendingRequestText === text && pendingRequestAttachmentSig === attachmentSig)
+    ? pendingRequestId
+    : makeRequestId();
+  pendingRequestId = requestId;
+  pendingRequestText = text;
+  pendingRequestAttachmentSig = attachmentSig;
+
   // Society Agent start - Reset stream state for new message (fixes continue after network error)
   currentStreamEl = null;
   streamText = '';
@@ -2621,11 +2960,23 @@ async function sendMessage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        requestId,
+        projectId: PROJECT_ID || undefined,
         description: text,
         attachments: contentParts.length > 1 || contentParts[0]?.type === 'image' ? contentParts : undefined,
       }),
     });
     const data = await res.json();
+
+    if (res.status === 202 && data.status === 'in-progress') {
+      removeTyping();
+      addMessage('system', 'Request is already being processed. Waiting for completion...');
+      isStreaming = false;
+      document.getElementById('sendBtn').disabled = false;
+      document.getElementById('stopBtn').style.display = 'none';
+      showWorkingIndicator(false);
+      return;
+    }
 
     if (!res.ok) {
       removeTyping();
@@ -2647,6 +2998,10 @@ async function sendMessage() {
       showWorkingIndicator(false, true); // Society Agent - show done
       fetchAgentUsage(); // Society Agent - update usage
     }
+
+    pendingRequestId = null;
+    pendingRequestText = '';
+    pendingRequestAttachmentSig = '';
 
     messageCount++;
     addLog('info', `Response (history: ${data.historyLength} messages)`);
@@ -2672,6 +3027,7 @@ async function sendMessage() {
   } catch (e) {
     removeTyping();
     addMessage('system', `Network error: ${e.message}`);
+    addMessage('system', 'If this request actually reached the server, re-sending the same prompt will resume via request ID deduplication.');
     isStreaming = false;
     // Society Agent start - Reset stream state on error so next message starts fresh
     currentStreamEl = null;
@@ -2864,41 +3220,100 @@ function toggleSupervisorPanel() {
 
 async function refreshBlockedTasks() {
   try {
-    const res = await fetch(`${API}/api/projects/${PROJECT_ID}/tasks`);
-    if (!res.ok) return;
-    const data = await res.json();
-    const blocked = (data.tasks || []).filter(t => t.status === 'blocked');
-    renderBlockedTasks(blocked);
+    const [tasksRes, projectRes] = await Promise.all([
+      fetch(`${API}/api/projects/${PROJECT_ID}/tasks`),
+      fetch(`${API}/api/projects/${PROJECT_ID}`)
+    ]);
+    if (!tasksRes.ok || !projectRes.ok) return;
+    const tasksData = await tasksRes.json();
+    const projectData = await projectRes.json();
+    
+    const tasks = tasksData.tasks || [];
+    const agentIds = new Set((projectData.agents || []).map(a => a.id));
+    
+    // Find blocked tasks
+    const blocked = tasks.filter(t => t.status === 'blocked');
+    
+    // Find orphaned tasks (claimed by non-existent workers)
+    const orphaned = tasks.filter(t => 
+      ['claimed', 'in-progress'].includes(t.status) && 
+      t.claimedBy && 
+      !agentIds.has(t.claimedBy)
+    );
+    
+    renderBlockedTasks(blocked, orphaned);
   } catch (e) {
     console.error('Failed to load blocked tasks:', e);
   }
 }
 
-function renderBlockedTasks(tasks) {
+function renderBlockedTasks(blocked, orphaned = []) {
   const panel = document.getElementById('supervisorPanel');
   const badge = document.getElementById('blockedBadge');
   const list = document.getElementById('blockedList');
   
-  badge.textContent = tasks.length;
+  const totalIssues = blocked.length + orphaned.length;
+  badge.textContent = totalIssues;
   
-  if (tasks.length === 0) {
+  if (totalIssues === 0) {
     panel.style.display = 'none';
     return;
   }
   
   panel.style.display = 'block';
   
-  list.innerHTML = tasks.map(t => `
-    <div style="background:var(--bg);border:1px solid var(--yellow);border-radius:6px;padding:8px;margin-bottom:6px">
-      <div style="font-weight:600;margin-bottom:4px">${escapeHtml(t.title)}</div>
-      <div style="color:var(--yellow);font-size:10px;margin-bottom:6px">🚧 ${escapeHtml(t.blockedReason || 'Unknown')}</div>
-      <div style="display:flex;gap:4px">
-        <button onclick="supervisorUnblock('${t.id}')" style="flex:1;padding:3px 6px;font-size:10px;background:rgba(210,153,34,0.15);border:1px solid var(--yellow);color:var(--yellow);border-radius:4px;cursor:pointer">⚡ Unblock</button>
-        <button onclick="supervisorReassign('${t.id}')" style="flex:1;padding:3px 6px;font-size:10px;background:rgba(88,166,255,0.15);border:1px solid var(--accent);color:var(--accent);border-radius:4px;cursor:pointer">🔄 Reassign</button>
-        <button onclick="supervisorCancel('${t.id}')" style="padding:3px 6px;font-size:10px;background:rgba(248,81,73,0.15);border:1px solid var(--red);color:var(--red);border-radius:4px;cursor:pointer">✗</button>
+  let html = '';
+  
+  // Show orphaned tasks first (more urgent)
+  if (orphaned.length > 0) {
+    html += `<div style="color:var(--red);font-size:10px;font-weight:600;margin-bottom:6px">👻 ${orphaned.length} Orphaned Task${orphaned.length > 1 ? 's' : ''} (worker deleted)</div>`;
+    html += orphaned.map(t => `
+      <div style="background:var(--bg);border:1px solid var(--red);border-radius:6px;padding:8px;margin-bottom:6px">
+        <div style="font-weight:600;margin-bottom:4px">${escapeHtml(t.title)}</div>
+        <div style="color:var(--red);font-size:10px;margin-bottom:6px">👻 Claimed by: ${escapeHtml(t.claimedBy)} (deleted)</div>
+        <button onclick="resetOrphanedTask('${t.id}')" style="width:100%;padding:3px 6px;font-size:10px;background:rgba(248,81,73,0.15);border:1px solid var(--red);color:var(--red);border-radius:4px;cursor:pointer">♻️ Return to Pool</button>
       </div>
-    </div>
-  `).join('');
+    `).join('');
+  }
+  
+  // Show blocked tasks
+  if (blocked.length > 0) {
+    if (orphaned.length > 0) {
+      html += `<div style="color:var(--yellow);font-size:10px;font-weight:600;margin:12px 0 6px">🚧 ${blocked.length} Blocked Task${blocked.length > 1 ? 's' : ''}</div>`;
+    }
+    html += blocked.map(t => `
+      <div style="background:var(--bg);border:1px solid var(--yellow);border-radius:6px;padding:8px;margin-bottom:6px">
+        <div style="font-weight:600;margin-bottom:4px">${escapeHtml(t.title)}</div>
+        <div style="color:var(--yellow);font-size:10px;margin-bottom:6px">🚧 ${escapeHtml(t.blockedReason || 'Unknown')}</div>
+        <div style="display:flex;gap:4px">
+          <button onclick="supervisorUnblock('${t.id}')" style="flex:1;padding:3px 6px;font-size:10px;background:rgba(210,153,34,0.15);border:1px solid var(--yellow);color:var(--yellow);border-radius:4px;cursor:pointer">⚡ Unblock</button>
+          <button onclick="supervisorReassign('${t.id}')" style="flex:1;padding:3px 6px;font-size:10px;background:rgba(88,166,255,0.15);border:1px solid var(--accent);color:var(--accent);border-radius:4px;cursor:pointer">🔄 Reassign</button>
+          <button onclick="supervisorCancel('${t.id}')" style="padding:3px 6px;font-size:10px;background:rgba(248,81,73,0.15);border:1px solid var(--red);color:var(--red);border-radius:4px;cursor:pointer">✗</button>
+        </div>
+      </div>
+    `).join('');
+  }
+  
+  list.innerHTML = html;
+}
+
+async function resetOrphanedTask(taskId) {
+  try {
+    // Use the tasks API to reset the task
+    const res = await fetch(`${API}/api/projects/${PROJECT_ID}/tasks/${taskId}/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (res.ok) {
+      showToast('Task returned to pool', 'success');
+      refreshBlockedTasks();
+    } else {
+      const data = await res.json();
+      showToast(`Error: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showToast('Failed to reset task', 'error');
+  }
 }
 
 async function supervisorUnblock(taskId) {
@@ -4501,10 +4916,225 @@ function switchTab(tab) {
     document.getElementById('tabActivity').classList.add('active');
     document.getElementById('paneActivity').classList.add('active');
     loadActivityLog();
+  } else if (tab === 'tasks') {
+    document.getElementById('tabTasks').classList.add('active');
+    document.getElementById('paneTasks').classList.add('active');
+    loadAgentTasks();
   } else {
     document.getElementById('tabChat').classList.add('active');
     document.getElementById('paneChat').classList.add('active');
   }
+}
+
+// ============================================================================
+// Tasks Tab
+// ============================================================================
+let agentTasks = [];
+
+async function loadAgentTasks() {
+  const projectId = agentProfile?.projectId || PROJECT_ID;
+  if (!projectId) return;
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/tasks`);
+    if (!res.ok) { showTaskError('Failed to load tasks'); return; }
+    const data = await res.json();
+    agentTasks = data.tasks || [];
+    renderAgentTasks();
+    updateTaskBadge();
+  } catch (e) {
+    console.error('Failed to load tasks:', e);
+    showTaskError('Error loading tasks');
+  }
+}
+
+function showTaskError(msg) {
+  document.getElementById('taskFeed').innerHTML = `<span style="color:#f85149;padding:20px">${msg}</span>`;
+}
+
+function updateTaskBadge() {
+  const available = agentTasks.filter(t => t.status === 'available').length;
+  const inProgress = agentTasks.filter(t => t.status === 'in-progress').length;
+  const badge = document.getElementById('taskBadge');
+  const count = available + inProgress;
+  if (count > 0) {
+    badge.textContent = count;
+    badge.style.display = 'inline-block';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function renderAgentTasks() {
+  const feed = document.getElementById('taskFeed');
+  const statusFilter = document.getElementById('taskStatusFilter')?.value || '';
+  const ownerFilter = document.getElementById('taskOwnerFilter')?.value || '';
+  const search = (document.getElementById('taskSearch')?.value || '').toLowerCase();
+  
+  let filtered = agentTasks;
+  
+  // Status filter
+  if (statusFilter) {
+    filtered = filtered.filter(t => t.status === statusFilter);
+  }
+  
+  // Owner filter
+  if (ownerFilter === 'mine') {
+    filtered = filtered.filter(t => t.createdBy === AGENT_ID);
+  } else if (ownerFilter === 'claimed') {
+    filtered = filtered.filter(t => t.claimedBy === AGENT_ID || (t.claimedBy && t.claimedBy.startsWith('worker-') && t.createdBy === AGENT_ID));
+  }
+  
+  // Search filter
+  if (search) {
+    filtered = filtered.filter(t => 
+      t.title.toLowerCase().includes(search) || 
+      (t.description && t.description.toLowerCase().includes(search))
+    );
+  }
+  
+  // Sort: in-progress first, then available, then by date
+  filtered.sort((a, b) => {
+    const order = { 'in-progress': 0, 'available': 1, 'failed': 2, 'completed': 3 };
+    const diff = (order[a.status] ?? 9) - (order[b.status] ?? 9);
+    if (diff !== 0) return diff;
+    return new Date(b.createdAt) - new Date(a.createdAt);
+  });
+  
+  document.getElementById('taskCount').textContent = `${filtered.length} of ${agentTasks.length} tasks`;
+  
+  if (filtered.length === 0) {
+    feed.innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">No tasks match the filters</div>';
+    return;
+  }
+  
+  feed.innerHTML = filtered.map(t => {
+    const statusIcon = { 'available': '⚫', 'in-progress': '⚙️', 'completed': '✅', 'failed': '❌' }[t.status] || '•';
+    const statusClass = t.status === 'in-progress' ? 'in-progress' : (t.status === 'available' ? 'available' : (t.status === 'failed' ? 'failed' : 'completed'));
+    const isStale = t.error && (t.error.includes('Stale') || t.error.includes('Orphan'));
+    const createdDate = new Date(t.createdAt).toLocaleDateString();
+    const claimedInfo = t.claimedBy ? `<span style="color:var(--accent)">→ ${esc(t.claimedBy)}</span>` : '';
+    
+    return `<div class="task-item ${statusClass}" style="padding:12px;margin-bottom:8px;background:var(--surface);border-radius:6px;border-left:3px solid ${t.status === 'in-progress' ? 'var(--accent)' : (t.status === 'available' ? '#58a6ff' : (t.status === 'failed' ? '#f85149' : '#3fb950'))}">
+      <div style="display:flex;align-items:flex-start;gap:8px">
+        <span style="font-size:16px">${statusIcon}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;color:var(--text);margin-bottom:4px">${esc(t.title)}</div>
+          ${t.description ? `<div style="font-size:12px;color:var(--muted);margin-bottom:6px;white-space:pre-wrap;max-height:60px;overflow:hidden">${esc(t.description.substring(0, 200))}${t.description.length > 200 ? '...' : ''}</div>` : ''}
+          <div style="font-size:11px;color:var(--muted);display:flex;flex-wrap:wrap;gap:8px">
+            <span>P${t.priority || 5}</span>
+            <span>${t.status}</span>
+            <span>by ${esc(t.createdBy)}</span>
+            <span>${createdDate}</span>
+            ${claimedInfo}
+            ${isStale ? '<span style="color:#f85149">⚠️ ' + esc(t.error) + '</span>' : ''}
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          ${t.status === 'available' || isStale ? `<button class="btn btn-sm" onclick="deleteTask('${t.id}')" style="font-size:10px;padding:2px 6px;background:rgba(248,81,73,0.15);color:#f85149;border:1px solid rgba(248,81,73,0.3)" title="Delete task">✕</button>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function deleteTask(taskId) {
+  if (!confirm('Delete this task?')) return;
+  const projectId = agentProfile?.projectId || PROJECT_ID;
+  try {
+    const res = await fetch(`${API}/api/projects/${projectId}/tasks/${taskId}`, { method: 'DELETE' });
+    if (res.ok) {
+      agentTasks = agentTasks.filter(t => t.id !== taskId);
+      renderAgentTasks();
+      updateTaskBadge();
+      addLog('info', 'Task deleted');
+    } else {
+      addLog('error', 'Failed to delete task');
+    }
+  } catch (e) {
+    addLog('error', 'Error deleting task: ' + e.message);
+  }
+}
+
+async function cleanupStaleTasks() {
+  const staleTasks = agentTasks.filter(t => 
+    t.error && (t.error.includes('Stale') || t.error.includes('Orphan'))
+  );
+  if (staleTasks.length === 0) {
+    alert('No stale or orphaned tasks to clean up');
+    return;
+  }
+  if (!confirm(`Delete ${staleTasks.length} stale/orphaned tasks?`)) return;
+  
+  const projectId = agentProfile?.projectId || PROJECT_ID;
+  let deleted = 0;
+  for (const t of staleTasks) {
+    try {
+      const res = await fetch(`${API}/api/projects/${projectId}/tasks/${t.id}`, { method: 'DELETE' });
+      if (res.ok) deleted++;
+    } catch (e) { /* ignore */ }
+  }
+  addLog('info', `Cleaned up ${deleted} stale tasks`);
+  loadAgentTasks();
+}
+
+// Get currently filtered tasks (respects all filters)
+function getFilteredTasks() {
+  const statusFilter = document.getElementById('taskStatusFilter')?.value || '';
+  const ownerFilter = document.getElementById('taskOwnerFilter')?.value || '';
+  const search = (document.getElementById('taskSearch')?.value || '').toLowerCase();
+  
+  let filtered = agentTasks;
+  
+  if (statusFilter) {
+    filtered = filtered.filter(t => t.status === statusFilter);
+  }
+  if (ownerFilter === 'mine') {
+    filtered = filtered.filter(t => t.createdBy === AGENT_ID);
+  } else if (ownerFilter === 'claimed') {
+    filtered = filtered.filter(t => t.claimedBy === AGENT_ID || (t.claimedBy && t.claimedBy.startsWith('worker-') && t.createdBy === AGENT_ID));
+  }
+  if (search) {
+    filtered = filtered.filter(t => 
+      t.title.toLowerCase().includes(search) || 
+      (t.description && t.description.toLowerCase().includes(search))
+    );
+  }
+  return filtered;
+}
+
+async function deleteFilteredTasks() {
+  const filtered = getFilteredTasks();
+  // Only protect in-progress tasks (actively being worked on)
+  const deletable = filtered.filter(t => 
+    t.status !== 'in-progress'
+  );
+  
+  if (deletable.length === 0) {
+    alert('No deletable tasks match the current filters.\\n\\nNote: In-progress tasks cannot be deleted.');
+    return;
+  }
+  
+  const filterDesc = [];
+  const statusFilter = document.getElementById('taskStatusFilter')?.value;
+  const ownerFilter = document.getElementById('taskOwnerFilter')?.value;
+  if (statusFilter) filterDesc.push(`status: ${statusFilter}`);
+  if (ownerFilter === 'mine') filterDesc.push(`created by: ${AGENT_ID}`);
+  if (ownerFilter === 'claimed') filterDesc.push(`claimed by: ${AGENT_ID}`);
+  
+  const msg = `Delete ${deletable.length} task(s)?\\n\\nFilters: ${filterDesc.length ? filterDesc.join(', ') : 'none'}\\n\\nTasks to delete:\\n${deletable.slice(0, 5).map(t => '• ' + t.title).join('\\n')}${deletable.length > 5 ? '\\n... and ' + (deletable.length - 5) + ' more' : ''}`;
+  
+  if (!confirm(msg)) return;
+  
+  const projectId = agentProfile?.projectId || PROJECT_ID;
+  let deleted = 0;
+  for (const t of deletable) {
+    try {
+      const res = await fetch(`${API}/api/projects/${projectId}/tasks/${t.id}`, { method: 'DELETE' });
+      if (res.ok) deleted++;
+    } catch (e) { /* ignore */ }
+  }
+  addLog('info', `Deleted ${deleted} tasks`);
+  loadAgentTasks();
 }
 
 // ============================================================================
@@ -4876,6 +5506,15 @@ function addLog(level, text) {
 }
 function esc(text) { const d = document.createElement('div'); d.textContent = text; return d.innerHTML; }
 function escAttr(s) { return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
+function formatElapsed(ms) {
+  if (ms < 1000) return '<1s';
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return secs + 's';
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return mins + 'm ' + (secs % 60) + 's';
+  const hrs = Math.floor(mins / 60);
+  return hrs + 'h ' + (mins % 60) + 'm';
+}
 function formatSize(bytes) {
   if (!bytes) return '0 B';
   const k = 1024, sizes = ['B','KB','MB'];
