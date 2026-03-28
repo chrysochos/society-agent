@@ -123,6 +123,8 @@ export interface ProjectAgentConfig {
 	// Society Agent start - ephemeral agents
 	/** If true, agent is temporary and will be deleted after completing its task */
 	ephemeral?: boolean
+	/** If true, this agent is a worker that can claim tasks */
+	isWorker?: boolean
 	/** ID of the agent that created this ephemeral agent */
 	createdBy?: string
 	// Society Agent end
@@ -283,6 +285,10 @@ export interface Task {
 	claimedBy?: string
 	/** When claimed */
 	claimedAt?: string
+	/** Last worker that claimed this task (preserved on failure/reset) */
+	lastClaimedBy?: string
+	/** Last claim timestamp (preserved on failure/reset) */
+	lastClaimedAt?: string
 	/** Full context for execution */
 	context: TaskContext
 	/** Result after completion */
@@ -293,6 +299,12 @@ export interface Task {
 	}
 	/** Error info if failed */
 	error?: string
+	/** Number of failed attempts */
+	retryCount?: number
+	/** Max automatic retries before escalation */
+	maxRetries?: number
+	/** Running progress notes from previous worker attempts — passed to the next retry worker */
+	progressNotes?: string
 	/** Task IDs that must be completed before this task can be claimed */
 	dependencies?: string[]
 	/** Timestamps */
@@ -366,6 +378,8 @@ export interface Project {
 	managedTasks?: ManagedTask[]
 	/** Task sequence counter for ID generation */
 	taskSequence?: number
+	/** Worker sequence counter for unique naming */
+	workerSequence?: number
 	/** Project task ID prefix (e.g., "ARCH", "BE", "FE") */
 	taskPrefix?: string
 	// Society Agent end
@@ -1277,6 +1291,8 @@ A task is NOT done until ALL four are true:
 			status: "available",
 			createdBy,
 			context,
+			retryCount: 0,
+			maxRetries: 2,
 			dependencies: dependencies && dependencies.length > 0 ? dependencies : undefined,
 			createdAt: new Date().toISOString(),
 		}
@@ -1299,14 +1315,18 @@ A task is NOT done until ALL four are true:
 		task.status = "claimed"
 		task.claimedBy = agentId
 		task.claimedAt = new Date().toISOString()
+		task.lastClaimedBy = agentId
+		task.lastClaimedAt = task.claimedAt
 		project.updatedAt = new Date().toISOString()
 		this.save()
 		log.info(`Task "${task.title}" claimed by ${agentId}`)
 		return task
 	}
 
-	/** Claim the next available task (highest priority first, respecting dependencies) */
-	claimNextTask(projectId: string, agentId: string): Task | undefined {
+	/** Claim the next available task (highest priority first, respecting dependencies) 
+	 * @param supervisorId - If provided, only claim tasks created by this agent (for workers)
+	 */
+	claimNextTask(projectId: string, agentId: string, supervisorId?: string): Task | undefined {
 		const project = this.get(projectId)
 		if (!project?.tasks) return undefined
 
@@ -1319,6 +1339,8 @@ A task is NOT done until ALL four are true:
 		const availableTasks = project.tasks
 			.filter((t) => {
 				if (t.status !== "available") return false
+				// If supervisorId is provided, only claim tasks from that supervisor
+				if (supervisorId && t.createdBy !== supervisorId) return false
 				// Check if all dependencies are completed
 				if (t.dependencies && t.dependencies.length > 0) {
 					return t.dependencies.every((depId) => completedTaskIds.has(depId))
@@ -1378,6 +1400,9 @@ A task is NOT done until ALL four are true:
 
 		task.status = "available" // Return to pool for retry
 		task.error = error
+		task.retryCount = (task.retryCount || 0) + 1
+		task.lastClaimedBy = task.claimedBy || task.lastClaimedBy
+		task.lastClaimedAt = task.claimedAt || task.lastClaimedAt
 		task.claimedBy = undefined
 		task.claimedAt = undefined
 		project.updatedAt = new Date().toISOString()
@@ -1386,11 +1411,24 @@ A task is NOT done until ALL four are true:
 		return task
 	}
 
+	/** Append a progress note to a task (called by workers before they stop) */
+	appendTaskProgressNotes(projectId: string, taskId: string, notes: string): void {
+		const project = this.get(projectId)
+		if (!project) return
+		const task = project.tasks?.find((t) => t.id === taskId)
+		if (!task) return
+		const existing = task.progressNotes ? task.progressNotes + "\n\n---\n\n" : ""
+		// Keep total progress notes under 4000 chars — drop oldest if needed
+		const combined = existing + notes
+		task.progressNotes = combined.length > 4000 ? combined.slice(combined.length - 4000) : combined
+		this.save()
+	}
+
 	/** Get count of active ephemeral workers in a project */
 	getActiveWorkerCount(projectId: string): number {
 		const project = this.get(projectId)
 		if (!project) return 0
-		return project.agents.filter((a) => a.ephemeral).length
+		return project.agents.filter((a) => a.ephemeral || a.isWorker).length
 	}
 
 	/** Check if we can spawn more workers */
@@ -1401,8 +1439,10 @@ A task is NOT done until ALL four are true:
 		return this.getActiveWorkerCount(projectId) < maxWorkers
 	}
 
-	/** Get available tasks count (excludes tasks blocked by dependencies) */
-	getAvailableTaskCount(projectId: string): number {
+	/** Get available tasks count (excludes tasks blocked by dependencies) 
+	 * @param createdBy - If provided, only count tasks created by this agent
+	 */
+	getAvailableTaskCount(projectId: string, createdBy?: string): number {
 		const project = this.get(projectId)
 		if (!project?.tasks) return 0
 		
@@ -1413,6 +1453,8 @@ A task is NOT done until ALL four are true:
 		
 		return project.tasks.filter((t) => {
 			if (t.status !== "available") return false
+			// If createdBy is provided, only count tasks from that agent
+			if (createdBy && t.createdBy !== createdBy) return false
 			// Check if all dependencies are completed
 			if (t.dependencies && t.dependencies.length > 0) {
 				return t.dependencies.every((depId) => completedTaskIds.has(depId))
@@ -1455,6 +1497,8 @@ A task is NOT done until ALL four are true:
 
 			if (isOrphan || isStale) {
 				task.status = "available"
+				task.lastClaimedBy = task.claimedBy || task.lastClaimedBy
+				task.lastClaimedAt = task.claimedAt || task.lastClaimedAt
 				task.claimedBy = undefined
 				task.claimedAt = undefined
 				task.error = isOrphan ? "Orphaned - claiming agent removed" : "Stale - exceeded time limit"

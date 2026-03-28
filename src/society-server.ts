@@ -576,7 +576,9 @@ Global skills contain curated expertise for specific domains. Check skills befor
 **IMPORTANT**: If you're a permanent (custodian) agent and need to implement code changes:
 1. Load: \`read_global_skill("workflow-policy")\`
 2. Follow the custodian/worker model — you govern, workers implement
-3. Spawn workers with \`spawn_worker()\` for code implementation
+3. Spawn workers with \`spawn_worker()\` for **code writing only**
+
+**DO NOT spawn workers for**: running compilers, tests, git commands, reading files, or verification tasks. Do those yourself.
 
 `
 function buildFullSystemPrompt(agentSystemPrompt: string): string {
@@ -631,6 +633,112 @@ function getProjectSharedWorkspaces(projectId: string): SharedWorkspaceRegistry 
 // Society Agent start - project system
 const projectStore = new ProjectStore(getWorkspacePath())
 // Society Agent end
+
+function sanitizeTaskToken(input: string): string {
+	return input.replace(/[^a-zA-Z0-9_-]/g, "_")
+}
+
+function uniqueChangeDocPath(baseDir: string, baseName: string): string {
+	const candidate = path.join(baseDir, baseName)
+	if (!fs.existsSync(candidate)) return candidate
+	const ts = new Date().toISOString().replace(/[:.]/g, "-")
+	const ext = path.extname(baseName)
+	const stem = baseName.slice(0, Math.max(0, baseName.length - ext.length))
+	return path.join(baseDir, `${stem}_${ts}${ext}`)
+}
+
+function getChangeDocsDir(supervisorDir: string, kind: "briefs" | "reports"): string {
+	return path.join(supervisorDir, "CHANGE_DOCS", kind)
+}
+
+function writeChangeBriefDoc(project: Project, supervisorId: string, task: Task): string | undefined {
+	try {
+		const supervisorDir = projectStore.agentHomeDir(project.id, supervisorId)
+		const briefsDir = getChangeDocsDir(supervisorDir, "briefs")
+		fs.mkdirSync(briefsDir, { recursive: true })
+		const token = sanitizeTaskToken(task.id)
+		const briefPath = uniqueChangeDocPath(briefsDir, `CHANGE_BRIEF_${token}.md`)
+		const content = `# CHANGE_BRIEF_${token}
+
+## Metadata
+- project: ${project.name}
+- project_id: ${project.id}
+- task_id: ${task.id}
+- created_by: ${task.createdBy}
+- created_at: ${task.createdAt}
+- priority: ${task.priority}
+
+## Title
+${task.title}
+
+## Description
+${task.description}
+
+## Context
+- working_directory: ${task.context.workingDirectory || "."}
+- conventions: ${task.context.conventions || "(none specified)"}
+
+## Dependencies
+${task.dependencies && task.dependencies.length > 0 ? task.dependencies.map((d) => `- ${d}`).join("\n") : "- none"}
+
+## Expected Outputs
+${task.context.outputPaths && Object.keys(task.context.outputPaths).length > 0
+			? Object.entries(task.context.outputPaths).map(([filePath, desc]) => `- ${filePath}: ${desc}`).join("\n")
+			: "- none specified"}
+
+## Notes
+${task.context.notes || "(none)"}
+`
+		fs.writeFileSync(briefPath, content, "utf-8")
+		return briefPath
+	} catch (err) {
+		log.warn(`[CHANGE_BRIEF] Failed to write brief for task ${task.id}: ${err}`)
+		return undefined
+	}
+}
+
+function writeChangeReportDoc(
+	project: Project,
+	supervisorId: string,
+	task: Task,
+	workerId: string,
+	result: { filesCreated: string[]; filesModified: string[]; summary: string },
+): string | undefined {
+	try {
+		const supervisorDir = projectStore.agentHomeDir(project.id, supervisorId)
+		const reportsDir = getChangeDocsDir(supervisorDir, "reports")
+		fs.mkdirSync(reportsDir, { recursive: true })
+		const token = sanitizeTaskToken(task.id)
+		const reportPath = uniqueChangeDocPath(reportsDir, `CHANGE_REPORT_${token}.md`)
+		const content = `# CHANGE_REPORT_${token}
+
+## Metadata
+- project: ${project.name}
+- project_id: ${project.id}
+- task_id: ${task.id}
+- worker_id: ${workerId}
+- supervisor_id: ${supervisorId}
+- completed_at: ${new Date().toISOString()}
+
+## Task Title
+${task.title}
+
+## Summary
+${result.summary}
+
+## Files Created
+${result.filesCreated.length > 0 ? result.filesCreated.map((f) => `- ${f}`).join("\n") : "- none"}
+
+## Files Modified
+${result.filesModified.length > 0 ? result.filesModified.map((f) => `- ${f}`).join("\n") : "- none"}
+`
+		fs.writeFileSync(reportPath, content, "utf-8")
+		return reportPath
+	} catch (err) {
+		log.warn(`[CHANGE_REPORT] Failed to write report for task ${task.id}: ${err}`)
+		return undefined
+	}
+}
 
 // Society Agent start - diagnostics watcher
 const diagnosticsWatcher = new DiagnosticsWatcher(getWorkspacePath())
@@ -695,6 +803,113 @@ class ActivityLogger {
 
 const activityLogger = new ActivityLogger()
 // Society Agent end
+
+type ChatRequestCacheEntry = {
+	status: "in-progress" | "completed"
+	startedAt: number
+	response?: any
+}
+
+const chatRequestCache = new Map<string, ChatRequestCacheEntry>()
+const CHAT_REQUEST_CACHE_TTL_MS = 15 * 60 * 1000
+
+type AutoRetryTrackerEntry = {
+	active: boolean
+	lastRetryAt: number
+	consecutiveSameReason: number
+	lastReason?: string
+}
+
+const autoRetryTracker = new Map<string, AutoRetryTrackerEntry>()
+const AUTO_RETRY_COOLDOWN_MS = 20 * 1000
+
+function autoRetryKey(projectId: string, taskId: string): string {
+	return `${projectId}:${taskId}`
+}
+
+function makeChatRequestKey(agentId: string, projectId: string | undefined, requestId: string): string {
+	return `${projectId || "legacy"}:${agentId}:${requestId}`
+}
+
+function cleanupChatRequestCache() {
+	const now = Date.now()
+	for (const [key, entry] of chatRequestCache.entries()) {
+		if (now - entry.startedAt > CHAT_REQUEST_CACHE_TTL_MS) {
+			chatRequestCache.delete(key)
+		}
+	}
+}
+
+type AutoMode = "report_only" | "implement_from_report" | "recall_only" | "none"
+
+function inferAutoMode(description: string | undefined): AutoMode {
+	const text = (description || "").toLowerCase()
+	if (!text) return "none"
+
+	const asksReport = /(report|what is implemented|known gaps|limitations|swagger|test\/verification|status summary)/.test(text)
+	const asksImplement = /(complete all|fix all|implement|do the works|execute)/.test(text)
+	const asksRecall = /(remember the report|do you remember)/.test(text)
+
+	if (asksImplement && /(all you found|from report|findings|gaps)/.test(text)) return "implement_from_report"
+	if (asksRecall && !asksImplement) return "recall_only"
+	if (asksReport && !asksImplement) return "report_only"
+	return "none"
+}
+
+function applyAutoMode(description: string | undefined, mode: AutoMode): string {
+	const base = description || ""
+	if (mode === "report_only") {
+		return `[AUTO_MODE: REPORT_ONLY]\n` +
+			`Return one consolidated report only. Do not spawn workers, do not create tasks, do not run broad verification sweeps, and stop after report.\n\n` +
+			base
+	}
+	if (mode === "implement_from_report") {
+		return `[AUTO_MODE: IMPLEMENT_FROM_REPORT]\n` +
+			`Use the latest report/findings as source of truth. Build a prioritized fix list and execute without restarting full discovery. Read only files needed for selected fixes.\n\n` +
+			base
+	}
+	if (mode === "recall_only") {
+		return `[AUTO_MODE: RECALL_ONLY]\n` +
+			`Answer from existing context and recent report. Do not run tools unless the user explicitly asks to refresh.\n\n` +
+			base
+	}
+	return base
+}
+
+function getReportSnapshotPath(project: Project, agentId: string): string {
+	const agentDir = projectStore.agentHomeDir(project.id, agentId)
+	return path.join(agentDir, "REPORT_SNAPSHOT.md")
+}
+
+function loadReportSnapshot(project: Project, agentId: string): string | undefined {
+	try {
+		const snapshotPath = getReportSnapshotPath(project, agentId)
+		if (!fs.existsSync(snapshotPath)) return undefined
+		return fs.readFileSync(snapshotPath, "utf-8")
+	} catch (err) {
+		log.warn(`[ReportSnapshot] Failed to load snapshot for ${agentId}: ${err}`)
+		return undefined
+	}
+}
+
+function saveReportSnapshot(project: Project, agentId: string, report: string): boolean {
+	try {
+		const snapshotPath = getReportSnapshotPath(project, agentId)
+		const now = new Date().toISOString()
+		const content = `# REPORT_SNAPSHOT\n\n- agent_id: ${agentId}\n- project_id: ${project.id}\n- updated_at: ${now}\n\n---\n\n${report}\n`
+		fs.writeFileSync(snapshotPath, content, "utf-8")
+		return true
+	} catch (err) {
+		log.warn(`[ReportSnapshot] Failed to save snapshot for ${agentId}: ${err}`)
+		return false
+	}
+}
+
+function withSnapshotContext(prompt: string, snapshot: string): string {
+	const maxChars = 16000
+	const clipped = snapshot.length > maxChars ? snapshot.slice(0, maxChars) + "\n...(snapshot truncated)" : snapshot
+	return `[AUTO_CONTEXT: REPORT_SNAPSHOT]\n${clipped}\n[/AUTO_CONTEXT]\n\n${prompt}`
+}
 
 // Society Agent start - token usage tracking
 interface UsageEntry {
@@ -3352,6 +3567,141 @@ app.get("/api/projects/:id", (req, res): void => {
 				historyLength: activeAgents.get(`${req.params.id}:${a.id}`)?.getHistory().length || 0,
 			})),
 		})
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/projects/:id/tasks - Get task pool for a project (legacy tasks)
+ */
+app.get("/api/projects/:id/tasks", (req, res): void => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+		const tasks = projectStore.getTasks(req.params.id)
+		const counts = {
+			total: tasks.length,
+			available: tasks.filter(t => t.status === "available").length,
+			claimed: tasks.filter(t => t.status === "claimed").length,
+			inProgress: tasks.filter(t => t.status === "in-progress").length,
+			completed: tasks.filter(t => t.status === "completed").length,
+			failed: tasks.filter(t => t.status === "failed").length,
+			blocked: tasks.filter(t => t.status === "blocked").length,
+		}
+		res.json({ tasks, counts })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/projects/:id/approvals - Get pending approval requests for a project
+ */
+app.get("/api/projects/:id/approvals", (req, res): void => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+		const approvals = projectStore.getAllPendingApprovals(req.params.id)
+		res.json({ approvals })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/approvals/:requestId/resolve - Resolve an approval request
+ */
+app.post("/api/approvals/:requestId/resolve", (req, res): void => {
+	try {
+		const { resolution, permanent, resolvedBy } = req.body
+		if (!resolution || !["approved", "denied"].includes(resolution)) {
+			res.status(400).json({ error: "Invalid resolution. Must be 'approved' or 'denied'" })
+			return
+		}
+		const result = projectStore.resolveApproval(
+			req.params.requestId,
+			resolution,
+			permanent === true,
+			resolvedBy || "human"
+		)
+		if (!result) {
+			res.status(404).json({ error: "Approval request not found" })
+			return
+		}
+		io.emit("approval-resolved", { requestId: req.params.requestId, resolution })
+		res.json({ success: true, approval: result })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * POST /api/projects/:id/tasks/:taskId/reset - Reset a single task (return to pool)
+ */
+app.post("/api/projects/:id/tasks/:taskId/reset", (req, res): void => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+		const task = project.tasks?.find(t => t.id === req.params.taskId)
+		if (!task) {
+			res.status(404).json({ error: "Task not found" })
+			return
+		}
+		// Reset task to available
+		task.status = "available"
+		task.claimedBy = undefined
+		task.claimedAt = undefined
+		task.error = "Reset by supervisor"
+		projectStore.save()
+		
+		io.emit("task-reset", { 
+			projectId: req.params.id, 
+			taskId: req.params.taskId,
+			taskTitle: task.title,
+			timestamp: Date.now()
+		})
+		res.json({ success: true, task })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * DELETE /api/projects/:id/tasks/:taskId - Delete a task from the pool
+ */
+app.delete("/api/projects/:id/tasks/:taskId", (req, res): void => {
+	try {
+		const project = projectStore.get(req.params.id)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+		const taskIndex = project.tasks?.findIndex(t => t.id === req.params.taskId)
+		if (taskIndex === undefined || taskIndex === -1) {
+			res.status(404).json({ error: "Task not found" })
+			return
+		}
+		const task = project.tasks![taskIndex]
+		project.tasks!.splice(taskIndex, 1)
+		projectStore.save()
+		
+		io.emit("task-deleted", { 
+			projectId: req.params.id, 
+			taskId: req.params.taskId,
+			taskTitle: task.title,
+			timestamp: Date.now()
+		})
+		res.json({ success: true })
 	} catch (error) {
 		res.status(500).json({ error: String(error) })
 	}
@@ -6179,9 +6529,15 @@ async function executeSupervisorTool(
 	io: SocketIOServer,
 ): Promise<{ result: string; filesCreated: number }> {
 	// Find the agent config for this agent
+	if (toolName === "spawn_worker") {
+		log.info(`[executeSupervisorTool] spawn_worker called with supervisorId=${supervisorId}`)
+	}
 	const agentConfig = project.agents.find(a => a.id === supervisorId)
 	if (!agentConfig) {
 		return { result: `Error: Agent ${supervisorId} not found`, filesCreated: 0 }
+	}
+	if (toolName === "spawn_worker") {
+		log.info(`[executeSupervisorTool] spawn_worker agentConfig.id=${agentConfig.id}, agentConfig.name=${agentConfig.name}`)
 	}
 	
 	// Delegate to the unified agent tool execution
@@ -6288,6 +6644,10 @@ async function executeAgentTool(
 	switch (toolName) {
 		case "read_file": {
 			const { path: filePath } = toolInput as { path: string }
+
+			if (typeof filePath !== "string" || filePath.trim().length === 0) {
+				return { result: `❌ Missing required parameter: \`path\`. Example: read_file({ path: "PLAN.md" })`, filesCreated: 0 }
+			}
 			
 			// Society Agent - Reject absolute paths
 			if (filePath && filePath.startsWith("/")) {
@@ -6318,6 +6678,10 @@ async function executeAgentTool(
 
 		case "write_file": {
 			const { path: filePath, content } = toolInput as { path: string; content: string }
+
+			if (typeof filePath !== "string" || filePath.trim().length === 0) {
+				return { result: `❌ Missing required parameter: \`path\`. Example: write_file({ path: "notes.md", content: "..." })`, filesCreated: 0 }
+			}
 
 			if (content === undefined || content === null) {
 				return { result: `❌ Error writing file: 'content' parameter is missing or undefined. Call write_file with both 'path' and 'content' arguments.`, filesCreated: 0 }
@@ -6586,6 +6950,29 @@ async function executeAgentTool(
 				log.warn(`[Worker ${agentConfig.name}] Detected incorrect path: ${fullPath}`)
 				log.warn(`[Worker ${agentConfig.name}] Auto-correcting to: ${correctedPath}`)
 				fixedCommand = fixedCommand.replace(fullPath, correctedPath)
+			}
+
+			// Society Agent - Backend port normalization guard
+			// Backend agents/workers must use port 6001, not 3000.
+			const isBackendAgent = (
+				agentConfig.id.toLowerCase().includes("backend") ||
+				(agentConfig.role || "").toLowerCase().includes("backend") ||
+				(agentConfig.homeFolder || "").toLowerCase().includes("backend")
+			)
+			if (isBackendAgent) {
+				let normalized = fixedCommand
+				// Explicit env var and common CLI flags
+				normalized = normalized.replace(/\bPORT=3000\b/g, "PORT=6001")
+				normalized = normalized.replace(/(--port[=\s])3000\b/gi, "$16001")
+				normalized = normalized.replace(/(-p\s+)3000\b/gi, "$16001")
+				// Common localhost targets for backend checks
+				normalized = normalized.replace(/localhost:3000\b/g, "localhost:6001")
+				normalized = normalized.replace(/127\.0\.0\.1:3000\b/g, "127.0.0.1:6001")
+
+				if (normalized !== fixedCommand) {
+					log.info(`[Worker ${agentConfig.name}] Normalized backend command port 3000 -> 6001: ${normalized}`)
+					fixedCommand = normalized
+				}
 			}
 			// Society Agent end
 			
@@ -7350,6 +7737,12 @@ If you don't know, say so. Be concise.`,
 		// Society Agent start - Allow workers to READ from project (other agents' folders)
 		case "read_project_file": {
 			let { path: filePath } = toolInput as { path: string }
+			if (typeof filePath !== "string") {
+				filePath = ""
+			}
+			if (filePath.trim().length === 0) {
+				return { result: `❌ Missing required parameter: \`path\`. Example: read_project_file({ path: "backend/PLAN.md" })`, filesCreated: 0 }
+			}
 			const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 			const projectDir = path.join(workspacePath, "projects", project.folder || project.id)
 			const projectId = project.folder || project.id
@@ -8498,6 +8891,11 @@ If you don't know, say so. Be concise.`,
 		case "claim_task": {
 			const { task_id } = toolInput as { task_id?: string }
 			
+			// Only workers can claim tasks
+			if (!agentConfig.isWorker) {
+				return { result: `⚠️ Only workers can claim tasks. Use \`spawn_worker()\` to create workers that will claim and execute your tasks.`, filesCreated: 0 }
+			}
+			
 			// Check if worker already has a task
 			const existingTasks = projectStore.getTasks(project.id)
 			const alreadyClaimed = existingTasks.find(t => t.claimedBy === agentConfig.id && ["claimed", "in-progress"].includes(t.status))
@@ -8505,14 +8903,27 @@ If you don't know, say so. Be concise.`,
 				return { result: `⚠️ You already have a task: "${alreadyClaimed.title}" (${alreadyClaimed.status})\n\nComplete it first with \`complete_task()\` or \`fail_task()\`.`, filesCreated: 0 }
 			}
 			
+			// If this is a worker (has reportsTo), only claim tasks from their supervisor
+			const supervisorId = agentConfig.reportsTo
+			
 			let task
 			if (task_id) {
+				// If specific task_id, verify it's from the supervisor (if worker)
+				const targetTask = existingTasks.find(t => t.id === task_id)
+				if (supervisorId && targetTask && targetTask.createdBy !== supervisorId) {
+					return { result: `⚠️ You can only claim tasks created by your supervisor (${supervisorId}).`, filesCreated: 0 }
+				}
 				task = projectStore.claimTask(project.id, task_id, agentConfig.id)
 			} else {
-				task = projectStore.claimNextTask(project.id, agentConfig.id)
+				// Auto-claim next task, filtered by supervisor if worker
+				task = projectStore.claimNextTask(project.id, agentConfig.id, supervisorId)
 			}
 			
 			if (!task) {
+				const taskCount = existingTasks.filter(t => t.status === "available").length
+				if (supervisorId && taskCount > 0) {
+					return { result: `📋 No available tasks from your supervisor (${supervisorId}).\n\nThere are ${taskCount} tasks in the pool from other agents.\n\n💡 Your supervisor will add more tasks when ready.`, filesCreated: 0 }
+				}
 				return { result: `📋 No available tasks in pool. Waiting...\n\n💡 The supervisor will add more tasks when ready.`, filesCreated: 0 }
 			}
 			
@@ -8621,6 +9032,8 @@ If you don't know, say so. Be concise.`,
 			}
 			
 			projectStore.completeTask(project.id, myTask.id, result)
+			const reportOwnerId = myTask.createdBy || agentConfig.reportsTo || agentConfig.id
+			const reportPath = writeChangeReportDoc(project, reportOwnerId, myTask, agentConfig.id, result)
 			
 			io.emit("task-completed", {
 				projectId: project.id,
@@ -8645,7 +9058,7 @@ If you don't know, say so. Be concise.`,
 				}, 1000)
 			}
 			
-			return { result: `✅ **Task completed: ${myTask.title}**\n\n📝 Summary: ${summary}\n📁 Files created: ${(files_created || []).length}\n📝 Files modified: ${(files_modified || []).length}\n\n${agentConfig.ephemeral ? '👋 You will now self-destruct. Goodbye!' : ''}`, filesCreated: 0 }
+			return { result: `✅ **Task completed: ${myTask.title}**\n\n📝 Summary: ${summary}\n📁 Files created: ${(files_created || []).length}\n📝 Files modified: ${(files_modified || []).length}${reportPath ? `\n📄 Report: ${reportPath}` : ""}\n\n${agentConfig.ephemeral ? '👋 You will now self-destruct. Goodbye!' : ''}`, filesCreated: 0 }
 		}
 
 		case "fail_task": {
@@ -8713,6 +9126,8 @@ If you don't know, say so. Be concise.`,
 			if (!task) {
 				return { result: `❌ Failed to create task. Project may not exist.`, filesCreated: 0 }
 			}
+
+			const briefPath = writeChangeBriefDoc(project, agentConfig.id, task)
 			
 			io.emit("task-created", {
 				projectId: project.id,
@@ -8724,20 +9139,34 @@ If you don't know, say so. Be concise.`,
 				timestamp: Date.now(),
 			})
 			
-			return { result: `✅ **Task created: ${title}**\n\n📋 ID: \`${task.id}\`\n⚡ Priority: ${priority}/10\n📝 ${description.substring(0, 100)}${description.length > 100 ? '...' : ''}\n\nSpawn a worker with \`spawn_worker()\` to execute tasks.`, filesCreated: 0 }
+			return { result: `✅ **Task created: ${title}**\n\n📋 ID: \`${task.id}\`\n⚡ Priority: ${priority}/10\n📝 ${description.substring(0, 100)}${description.length > 100 ? '...' : ''}${briefPath ? `\n📄 Brief: ${briefPath}` : ""}\n\nSpawn a worker with \`spawn_worker()\` to execute tasks.`, filesCreated: 0 }
 		}
 
 		case "list_tasks": {
 			const { status = "all" } = toolInput as { status?: string }
 			const tasks = projectStore.getTasks(project.id)
 			
-			let filteredTasks = tasks
+			// Filter tasks by ownership:
+			// - Workers see tasks from their supervisor (to claim)
+			// - Regular agents see only tasks they created (for their workers)
+			const supervisorId = agentConfig.reportsTo
+			const isWorker = agentConfig.isWorker === true
+			const taskOwnerId = (isWorker && supervisorId) ? supervisorId : agentConfig.id
+			
+			let filteredTasks = tasks.filter(t => t.createdBy === taskOwnerId)
+			const scopeNote = (isWorker && supervisorId)
+				? ` (from your supervisor: ${supervisorId})`
+				: ` (created by you)`
+			
 			if (status !== "all") {
-				filteredTasks = tasks.filter(t => t.status === status)
+				filteredTasks = filteredTasks.filter(t => t.status === status)
 			}
 			
+			const totalTasks = tasks.length
+			
 			if (filteredTasks.length === 0) {
-				return { result: `📋 No tasks found${status !== "all" ? ` with status "${status}"` : ""}.`, filesCreated: 0 }
+				const hasOtherTasks = totalTasks > 0
+				return { result: `📋 No tasks found${status !== "all" ? ` with status "${status}"` : ""}${scopeNote}.${hasOtherTasks ? `\n\n💡 Note: There are ${totalTasks} total tasks in the project pool from all agents.` : ""}`, filesCreated: 0 }
 			}
 			
 			const statusEmoji: Record<string, string> = {
@@ -8757,12 +9186,13 @@ If you don't know, say so. Be concise.`,
 				})
 				.join("\n\n")
 			
-			return { result: `📋 **Task Pool (${filteredTasks.length} tasks):**\n\n${taskList}`, filesCreated: 0 }
+			return { result: `📋 **Task Pool (${filteredTasks.length} tasks${scopeNote}):**\n\n${taskList}`, filesCreated: 0 }
 		}
 		// Society Agent end
 
 		// Society Agent start - spawn_worker implementation
 		case "spawn_worker": {
+			log.info(`[spawn_worker] Called by agentConfig.id=${agentConfig.id}, agentConfig.name=${agentConfig.name}`)
 			const { count = 1 } = toolInput as { count?: number }
 			
 			// Check if we can spawn more workers
@@ -8774,9 +9204,13 @@ If you don't know, say so. Be concise.`,
 				return { result: `⚠️ Cannot spawn more workers. Active: ${activeWorkers}/${maxWorkers}\n\n💡 **TIP:** If workers are stuck from a previous session, run \`reset_tasks()\` to clean them up, then try spawning again.`, filesCreated: 0 }
 			}
 			
-			// Check if there are tasks to work on
-			const availableTasks = projectStore.getAvailableTaskCount(project.id)
-			if (availableTasks === 0) {
+			// Check if there are tasks to work on (only this supervisor's tasks)
+			const myAvailableTasks = projectStore.getAvailableTaskCount(project.id, agentConfig.id)
+			const totalAvailableTasks = projectStore.getAvailableTaskCount(project.id)
+			if (myAvailableTasks === 0) {
+				if (totalAvailableTasks > 0) {
+					return { result: `⚠️ No available tasks created by you (${agentConfig.id}).\n\n📊 There are ${totalAvailableTasks} tasks from other agents in the pool.\n\n💡 Workers only claim tasks from their supervisor. Create tasks first with \`create_task()\` before spawning workers.`, filesCreated: 0 }
+				}
 				return { result: `⚠️ No available tasks in the pool. Create tasks first with \`create_task()\` before spawning workers.`, filesCreated: 0 }
 			}
 			
@@ -8787,7 +9221,10 @@ If you don't know, say so. Be concise.`,
 			
 			for (let i = 0; i < canSpawn; i++) {
 				const workerId = `worker-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
-				const workerName = `Worker ${spawnedWorkers.length + activeWorkers + 1}`
+				// Increment project-level counter for globally unique worker names
+				project.workerSequence = (project.workerSequence || 0) + 1
+				projectStore.save()
+				const workerName = `Worker #${project.workerSequence}`
 				
 				// Build worker system prompt with supervisor's instructions inherited
 				let workerPromptContent = `You are an ephemeral worker agent. Your job is to:
@@ -8823,8 +9260,10 @@ DO NOT spawn more workers or create new tasks - that's the supervisor's job.`
 					homeFolder: agentConfig.homeFolder || "/",
 					systemPrompt: buildFullSystemPrompt(workerPromptContent),
 					ephemeral: true,
+					isWorker: true,
 					reportsTo: agentConfig.id,
 				}
+				log.info(`[spawn_worker] Creating worker ${workerId} with reportsTo=${agentConfig.id}`)
 				
 				// Add worker to project
 				projectStore.addAgent(project.id, workerConfig)
@@ -8868,12 +9307,12 @@ DO NOT spawn more workers or create new tasks - that's the supervisor's job.`
 				})()
 			}
 			
-			const tasksNote = availableTasks > canSpawn 
-				? `\n\n💡 ${availableTasks - canSpawn} more tasks available. Spawn more workers if needed.`
+			const tasksNote = myAvailableTasks > canSpawn 
+				? `\n\n💡 ${myAvailableTasks - canSpawn} more of your tasks available. Spawn more workers if needed.`
 				: ""
 			
 			return { 
-				result: `✅ **Spawned ${spawnedWorkers.length} worker(s)**\n\nWorker IDs:\n${spawnedWorkers.map(w => `  - ${w}`).join('\n')}\n\nThey will claim tasks and start working autonomously.${tasksNote}`, 
+				result: `✅ **Spawned ${spawnedWorkers.length} worker(s)**\n\nWorker IDs:\n${spawnedWorkers.map(w => `  - ${w}`).join('\n')}\n\nThey will claim tasks from you (${agentConfig.id}) and start working autonomously.${tasksNote}`, 
 				filesCreated: 0 
 			}
 		}
@@ -9253,7 +9692,7 @@ ${context || "No additional context."}
 			try {
 				const delegateApiKey = apiKey || process.env.ANTHROPIC_API_KEY || ""
 				
-				log.info(`[delegate_task] Target agent home: ${targetHomeDir}`)
+				log.info(`[delegate_task] From ${agentConfig.id} to ${targetAgent.id}, calling handleSupervisorChat with targetAgent.id=${targetAgent.id}`)
 				
 				const result = await handleSupervisorChat(
 					delegationMessage,
@@ -9380,6 +9819,8 @@ async function handleSupervisorChat(
 	delegationResults: Array<{ agentId: string; agentName: string; filesCreated: number; responseLength: number }>
 	totalFilesCreated: number
 }> {
+	log.info(`[handleSupervisorChat] ENTRY: supervisorConfig.id=${supervisorConfig.id}, supervisorConfig.name=${supervisorConfig.name}`)
+	
 	// Society Agent - Reset per-session budget for this agent
 	usageTracker.resetAgentSession(supervisorConfig.id)
 
@@ -9604,10 +10045,16 @@ async function handleSupervisorChat(
 	// prompt yet, continue for one final iteration with a summary request.
 	let summaryRequested = false
 	const MIN_TOOLS_FOR_SUMMARY = 5
+	let hallucinationWarnCount = 0
+	let fakeImplWarnCount = 0         // Guard: agent described without writing/executing
+	let prematureWarnCount = 0        // Guard: agent stopped with suspiciously few write actions
+	let verificationRequestCount = 0  // Guard: ask agent to verify before requesting summary
+	const MAX_GUARD_RETRIES = 3       // How many times each guard can push back before giving up
+	// Legacy aliases kept for compatibility with read-only check below
 	let hallucinationWarned = false
-	let fakeImplWarned = false        // Guard: agent described without writing/executing
-	let prematureWarned = false       // Guard: agent stopped with suspiciously few write actions
-	let verificationRequested = false // Guard: ask agent to verify before requesting summary
+	let fakeImplWarned = false
+	let prematureWarned = false
+	let verificationRequested = false
 	let writeActionsCount = 0         // Successful write_file / patch_file calls
 	let executeActionsCount = 0       // Successful run_command calls
 	const actLoopStartTime = Date.now()
@@ -9937,34 +10384,38 @@ async function handleSupervisorChat(
 					continue
 				}
 				// Society Agent - Hallucination guard: agent made claims without using any tools
-				if (!hallucinationWarned && actTotalToolCalls === 0 && iteration === 0) {
+				if (actTotalToolCalls === 0 && iteration === 0 && hallucinationWarnCount < MAX_GUARD_RETRIES) {
+					hallucinationWarnCount++
 					hallucinationWarned = true
-					log.warn(`[Supervisor] ${supervisorConfig.name} responded with 0 tool calls — pushing back`)
+					log.warn(`[Supervisor] ${supervisorConfig.name} responded with 0 tool calls — pushing back (attempt ${hallucinationWarnCount})`)
 					messages.push({ role: "assistant", content: textContent || "" })
-					messages.push({ role: "user", content: "You haven't used any tools yet. If you made claims about files, processes, or the state of the system, you must verify them with tools first. Please actually check using read_file, run_command, http_request, or get_processes — then implement any needed fix." })
+					messages.push({ role: "user", content: `You haven't used any tools yet (reminder ${hallucinationWarnCount}/${MAX_GUARD_RETRIES}). If you made claims about files, processes, or the state of the system, you must verify them with tools first. Please actually check using read_file, run_command, http_request, or get_processes — then implement any needed fix.` })
 					continue
 				}
 				// Society Agent - Fake Implementation Guard: many reads, zero writes/executes
-				if (!fakeImplWarned && actTotalToolCalls >= 2 && writeActionsCount === 0 && executeActionsCount === 0 && iteration > 0) {
+				if (actTotalToolCalls >= 2 && writeActionsCount === 0 && executeActionsCount === 0 && iteration > 0 && fakeImplWarnCount < MAX_GUARD_RETRIES) {
+					fakeImplWarnCount++
 					fakeImplWarned = true
-					log.warn(`[Supervisor] ${supervisorConfig.name} end_turn after ${actTotalToolCalls} reads with 0 writes/executes — fake implementation suspected`)
+					log.warn(`[Supervisor] ${supervisorConfig.name} end_turn after ${actTotalToolCalls} reads with 0 writes/executes — fake implementation (attempt ${fakeImplWarnCount})`)
 					messages.push({ role: "assistant", content: textContent || "" })
-					messages.push({ role: "user", content: "You described a solution but did not implement it. You have read files but made no actual changes. Please use write_file or run_command to implement your solution now." })
+					messages.push({ role: "user", content: `You described a solution but did not implement it (reminder ${fakeImplWarnCount}/${MAX_GUARD_RETRIES}). You have read files but made no actual changes. Use write_file or run_command to implement your solution NOW. Stop investigating and start writing code.` })
 					continue
 				}
 				// Society Agent - Premature Success Guard: stopped with very few total tool calls
-				if (!prematureWarned && actTotalToolCalls > 0 && actTotalToolCalls < 3 && iteration >= 1) {
+				if (actTotalToolCalls > 0 && actTotalToolCalls < 3 && iteration >= 1 && prematureWarnCount < MAX_GUARD_RETRIES) {
+					prematureWarnCount++
 					prematureWarned = true
-					log.warn(`[Supervisor] ${supervisorConfig.name} stopped after only ${actTotalToolCalls} tool calls — premature success suspected`)
+					log.warn(`[Supervisor] ${supervisorConfig.name} stopped after only ${actTotalToolCalls} tool calls — premature success (attempt ${prematureWarnCount})`)
 					messages.push({ role: "assistant", content: textContent || "" })
-					messages.push({ role: "user", content: "The task appears incomplete — you stopped after very few actions. Please verify your implementation actually works, check for remaining errors, and ensure the task is fully done." })
+					messages.push({ role: "user", content: `The task appears incomplete — you stopped after very few actions (reminder ${prematureWarnCount}/${MAX_GUARD_RETRIES}). Please verify your implementation actually works, check for remaining errors, and ensure the task is fully done.` })
 					continue
 				}
 				// Society Agent - Inject summary request if agent did real work without summarising.
 				// Skip if the response already looks like a summary (avoids double-summary with models that summarise naturally).
 				const looksLikeSummary = /#{1,3}\s*(summary|what was built|what i (did|built|completed)|here.{0,10}(what|summary))/i.test(textContent || "")
 				// Society Agent - Verification Phase Guard: verify before summarising
-				if (!verificationRequested && actTotalToolCalls >= MIN_TOOLS_FOR_SUMMARY && !looksLikeSummary) {
+				if (!verificationRequested && actTotalToolCalls >= MIN_TOOLS_FOR_SUMMARY && !looksLikeSummary && verificationRequestCount < MAX_GUARD_RETRIES) {
+					verificationRequestCount++
 					verificationRequested = true
 					log.info(`[Supervisor] ${supervisorConfig.name} requesting verification pass before summary`)
 					messages.push({ role: "assistant", content: textContent || "" })
@@ -10090,6 +10541,9 @@ async function handleSupervisorChat(
 				// io.emit("agent-message", { ... toolDisplay ... })
 
 				const toolStartTime = Date.now()
+				if (toolName === "spawn_worker") {
+					log.info(`[handleSupervisorChat] spawn_worker: supervisorConfig.id=${supervisorConfig.id}, supervisorConfig.name=${supervisorConfig.name}`)
+				}
 				agentActivityLogger.logToolCall(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", toolName, toolInput, iteration, actCallIndex)
 				const { result, filesCreated } = await executeSupervisorTool(
 					toolName,
@@ -10375,10 +10829,11 @@ async function handleSupervisorChat(
 		// Society Agent start - Auto-continue on max_tokens for supervisor
 		if (toolBlocks.length === 0) {
 			if (finalMessage.stop_reason === "end_turn") {
-				// Society Agent - Hallucination guard: model answered with 0 tools on first iteration
-				if (!hallucinationWarned && actTotalToolCalls === 0 && iteration === 0) {
+				// Society Agent - Hallucination guard: model answered with 0 tools
+				if (actTotalToolCalls === 0 && iteration === 0 && hallucinationWarnCount < MAX_GUARD_RETRIES) {
+					hallucinationWarnCount++
 					hallucinationWarned = true
-					log.warn(`[Supervisor] ${supervisorConfig.name} end_turn with 0 tool calls on iteration 0 — suspected hallucination, pushing back`)
+					log.warn(`[Supervisor] ${supervisorConfig.name} end_turn with 0 tool calls on iteration 0 — suspected hallucination, pushing back (attempt ${hallucinationWarnCount})`)
 					io.emit("agent-message", {
 						agentId: supervisorConfig.id,
 						agentName: supervisorConfig.name,
@@ -10388,7 +10843,7 @@ async function handleSupervisorChat(
 						isStreaming: false,
 					})
 					messages.push({ role: "assistant", content: finalMessage.content })
-					messages.push({ role: "user", content: "You haven't used any tools yet. Please actually use the tools available to you (read_file, write_file, execute_command, etc.) to complete the task. Don't just describe what you would do — do it." })
+					messages.push({ role: "user", content: `You haven't used any tools yet (reminder ${hallucinationWarnCount}/${MAX_GUARD_RETRIES}). Please actually use the tools available to you (read_file, write_file, run_command, etc.) to complete the task. Don't just describe what you would do — do it.` })
 					continue
 				}
 				// Society Agent - Auto-continue if agent only read files without making changes
@@ -10410,28 +10865,31 @@ async function handleSupervisorChat(
 					}
 				}
 				// Society Agent - Fake Implementation Guard: many reads, zero writes/executes
-				if (!fakeImplWarned && actTotalToolCalls >= 2 && writeActionsCount === 0 && executeActionsCount === 0 && iteration > 0) {
+				if (actTotalToolCalls >= 2 && writeActionsCount === 0 && executeActionsCount === 0 && iteration > 0 && fakeImplWarnCount < MAX_GUARD_RETRIES) {
+					fakeImplWarnCount++
 					fakeImplWarned = true
-					log.warn(`[Supervisor] ${supervisorConfig.name} end_turn after ${actTotalToolCalls} reads with 0 writes/executes — fake implementation suspected`)
-					io.emit("agent-message", { agentId: supervisorConfig.id, agentName: supervisorConfig.name, projectId: project.id, message: "\n*[You described a solution but made no file changes. Implement it now.]*\n", timestamp: Date.now(), isStreaming: false })
+					log.warn(`[Supervisor] ${supervisorConfig.name} end_turn after ${actTotalToolCalls} reads with 0 writes/executes — fake implementation (attempt ${fakeImplWarnCount})`)
+					io.emit("agent-message", { agentId: supervisorConfig.id, agentName: supervisorConfig.name, projectId: project.id, message: `\n*[You described a solution but made no file changes. Implement it now (attempt ${fakeImplWarnCount}/${MAX_GUARD_RETRIES}).]*\n`, timestamp: Date.now(), isStreaming: false })
 					messages.push({ role: "assistant", content: finalMessage.content })
-					messages.push({ role: "user", content: "You described a solution but did not implement it. You have read files but made no actual changes. Please use write_file or run_command to implement your solution now." })
+					messages.push({ role: "user", content: `You described a solution but did not implement it (reminder ${fakeImplWarnCount}/${MAX_GUARD_RETRIES}). You have read files but made no actual changes. Use write_file or run_command to implement your solution NOW. Stop investigating and start writing code.` })
 					continue
 				}
 				// Society Agent - Premature Success Guard: stopped with very few total tool calls
-				if (!prematureWarned && actTotalToolCalls > 0 && actTotalToolCalls < 3 && iteration >= 1) {
+				if (actTotalToolCalls > 0 && actTotalToolCalls < 3 && iteration >= 1 && prematureWarnCount < MAX_GUARD_RETRIES) {
+					prematureWarnCount++
 					prematureWarned = true
-					log.warn(`[Supervisor] ${supervisorConfig.name} stopped after only ${actTotalToolCalls} tool calls — premature success suspected`)
-					io.emit("agent-message", { agentId: supervisorConfig.id, agentName: supervisorConfig.name, projectId: project.id, message: "\n*[Task appears incomplete — very few actions taken. Verifying...]*\n", timestamp: Date.now(), isStreaming: false })
+					log.warn(`[Supervisor] ${supervisorConfig.name} stopped after only ${actTotalToolCalls} tool calls — premature success (attempt ${prematureWarnCount})`)
+					io.emit("agent-message", { agentId: supervisorConfig.id, agentName: supervisorConfig.name, projectId: project.id, message: `\n*[Task appears incomplete — very few actions taken. Verifying... (attempt ${prematureWarnCount}).]*\n`, timestamp: Date.now(), isStreaming: false })
 					messages.push({ role: "assistant", content: finalMessage.content })
-					messages.push({ role: "user", content: "The task appears incomplete — you stopped after very few actions. Please verify your implementation actually works, check for remaining errors, and ensure the task is fully done." })
+					messages.push({ role: "user", content: `The task appears incomplete — you stopped after very few actions (reminder ${prematureWarnCount}/${MAX_GUARD_RETRIES}). Please verify your implementation actually works, check for remaining errors, and ensure the task is fully done.` })
 					continue
 				}
 				// Society Agent - Inject summary request if agent did real work without summarising
 				const lastText = finalMessage.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map(b => b.text).join("\n")
 				const looksLikeSummary = /#{1,3}\s*(summary|what was built|what I built|what was done|completed|accomplished|implemented|changes made|work done)/i.test(lastText)
 				// Society Agent - Verification Phase Guard: verify before summarising
-				if (!verificationRequested && actTotalToolCalls >= MIN_TOOLS_FOR_SUMMARY && !looksLikeSummary) {
+				if (!verificationRequested && actTotalToolCalls >= MIN_TOOLS_FOR_SUMMARY && !looksLikeSummary && verificationRequestCount < MAX_GUARD_RETRIES) {
+					verificationRequestCount++
 					verificationRequested = true
 					log.info(`[Supervisor] ${supervisorConfig.name} requesting verification pass before summary`)
 					io.emit("agent-message", { agentId: supervisorConfig.id, agentName: supervisorConfig.name, projectId: project.id, message: "\n*[Requesting verification before summary...]*\n", timestamp: Date.now(), isStreaming: false })
@@ -10776,6 +11234,41 @@ async function handleSupervisorChat(
 	agentActivityLogger.logLoopExit(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", actLoopExitReason as any, iterationCount, actTotalToolCalls, actLoopStartTime)
 	// Society Agent end
 
+	// Society Agent - Pending-task auto-continue
+	// If the loop exited normally but the agent was working on tasks that aren't done,
+	// auto-fire a follow-up round so it doesn't silently go idle.
+	const agentWasWorking = actTotalToolCalls > 0 && actLoopExitReason !== "user_stopped"
+	if (agentWasWorking) {
+		const pendingTasks = projectStore.getTasks(project.id)
+			.filter(t => t.status === "available" || (t.status === "in-progress" && t.claimedBy === supervisorConfig.id))
+		const inProgressTasks = pendingTasks.filter(t => t.status === "in-progress")
+		const availableTasks = pendingTasks.filter(t => t.status === "available")
+		if (pendingTasks.length > 0) {
+			const taskList = pendingTasks.slice(0, 5).map(t => `- [${t.status}] ${t.title}`).join("\n")
+			const continueMsg = inProgressTasks.length > 0
+				? `You have an in-progress task that wasn't completed. Please continue:\n${taskList}`
+				: `There are ${availableTasks.length} pending task(s) in the pool. Please continue working:\n${taskList}`
+			log.info(`[Supervisor] ${supervisorConfig.name} has ${pendingTasks.length} pending task(s) after loop exit — auto-continuing`)
+			io.emit("agent-message", {
+				agentId: supervisorConfig.id,
+				agentName: supervisorConfig.name,
+				projectId: project.id,
+				message: `\n*[${pendingTasks.length} task(s) still pending — continuing automatically...]*\n`,
+				timestamp: Date.now(),
+				isStreaming: false,
+			})
+			// Re-invoke in background to avoid deep recursion; fire-and-forget with a small delay
+			setTimeout(async () => {
+				try {
+					await handleSupervisorChat(supervisorConfig, project, continueMsg, undefined, apiKey, io)
+				} catch (err: any) {
+					log.error(`[Supervisor] ${supervisorConfig.name} auto-continue error:`, err)
+				}
+			}, 500)
+		}
+	}
+	// Society Agent end
+
 	return { fullResponse, delegationResults, totalFilesCreated }
 }
 // Society Agent end
@@ -10849,17 +11342,38 @@ Your job is to:
 
 You will self-destruct after completing or failing. Focus on your task.`
 
+	const isRetryWorker = workerConfig.role?.includes("auto-retry")
 	const messages: Anthropic.MessageParam[] = [
-		{ role: "user", content: "You have been spawned as an ephemeral worker. Start by claiming a task from the pool." }
+		{
+			role: "user",
+			content: isRetryWorker
+				? `You are resuming an unfinished task. Call \`claim_task()\` now to reclaim it, then review the progress notes in your instructions and continue from where the previous worker left off — do NOT redo work already done.`
+				: "You have been spawned as an ephemeral worker. Start by claiming a task from the pool.",
+		},
 	]
 	
 	let fullResponse = ""
 	const MAX_ITERATIONS = 100 // Society Agent - increased from 20 to allow workers to complete more complex tasks
 	let taskCompleted = false
+	let loopExitReason: "max_iterations" | "stopped_by_user" | "model_stopped" | "too_many_errors" = "max_iterations"
 	let hasWrittenFiles = false // Track if agent made any modifications
-	const READ_ONLY_TOOLS = new Set(["read_project_file", "list_project_files", "read_file", "list_dir", "get_team_info"])
+	const READ_ONLY_TOOLS = new Set(["read_project_file", "list_project_files", "read_file", "list_dir", "get_team_info", "list_files", "search_in_files"])
 	let consecutiveReadOnlyStops = 0 // Track consecutive stops after only reading
 	let actualIterations = 0 // Track actual iterations for activity logging
+
+	// Investigation stall detection — prevent endless read-only loops
+	let consecutiveReadOnlyIterations = 0
+	const INVESTIGATION_STALL_THRESHOLD = 4 // inject redirect after this many pure-read iterations
+	const recentToolCallKeys: string[] = [] // rolling window of "toolName:argHash" to detect duplicate calls
+	const MAX_RECENT_TOOL_KEYS = 12
+
+	function toolCallKey(name: string, input: Record<string, any>): string {
+		const sig = JSON.stringify(Object.entries(input).sort())
+		return `${name}:${sig.slice(0, 80)}`
+	}
+	function countDuplicateKey(key: string): number {
+		return recentToolCallKeys.filter(k => k === key).length
+	}
 	
 	for (let iteration = 0; iteration < MAX_ITERATIONS && !taskCompleted; iteration++) {
 		actualIterations = iteration + 1
@@ -10867,6 +11381,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 		// Society Agent - Check if worker should stop
 		if (stoppedAgents.has(workerId)) {
 			log.info(`[Worker ${workerName}] Stop requested by user`)
+			loopExitReason = "stopped_by_user"
 			stoppedAgents.delete(workerId)
 			io.emit("agent-message", {
 				agentId: workerId,
@@ -10897,6 +11412,25 @@ You will self-destruct after completing or failing. Focus on your task.`
 
 		log.info(`[Worker ${workerName}] Iteration ${actualIterations}`)
 		
+		// Society Agent - investigation stall redirect
+		if (consecutiveReadOnlyIterations >= INVESTIGATION_STALL_THRESHOLD) {
+			consecutiveReadOnlyIterations = 0
+			const stallMsg = `⚠️ You have been investigating for ${INVESTIGATION_STALL_THRESHOLD}+ iterations without making any changes. Stop analyzing and ACT NOW:\n` +
+				`- If you know what to fix, use write_file/run_command to fix it immediately.\n` +
+				`- If you are truly blocked, call fail_task("QUESTION: <specific blocker>") so a supervisor can help.\n` +
+				`Do NOT read more files or run more queries — implement the fix or fail the task.`
+			messages.push({ role: "user", content: stallMsg })
+			io.emit("agent-message", {
+				agentId: workerId,
+				agentName: workerName,
+				projectId: project.id,
+				message: stallMsg,
+				timestamp: Date.now(),
+				isStreaming: false,
+			})
+			log.warn(`[Worker ${workerName}] Investigation stall detected — injecting redirect`)
+		}
+
 		// Emit progress
 		io.emit("worker-progress", {
 			projectId: project.id,
@@ -10994,6 +11528,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 					}
 				}
 				messages.push({ role: "assistant", content: textContent })
+				loopExitReason = "model_stopped"
 				break
 			}
 			
@@ -11005,7 +11540,24 @@ You will self-destruct after completing or failing. Focus on your task.`
 				const tcAny = tc as any
 				const toolName = tcAny.function?.name || tcAny.name
 				const toolInput = safeParseToolArgs(tcAny.function?.arguments || tcAny.arguments)
-				
+
+				// Society Agent - duplicate call detection
+				const tKeyOR = toolCallKey(toolName, toolInput)
+				recentToolCallKeys.push(tKeyOR)
+				if (recentToolCallKeys.length > MAX_RECENT_TOOL_KEYS) recentToolCallKeys.shift()
+				const dupCountOR = countDuplicateKey(tKeyOR)
+				if (dupCountOR >= 3) {
+					io.emit("agent-message", {
+						agentId: workerId,
+						agentName: workerName,
+						projectId: project.id,
+						message: `⚠️ You have called \`${toolName}\` with the same arguments ${dupCountOR} times already. You already have this information. Stop re-reading and act: write the fix or call fail_task with a specific question.`,
+						timestamp: Date.now(),
+						isStreaming: false,
+					})
+					log.warn(`[Worker ${workerName}] Duplicate tool call detected: ${tKeyOR} (${dupCountOR}x)`)
+				}
+
 				// Activity logging: log tool call
 				agentActivityLogger.logToolCall(project.id, workerId, project.folder, workerHomeFolder, toolName, toolInput, iteration, totalToolCalls)
 				const toolStartTime = Date.now()
@@ -11066,7 +11618,15 @@ You will self-destruct after completing or failing. Focus on your task.`
 					taskCompleted = true
 				}
 			}
-			
+
+			// Society Agent — track investigation stall per iteration (OpenRouter path)
+			const iterationWasReadOnlyOR = toolCalls.every((tc: any) => READ_ONLY_TOOLS.has(tc.function?.name || tc.name))
+			if (iterationWasReadOnlyOR) {
+				consecutiveReadOnlyIterations++
+			} else {
+				consecutiveReadOnlyIterations = 0
+			}
+
 			messages.push({ role: "user", content: toolResults.map(r => r.content).join("\n\n") })
 			
 		} else if (anthropic) {
@@ -11139,6 +11699,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 			}
 			
 			if (toolBlocks.length === 0) {
+				loopExitReason = "model_stopped"
 				break
 			}
 			
@@ -11149,7 +11710,26 @@ You will self-destruct after completing or failing. Focus on your task.`
 			for (const toolBlock of toolBlocks) {
 				const toolName = toolBlock.name
 				const toolInput = toolBlock.input as Record<string, any>
-				
+
+				// Society Agent - duplicate call detection
+				const tKey = toolCallKey(toolName, toolInput)
+				recentToolCallKeys.push(tKey)
+				if (recentToolCallKeys.length > MAX_RECENT_TOOL_KEYS) recentToolCallKeys.shift()
+				const dupCount = countDuplicateKey(tKey)
+				if (dupCount >= 3) {
+					// Inject a one-time redirect into the tool result to break the loop
+					const dupMsg = `⚠️ You have called \`${toolName}\` with the same arguments ${dupCount} times already. You already have this information. Stop re-reading and act: write the fix or call fail_task with a specific question.`
+					io.emit("agent-message", {
+						agentId: workerId,
+						agentName: workerName,
+						projectId: project.id,
+						message: dupMsg,
+						timestamp: Date.now(),
+						isStreaming: false,
+					})
+					log.warn(`[Worker ${workerName}] Duplicate tool call detected: ${tKey} (${dupCount}x)`)
+				}
+
 				// Activity logging: log tool call
 				agentActivityLogger.logToolCall(project.id, workerId, project.folder, workerHomeFolder, toolName, toolInput, iteration, totalToolCalls)
 				const toolStartTime = Date.now()
@@ -11214,7 +11794,15 @@ You will self-destruct after completing or failing. Focus on your task.`
 					taskCompleted = true
 				}
 			}
-			
+
+			// Society Agent — track investigation stall per iteration
+			const iterationWasReadOnly = toolBlocks.every(tb => READ_ONLY_TOOLS.has(tb.name))
+			if (iterationWasReadOnly) {
+				consecutiveReadOnlyIterations++
+			} else {
+				consecutiveReadOnlyIterations = 0
+			}
+
 			messages.push({ role: "user", content: toolResults })
 		}
 		} catch (iterErr: any) {
@@ -11238,6 +11826,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 			// Continue to next iteration or break if too many errors
 			if (iteration > 2) {
 				log.error(`[Worker ${workerName}] Too many errors, giving up`)
+				loopExitReason = "too_many_errors"
 				io.emit("agent-message", {
 					agentId: workerId,
 					agentName: workerName,
@@ -11252,19 +11841,227 @@ You will self-destruct after completing or failing. Focus on your task.`
 	}
 	
 	// Activity logging: log loop exit
-	const exitReason = taskCompleted ? "end_turn" : "max_iterations"
+	const exitReason = taskCompleted ? "end_turn" : loopExitReason
 	agentActivityLogger.logLoopExit(project.id, workerId, project.folder, workerHomeFolder, exitReason, actualIterations, totalToolCalls, workerStartTime, taskCompleted ? "Task completed" : "Worker loop ended")
 	
 	// Society Agent - Warn if worker hit max iterations without completing
 	if (!taskCompleted) {
-		log.warn(`[Worker ${workerName}] Hit max iterations (${MAX_ITERATIONS}) without completing task`)
+		const reasonLabel =
+			loopExitReason === "stopped_by_user"
+				? "stopped by user"
+				: loopExitReason === "model_stopped"
+				? "model stopped before complete_task/fail_task"
+				: loopExitReason === "too_many_errors"
+				? "too many internal errors"
+				: `hit max iterations (${MAX_ITERATIONS})`
+		log.warn(`[Worker ${workerName}] Exited without completion: ${reasonLabel}`)
+		const orphanedTask = projectStore
+			.getTasks(project.id)
+			.find((t) => t.claimedBy === workerId && ["claimed", "in-progress"].includes(t.status))
+		if (orphanedTask) {
+			// Save worker's conversation output as progress notes for the retry worker
+			if (fullResponse && fullResponse.trim().length > 50) {
+				const MAX_NOTES = 3500
+				const trimmedResponse = fullResponse.length > MAX_NOTES
+					? "...(earlier output trimmed)...\n\n" + fullResponse.slice(fullResponse.length - MAX_NOTES)
+					: fullResponse
+				projectStore.appendTaskProgressNotes(project.id, orphanedTask.id,
+					`## Progress from ${workerName} (stopped: ${loopExitReason})\n\n${trimmedResponse}`)
+			}
+
+			const failReason =
+				loopExitReason === "stopped_by_user"
+					? `Worker stopped by user before completion. Task auto-returned to pool.`
+					: loopExitReason === "model_stopped"
+					? `Worker stopped before calling complete_task/fail_task. Task auto-returned to pool.`
+					: loopExitReason === "too_many_errors"
+					? `Worker aborted after repeated internal errors. Task auto-returned to pool.`
+					: `Worker hit max iterations without completion. Task auto-returned to pool.`
+			projectStore.failTask(project.id, orphanedTask.id, failReason)
+			const failedTask = projectStore.getTask(project.id, orphanedTask.id)
+			io.emit("task-failed", {
+				projectId: project.id,
+				taskId: orphanedTask.id,
+				agentId: workerId,
+				taskTitle: orphanedTask.title,
+				reason: failReason,
+				timestamp: Date.now(),
+			})
+
+			// Auto-recovery: spawn replacement worker while retries remain.
+			const supervisorId = workerConfig.reportsTo
+			const canAutoRetry = loopExitReason !== "stopped_by_user" && !!supervisorId
+			if (canAutoRetry && failedTask) {
+				const retryCount = failedTask.retryCount || 0
+				const maxRetries = failedTask.maxRetries ?? 2
+				const retryKey = autoRetryKey(project.id, failedTask.id)
+				const previous = autoRetryTracker.get(retryKey)
+				const now = Date.now()
+				const sameReason = previous?.lastReason === loopExitReason
+				const consecutiveSameReason = sameReason ? (previous?.consecutiveSameReason || 0) + 1 : 1
+				autoRetryTracker.set(retryKey, {
+					active: previous?.active || false,
+					lastRetryAt: previous?.lastRetryAt || 0,
+					consecutiveSameReason,
+					lastReason: loopExitReason,
+				})
+
+				const hasRetryCapacity = retryCount <= maxRetries
+				const retryActive = previous?.active === true
+				const cooldownRemainingMs = previous?.lastRetryAt ? AUTO_RETRY_COOLDOWN_MS - (now - previous.lastRetryAt) : 0
+				const inCooldown = cooldownRemainingMs > 0
+				const repeatedStopPattern = consecutiveSameReason >= 3
+
+				if (!hasRetryCapacity) {
+					autoRetryTracker.delete(retryKey)
+					io.emit("agent-message", {
+						agentId: supervisorId!,
+						agentName: "System",
+						projectId: project.id,
+						message: `⚠️ Task \`${failedTask.id}\` exhausted auto-retries (${retryCount}/${maxRetries}). Consider splitting it into smaller tasks before retrying again.`,
+						timestamp: Date.now(),
+						isStreaming: false,
+					})
+				} else if (hasRetryCapacity && !retryActive && !inCooldown && !repeatedStopPattern) {
+					const supervisor = projectStore.getAgent(project.id, supervisorId!)
+					const activeWorkers = projectStore.getActiveWorkerCount(project.id)
+					const maxWorkers = (project as any).maxConcurrentWorkers || 5
+					if (supervisor && activeWorkers < maxWorkers) {
+						autoRetryTracker.set(retryKey, {
+							active: true,
+							lastRetryAt: now,
+							consecutiveSameReason,
+							lastReason: loopExitReason,
+						})
+						const retryWorkerId = `worker-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
+						project.workerSequence = (project.workerSequence || 0) + 1
+						projectStore.save()
+						const retryWorkerName = `Worker #${project.workerSequence}`
+
+						let retryPrompt = `You are an ephemeral worker agent continuing work that a previous worker started but did not finish.
+
+## Your job
+1. Call \`claim_task()\` to claim the task (task ID: \`${failedTask.id}\` — "${failedTask.title}")
+2. **Read the progress notes below carefully** — do NOT repeat work already done
+3. Pick up from where the previous worker left off and complete the task
+4. You MUST call \`complete_task(...)\` or \`fail_task(reason)\` before stopping
+5. If you are blocked on something specific, call \`fail_task("QUESTION: <exact question>")\` — don't just stop
+
+## CRITICAL: Do not re-investigate what is already known. Proceed to act.`
+
+						if (failedTask.progressNotes) {
+							retryPrompt += `\n\n## What the previous worker did/discovered\n${failedTask.progressNotes}`
+						}
+
+						if (supervisor.customInstructions) {
+							retryPrompt += `\n\n## Inherited Instructions from Supervisor\n${supervisor.customInstructions}`
+						}
+
+						const retryWorkerConfig: ProjectAgentConfig = {
+							id: retryWorkerId,
+							name: retryWorkerName,
+							role: "Ephemeral worker - auto-retry",
+							homeFolder: supervisor.homeFolder || "/",
+							systemPrompt: buildFullSystemPrompt(retryPrompt),
+							ephemeral: true,
+							isWorker: true,
+							reportsTo: supervisor.id,
+						}
+
+						projectStore.addAgent(project.id, retryWorkerConfig)
+						io.emit("worker-spawned", {
+							projectId: project.id,
+							workerId: retryWorkerId,
+							workerName: retryWorkerName,
+							spawnedBy: supervisor.id,
+							timestamp: Date.now(),
+						})
+						io.emit("agent-message", {
+							agentId: supervisor.id,
+							agentName: supervisor.name,
+							projectId: project.id,
+							message: `🔁 Auto-retry ${retryCount}/${maxRetries}: spawned ${retryWorkerName} for task \`${failedTask.id}\``,
+							timestamp: Date.now(),
+							isStreaming: false,
+						})
+
+						;(async () => {
+							try {
+								await runEphemeralWorker(retryWorkerConfig, project, apiKey, io)
+							} catch (err: any) {
+								log.error(`[Worker ${retryWorkerId}] Auto-retry worker error:`, err)
+							} finally {
+								const latest = autoRetryTracker.get(retryKey)
+								if (latest) {
+									autoRetryTracker.set(retryKey, {
+										...latest,
+										active: false,
+									})
+								}
+							}
+						})()
+					}
+				} else {
+					const supervisor = projectStore.getAgent(project.id, supervisorId!)
+					if (supervisor) {
+						if (retryActive) {
+							io.emit("agent-message", {
+								agentId: supervisor.id,
+								agentName: supervisor.name,
+								projectId: project.id,
+								message: `⏳ Auto-retry skipped for task \`${failedTask.id}\`: a retry worker is already active.`,
+								timestamp: Date.now(),
+								isStreaming: false,
+							})
+						} else if (inCooldown) {
+							io.emit("agent-message", {
+								agentId: supervisor.id,
+								agentName: supervisor.name,
+								projectId: project.id,
+								message: `⏳ Auto-retry cooling down for task \`${failedTask.id}\` (${Math.ceil(cooldownRemainingMs / 1000)}s remaining).`,
+								timestamp: Date.now(),
+								isStreaming: false,
+							})
+						} else if (repeatedStopPattern) {
+							io.emit("agent-message", {
+								agentId: supervisor.id,
+								agentName: supervisor.name,
+								projectId: project.id,
+								message: `⚠️ Auto-retry paused for task \`${failedTask.id}\`: same stop reason repeated ${consecutiveSameReason} times (${loopExitReason}). Consider splitting the task.`,
+								timestamp: Date.now(),
+								isStreaming: false,
+							})
+						}
+					}
+				}
+			}
+			log.warn(`[Worker ${workerName}] Auto-failed orphaned task ${orphanedTask.id}`)
+		}
 		io.emit("agent-added", {
 			type: "system",
 			agentId: workerId,
 			projectId: project.id,
-			message: `⚠️ Worker ${workerName} hit max iterations (${MAX_ITERATIONS}). Task may be incomplete. Consider spawning another worker or simplifying the task.`,
+			message:
+				loopExitReason === "stopped_by_user"
+					? `⚠️ Worker ${workerName} was stopped by user. Task was returned to the pool.`
+					: loopExitReason === "model_stopped"
+					? `⚠️ Worker ${workerName} stopped before finalizing the task. Task was returned to the pool.`
+					: loopExitReason === "too_many_errors"
+					? `⚠️ Worker ${workerName} aborted after repeated errors. Task was returned to the pool.`
+					: `⚠️ Worker ${workerName} hit max iterations (${MAX_ITERATIONS}). Task was returned to the pool.`,
 			timestamp: Date.now(),
 		})
+	}
+
+	if (workerConfig.ephemeral && !taskCompleted) {
+		projectStore.removeAgent(project.id, workerId)
+		io.emit("agent-deleted", {
+			projectId: project.id,
+			agentId: workerId,
+			reason: "worker exited without completion",
+			timestamp: Date.now(),
+		})
+		log.info(`[Worker ${workerName}] Removed after abnormal exit`)
 	}
 	
 	// Emit worker finished
@@ -11369,6 +12166,45 @@ This ensures files are automatically saved in your project folder. Do NOT just d
 **Agent configuration:** \`get_agent_info(id)\` · \`set_agent_instructions(id, instructions, mode)\`
 **Other agents (${siblingAgents.length}):** ${siblingAgents.length > 0 ? siblingAgents.map(a => `${a.id} (${a.name})`).join(" · ") : "none yet"}
 - Ephemeral: best for one-off tasks · Persistent: best for ongoing roles with memory`
+
+	fullPrompt += `\n\n## Idle Status-Check Protocol (Hard Rule)
+If the user asks to check whether you have pending work (examples: "any work?", "check tasks", "am I idle?"):
+
+1. Call \`read_inbox\`
+2. Call \`list_tasks\`
+3. Optionally read local \`PLAN.md\` only for brief status summary
+4. If no pending assigned work exists, report "idle and waiting for new tasks" and STOP
+
+When no pending work exists, you MUST NOT:
+- run ad-hoc verification commands (TypeScript/test/http endpoint sweeps)
+- run process or git diagnostics unless explicitly requested
+- create tasks for verification-only work
+- spawn workers for status checks
+- continue with implementation verification after reporting idle
+
+Only perform verification in idle mode when the user explicitly requests verification/health checks.`
+
+	fullPrompt += `\n\n## Report Mode and Duplicate Prompt Handling
+When the user asks for a report/status summary:
+
+1. Perform one evidence-gathering pass
+2. Deliver one consolidated report
+3. Stop and wait for the next instruction
+
+In report mode, do NOT:
+- spawn workers
+- create task-pool tasks
+- restart broad rediscovery after reporting
+
+If the same or near-identical prompt appears again in the same session:
+- do not repeat full analysis
+- reference prior report context
+- ask whether to refresh data or proceed to implementation
+
+If user says "complete/fix all you found":
+- switch to execution mode
+- convert findings into a prioritized fix list
+- re-read only files needed for selected fixes (no full rediscovery sweep).`
 
 	if (isSupervisor) {
 		const reportNames = directReports.map(a => `${a.id} (${a.name}, folder: ${projectStore.agentHomeDir(project.id, a.id)})`).join("\n  - ")
@@ -11537,8 +12373,32 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 		}
 
 		const { description, attachments } = req.body
+		const requestId = typeof req.body.requestId === "string" ? req.body.requestId.trim() : ""
 		const projectId = req.body.projectId as string | undefined
+		const autoMode = inferAutoMode(description)
+		const effectiveDescription = applyAutoMode(description, autoMode)
+		let requestCacheKey: string | undefined
+
+		cleanupChatRequestCache()
+		if (requestId) {
+			requestCacheKey = makeChatRequestKey(agentId, projectId, requestId)
+			const existing = chatRequestCache.get(requestCacheKey)
+			if (existing?.status === "completed" && existing.response) {
+				res.json({ ...existing.response, deduplicated: true, requestId })
+				return
+			}
+			if (existing?.status === "in-progress") {
+				res.status(202).json({
+					status: "in-progress",
+					requestId,
+					message: "Duplicate request is already being processed",
+				})
+				return
+			}
+			chatRequestCache.set(requestCacheKey, { status: "in-progress", startedAt: Date.now() })
+		}
 		if (!description && (!attachments || attachments.length === 0)) {
+			if (requestCacheKey) chatRequestCache.delete(requestCacheKey)
 			res.status(400).json({ error: "Message description or attachments required" })
 			return
 		}
@@ -11546,8 +12406,14 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 		// Try project store first
 		const found = projectStore.findAgentProject(agentId, projectId)
 		if (found) {
+			const shouldUseSnapshot = autoMode === "report_only" || autoMode === "implement_from_report" || autoMode === "recall_only"
+			const snapshot = shouldUseSnapshot ? loadReportSnapshot(found.project, found.agent.id) : undefined
+			const snapshotLoaded = !!snapshot
+			const promptDescription = snapshot ? withSnapshotContext(effectiveDescription, snapshot) : effectiveDescription
+
 			// Ephemeral workers don't accept direct messages - they only work on tasks
 			if (found.agent.ephemeral) {
+				if (requestCacheKey) chatRequestCache.delete(requestCacheKey)
 				res.status(403).json({ 
 					error: "Ephemeral workers cannot receive direct messages",
 					message: "This is an ephemeral worker agent that only processes tasks from the task pool. It will self-destruct when done."
@@ -11556,20 +12422,21 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 			}
 			
 			projectStore.recordActivity(found.project.id, agentId)
-			log.info(`[${found.agent.name}@${found.project.name}] chat: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
+			log.info(`[${found.agent.name}@${found.project.name}] chat${autoMode !== "none" ? ` [${autoMode}]` : ""}: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
 			// Society Agent start - activity log: incoming user message
 			agentActivityLogger.logChatIn(found.project.id, agentId, found.project.folder, found.agent.homeFolder || "/", description || "[attachment only]", "user", undefined, !!(attachments && attachments.length > 0))
 			// Society Agent end
 
 			// Society Agent start - All agents use tool-based agentic loop
 			const result = await handleSupervisorChat(
-				description,
+				promptDescription,
 				found.agent,
 				found.project,
 				apiKey,
 				io,
 				attachments,
 			)
+			const snapshotUpdated = autoMode === "report_only" ? saveReportSnapshot(found.project, found.agent.id, result.fullResponse) : false
 
 			const agent = getOrCreateProjectAgent(found.agent, found.project, apiKey)
 			const history = agent.getHistory()
@@ -11580,18 +12447,29 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 				projectStore.updateAgentMemory(found.project.id, agentId, `Recent context (${history.length} messages):\n${lastMessages}`)
 			}
 
-			res.json({
+			const payload = {
 				type: "chat",
 				agentId: found.agent.id,
 				agentName: found.agent.name,
 				projectId: found.project.id,
 				projectName: found.project.name,
+				autoMode: autoMode !== "none" ? autoMode : undefined,
+				snapshotLoaded: snapshotLoaded || undefined,
+				snapshotUpdated: snapshotUpdated || undefined,
 				response: result.fullResponse,
 				status: "completed",
 				historyLength: history.length,
 				filesCreated: result.totalFilesCreated,
 				delegations: result.delegationResults.length > 0 ? result.delegationResults : undefined,
-			})
+			}
+			if (requestCacheKey) {
+				chatRequestCache.set(requestCacheKey, {
+					status: "completed",
+					startedAt: Date.now(),
+					response: payload,
+				})
+			}
+			res.json(payload)
 			return
 			// Society Agent end
 		}
@@ -11599,6 +12477,7 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 		// Legacy fallback: persistent agent store
 		const profile = agentStore.get(agentId)
 		if (!profile) {
+			if (requestCacheKey) chatRequestCache.delete(requestCacheKey)
 			res.status(404).json({ error: `Agent "${agentId}" not found` })
 			return
 		}
@@ -11606,9 +12485,9 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 		const agent = getOrCreateAgent(profile, apiKey)
 		agentStore.recordActivity(agentId)
 
-		log.info(`[${profile.name}] chat: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
+		log.info(`[${profile.name}] chat${autoMode !== "none" ? ` [${autoMode}]` : ""}: ${typeof description === 'string' ? description.substring(0, 80) : 'attachment'}`)
 
-		const content = attachments && attachments.length > 0 ? attachments : description
+		const content = attachments && attachments.length > 0 ? attachments : effectiveDescription
 
 		let fullResponse = ""
 		for await (const chunk of agent.sendMessageStream(content)) {
@@ -11639,15 +12518,29 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 			agentStore.updateMemory(agentId, `Recent context (${history.length} messages):\n${lastMessages}`)
 		}
 
-		res.json({
+		const payload = {
 			type: "chat",
 			agentId: profile.id,
 			agentName: profile.name,
+			autoMode: autoMode !== "none" ? autoMode : undefined,
 			response: fullResponse,
 			status: "completed",
 			historyLength: history.length,
-		})
+		}
+		if (requestCacheKey) {
+			chatRequestCache.set(requestCacheKey, {
+				status: "completed",
+				startedAt: Date.now(),
+				response: payload,
+			})
+		}
+		res.json(payload)
 	} catch (error) {
+		const requestId = typeof req.body?.requestId === "string" ? req.body.requestId.trim() : ""
+		if (requestId) {
+			const key = makeChatRequestKey(req.params.agentId, req.body?.projectId as string | undefined, requestId)
+			chatRequestCache.delete(key)
+		}
 		log.error("Error in agent chat:", error)
 		res.status(500).json({ error: String(error) })
 	}
