@@ -2126,11 +2126,12 @@ socket.on('worker-finished', (data) => {
 socket.on('worker-error', (data) => {
   if (data.projectId !== agentProfile?.projectId) return;
   const w = workers.get(data.workerId);
+  const errText = data.error || data.errorMessage || 'unknown error';
   if (w) {
     w.status = 'error';
-    w.error = data.error;
+    w.error = errText;
     updateWorkersUI();
-    addLog('error', `Worker ${w.name} error: ${data.error}`);
+    addLog('error', `Worker ${w.name} error: ${errText}`);
   }
 });
 

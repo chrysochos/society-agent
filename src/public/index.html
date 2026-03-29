@@ -735,6 +735,7 @@
         <option value="anthropic">Anthropic (Claude direct)</option>
         <option value="openrouter">OpenRouter (multi-model)</option>
         <option value="openai">OpenAI</option>
+        <option value="minimax">MiniMax</option>
         <option value="gemini">Google Gemini</option>
         <option value="deepseek">DeepSeek</option>
         <option value="groq">Groq</option>
@@ -744,6 +745,7 @@
     
     <div class="form-group">
       <label>Model</label>
+      <input type="text" id="settingsModelSearch" placeholder="Filter models (e.g. qwen, free, nemotron)" style="margin-bottom:6px">
       <select id="settingsModel"></select>
       <span style="font-size:11px;color:var(--muted)" id="settingsModelCost"></span>
     </div>
@@ -3384,6 +3386,13 @@ const MODELS_BY_PROVIDER = {
     { id: 'mistralai/mistral-large', name: 'Mistral Large', input: 2, output: 6 },
     { id: 'qwen/qwen-2.5-72b-instruct', name: 'Qwen 2.5 72B', input: 0.35, output: 0.40 },
     { id: 'minimax/minimax-m2.5', name: 'MiniMax M2.5', input: 0.30, output: 1.10 },
+    { id: 'minimax/minimax-m2.5:free', name: 'MiniMax M2.5 (Free)', input: 0, output: 0 },
+    { id: 'minimax/minimax-m2.7', name: 'MiniMax M2.7', input: 0.60, output: 2.40 },
+    { id: 'kwaipilot/kat-coder-pro-v2', name: 'KAT-Coder-Pro V2', input: 0.40, output: 1.60 },
+    { id: 'qwen/qwen3-coder-480b-a35b', name: 'Qwen3 Coder 480B A35B', input: 0.80, output: 3.20 },
+    { id: 'qwen/qwen3-coder-480b-a35b:free', name: 'Qwen3 Coder 480B A35B (Free)', input: 0, output: 0 },
+    { id: 'nvidia/nemotron-3-super', name: 'NVIDIA Nemotron 3 Super', input: 0.50, output: 2.00 },
+    { id: 'nvidia/nemotron-3-super:free', name: 'NVIDIA Nemotron 3 Super (Free)', input: 0, output: 0 },
   ],
   openai: [
     { id: 'gpt-4o', name: 'GPT-4o', input: 2.5, output: 10 },
@@ -3391,6 +3400,10 @@ const MODELS_BY_PROVIDER = {
     { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', input: 10, output: 30 },
     { id: 'o1-preview', name: 'o1 Preview (Reasoning)', input: 15, output: 60 },
     { id: 'o1-mini', name: 'o1 Mini', input: 3, output: 12 },
+  ],
+  minimax: [
+    { id: 'minimax/minimax-m2.5', name: 'MiniMax M2.5', input: 0.30, output: 1.10 },
+    { id: 'minimax/minimax-m2.7', name: 'MiniMax M2.7', input: 0.60, output: 2.40 },
   ],
   gemini: [
     { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', input: 1.25, output: 5 },
@@ -3417,6 +3430,7 @@ const API_KEY_LABELS = {
   anthropic: 'Anthropic API Key',
   openrouter: 'OpenRouter API Key',
   openai: 'OpenAI API Key',
+  minimax: 'MiniMax API Key',
   gemini: 'Google AI API Key',
   deepseek: 'DeepSeek API Key',
   groq: 'Groq API Key',
@@ -3427,6 +3441,7 @@ const API_KEY_PLACEHOLDERS = {
   anthropic: 'sk-ant-api03-...',
   openrouter: 'sk-or-v1-...',
   openai: 'sk-...',
+  minimax: 'minimax-...',
   gemini: 'AIza...',
   deepseek: 'sk-...',
   groq: 'gsk_...',
@@ -3487,12 +3502,9 @@ function hideApiKeyModal() {
 
 function onProviderChange() {
   const provider = document.getElementById('settingsProvider').value;
-  const modelSelect = document.getElementById('settingsModel');
-  const models = MODELS_BY_PROVIDER[provider] || [];
-  
-  modelSelect.innerHTML = models.map(m => 
-    `<option value="${m.id}">${m.name}</option>`
-  ).join('');
+  renderModelOptions(provider, '');
+  const searchEl = document.getElementById('settingsModelSearch');
+  if (searchEl) searchEl.value = '';
   
   // Update API key label and placeholder
   document.getElementById('settingsApiKeyLabel').textContent = API_KEY_LABELS[provider] || 'API Key';
@@ -3504,6 +3516,34 @@ function onProviderChange() {
   document.getElementById('settingsApiKeyStatus').style.color = 'var(--muted)';
   
   updateModelCost();
+}
+
+function renderModelOptions(provider, query = '') {
+  const modelSelect = document.getElementById('settingsModel');
+  const models = MODELS_BY_PROVIDER[provider] || [];
+  const q = (query || '').trim().toLowerCase();
+
+  const filtered = !q
+    ? models
+    : models.filter(m => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q));
+
+  modelSelect.innerHTML = filtered.map(m =>
+    `<option value="${m.id}">${m.name}</option>`
+  ).join('');
+
+  if (filtered.length === 0) {
+    modelSelect.innerHTML = '<option value="">No models match filter</option>';
+  }
+
+  // Keep cost area useful for discovery
+  const costEl = document.getElementById('settingsModelCost');
+  if (costEl) {
+    const total = models.length;
+    const shown = filtered.length;
+    if (shown !== total) {
+      costEl.textContent = `Showing ${shown}/${total} models`;
+    }
+  }
 }
 
 function updateModelCost() {
@@ -3525,6 +3565,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const modelSelect = document.getElementById('settingsModel');
   if (modelSelect) {
     modelSelect.addEventListener('change', updateModelCost);
+  }
+
+  const modelSearch = document.getElementById('settingsModelSearch');
+  if (modelSearch) {
+    modelSearch.addEventListener('input', () => {
+      const provider = document.getElementById('settingsProvider').value;
+      renderModelOptions(provider, modelSearch.value || '');
+    });
   }
 
   // Society Agent start - Block browser shortcuts when terminal tab is active.
@@ -3570,6 +3618,7 @@ async function saveSettings() {
       if (provider === 'anthropic') providerPayload.anthropicApiKey = apiKey;
       else if (provider === 'openrouter') providerPayload.openRouterApiKey = apiKey;
       else if (provider === 'openai') providerPayload.openAiApiKey = apiKey;
+      else if (provider === 'minimax') providerPayload.minimaxApiKey = apiKey;
       else if (provider === 'gemini') providerPayload.geminiApiKey = apiKey;
       else providerPayload.apiKey = apiKey;
     }

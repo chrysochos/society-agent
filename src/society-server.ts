@@ -1024,8 +1024,37 @@ function limitHistory(msgs: any[], limit: number = HISTORY_TURN_LIMIT): any[] {
 	const rest = msgs.slice(1)
 	const userIdxs = rest.map((m, i) => (m.role === "user" ? i : -1)).filter(i => i >= 0)
 	if (userIdxs.length <= limit) return msgs
-	const keepFrom = userIdxs[userIdxs.length - limit]
+	let keepFrom = userIdxs[userIdxs.length - limit]
+	// Never start the slice with a tool_result user message without its preceding
+	// tool_use assistant message – that breaks providers like MiniMax 2.7 that
+	// validate strict tool_use → tool_result sequencing.
+	const firstKept = rest[keepFrom]
+	if (
+		firstKept?.role === "user" &&
+		Array.isArray(firstKept.content) &&
+		firstKept.content.some((b: any) => b.type === "tool_result") &&
+		keepFrom > 0
+	) {
+		keepFrom = keepFrom - 1 // include the preceding assistant[tool_use] message
+	}
 	return [first, ...rest.slice(keepFrom)]
+}
+
+/**
+ * Normalise an assistant content array before storing it back into the
+ * messages history for the next LLM call.
+ *
+ * Some providers (e.g. MiniMax 2.7) comply with the Anthropic wire format
+ * but reject assistant turns that contain *both* text blocks and tool_use
+ * blocks.  To stay compatible we keep only the tool_use blocks when tool
+ * calls are present – the text has already been streamed to the UI so
+ * nothing is lost.
+ */
+function normaliseAssistantContent(content: any[]): any[] {
+	const toolUseBlocks = content.filter((b: any) => b.type === "tool_use")
+	if (toolUseBlocks.length === 0) return content // pure text – keep as-is
+	// Has tool_use: retain only tool_use blocks, drop text / thinking blocks
+	return toolUseBlocks
 }
 
 // Society Agent - Extract clean preview from tool results for UI tool cards
@@ -6373,6 +6402,11 @@ The specs will be saved to the agent's DESIRED_STATE.md for autonomous work.`,
 				description: { type: "string", description: "Full task description with requirements" },
 				priority: { type: "number", description: "Priority 1-10 (higher = more urgent). Default: 5" },
 				working_directory: { type: "string", description: "Directory for this task relative to project root" },
+				depends_on: {
+					type: "array",
+					items: { type: "string" },
+					description: "Optional list of prerequisite task IDs. This task will not be claimable until all listed tasks are completed.",
+				},
 			},
 			required: ["title", "description"],
 		},
@@ -6468,6 +6502,18 @@ const CUSTODIAN_READ_ONLY_COMMANDS = new Set([
 	'pwd', 'echo', 'date', 'whoami', 'env', 'printenv',
 ])
 
+// Safe operational commands custodians are allowed to run (non-coding lifecycle ops)
+const CUSTODIAN_OPERATIONAL_COMMAND_PATTERNS: RegExp[] = [
+	/^npm\s+run\s+(dev|start|preview|test)(\s|$)/i,
+	/^npm\s+(start|test)(\s|$)/i,
+	/^pnpm\s+(dev|start|preview|test)(\s|$)/i,
+	/^pnpm\s+run\s+(dev|start|preview|test)(\s|$)/i,
+	/^yarn\s+(dev|start|preview|test)(\s|$)/i,
+	/^yarn\s+run\s+(dev|start|preview|test)(\s|$)/i,
+	/^npx\s+vite(\s|$)/i,
+	/^vite(\s|$)/i,
+]
+
 // Check if a file extension is allowed for custodian writes
 function canCustodianWriteFile(filePath: string): { allowed: boolean; reason?: string } {
 	const ext = path.extname(filePath).toLowerCase()
@@ -6489,6 +6535,14 @@ function canCustodianWriteFile(filePath: string): { allowed: boolean; reason?: s
 // Check if a command is read-only (allowed for custodians)
 function isCustodianCommandAllowed(command: string): { allowed: boolean; reason?: string } {
 	const trimmed = command.trim().toLowerCase()
+
+	// Allow safe operational lifecycle commands (dev server/test runners)
+	for (const pattern of CUSTODIAN_OPERATIONAL_COMMAND_PATTERNS) {
+		if (pattern.test(trimmed)) {
+			return { allowed: true }
+		}
+	}
+
 	// Check if command starts with any allowed read-only command
 	for (const allowed of CUSTODIAN_READ_ONLY_COMMANDS) {
 		if (trimmed === allowed || trimmed.startsWith(allowed + ' ') || trimmed.startsWith(allowed + '\t')) {
@@ -6504,7 +6558,7 @@ function isCustodianCommandAllowed(command: string): { allowed: boolean; reason?
 	}
 	return { 
 		allowed: false, 
-		reason: `Custodians can only run read-only commands. ` +
+		reason: `Custodians can only run read-only commands and safe operational lifecycle commands (dev/start/test). ` +
 			`"${command.substring(0, 50)}..." is not allowed. ` +
 			`Spawn a worker with spawn_worker() to run commands that modify state.`
 	}
@@ -8125,7 +8179,25 @@ If you don't know, say so. Be concise.`,
 		}
 
 		case "use_mcp": {
-			const { server_name, tool_name, params } = toolInput as { server_name: string; tool_name: string; params?: any }
+			const { server_name, tool_name, params, ...rawArgs } = toolInput as {
+				server_name: string
+				tool_name: string
+				params?: any
+				[key: string]: any
+			}
+
+			// Compatibility: accept both formats:
+			// 1) use_mcp({ server_name, tool_name, params: { ... } })
+			// 2) use_mcp({ server_name, tool_name, ...toolArgs })
+			let normalizedParams = params
+			const hasRawArgs = Object.keys(rawArgs).length > 0
+			if (!normalizedParams && hasRawArgs) {
+				normalizedParams = rawArgs
+			} else if (normalizedParams && hasRawArgs && typeof normalizedParams === "object") {
+				// Merge with explicit params taking precedence
+				normalizedParams = { ...rawArgs, ...normalizedParams }
+			}
+			if (!normalizedParams) normalizedParams = {}
 			
 			// Society Agent - Apply rate limiting for MCP tools
 			const rateCheck = checkMcpRateLimit(agentConfig.id, server_name)
@@ -8135,7 +8207,7 @@ If you don't know, say so. Be concise.`,
 			}
 			
 			// Society Agent - Redirect Playwright screenshot/snapshot filenames to agent's folder
-			let adjustedParams = params || {}
+			let adjustedParams = normalizedParams || {}
 			if (server_name === "playwright" && (tool_name === "browser_take_screenshot" || tool_name === "browser_snapshot")) {
 				const screenshotDir = path.join(agentFolder, "screenshots")
 				if (!fs.existsSync(screenshotDir)) {
@@ -8836,16 +8908,39 @@ If you don't know, say so. Be concise.`,
 					messageApiKey,
 					io,
 				)
+
+				const responseText = result.fullResponse?.trim() || "(no response)"
+				const responsePreview = responseText.substring(0, 1500) + (responseText.length > 1500 ? "...(truncated)" : "")
+
+				// Always show the response in the sender panel so replies are visible without wait_for_response.
+				io.emit("agent-message", {
+					agentId: agentConfig.id,
+					agentName: agentConfig.name,
+					projectId: project.id,
+					message: `\n📨 **Reply from ${targetAgent.name}:**\n${responsePreview}\n`,
+					timestamp: Date.now(),
+					isStreaming: false,
+				})
+
+				// Also show in target panel for traceability.
+				io.emit("agent-message", {
+					agentId: targetAgent.id,
+					agentName: targetAgent.name,
+					projectId: project.id,
+					message: `\n📤 **Reply sent to ${agentConfig.name}:**\n${responsePreview}\n`,
+					timestamp: Date.now(),
+					isStreaming: false,
+				})
 				
 				// Log the response back in the SENDER's Activity log
 				// This completes the message flow: send → receive → answer → answer_back
-				const responsePreview = result.fullResponse.substring(0, 2000) + (result.fullResponse.length > 2000 ? '...(truncated)' : '')
+				const activityPreview = responseText.substring(0, 2000) + (responseText.length > 2000 ? '...(truncated)' : '')
 				agentActivityLogger.logChatIn(
 					project.id,
 					agentConfig.id,  // Log in SENDER's activity
 					project.folder || project.id,
 					agentConfig.homeFolder || "/",
-					`[Response from ${targetAgent.name}]\n\n${responsePreview}`,
+					`[Response from ${targetAgent.name}]\n\n${activityPreview}`,
 					"agent",
 					targetAgent.name,  // From the target agent
 					false,
@@ -9101,11 +9196,12 @@ If you don't know, say so. Be concise.`,
 		}
 
 		case "create_task": {
-			const { title, description, priority = 5, working_directory } = toolInput as {
+			const { title, description, priority = 5, working_directory, depends_on } = toolInput as {
 				title: string
 				description: string
 				priority?: number
 				working_directory?: string
+				depends_on?: string[]
 			}
 			
 			// Workers will write to their parent's folder - working_directory is just informational
@@ -9120,7 +9216,8 @@ If you don't know, say so. Be concise.`,
 				title,
 				description,
 				context,
-				priority
+				priority,
+				depends_on
 			)
 			
 			if (!task) {
@@ -9139,7 +9236,10 @@ If you don't know, say so. Be concise.`,
 				timestamp: Date.now(),
 			})
 			
-			return { result: `✅ **Task created: ${title}**\n\n📋 ID: \`${task.id}\`\n⚡ Priority: ${priority}/10\n📝 ${description.substring(0, 100)}${description.length > 100 ? '...' : ''}${briefPath ? `\n📄 Brief: ${briefPath}` : ""}\n\nSpawn a worker with \`spawn_worker()\` to execute tasks.`, filesCreated: 0 }
+			const dependencyLine = depends_on && depends_on.length > 0
+				? `\n🔗 Depends on: ${depends_on.join(", ")}`
+				: ""
+			return { result: `✅ **Task created: ${title}**\n\n📋 ID: \`${task.id}\`\n⚡ Priority: ${priority}/10${dependencyLine}\n📝 ${description.substring(0, 100)}${description.length > 100 ? '...' : ''}${briefPath ? `\n📄 Brief: ${briefPath}` : ""}\n\nSpawn a worker with \`spawn_worker()\` to execute tasks.`, filesCreated: 0 }
 		}
 
 		case "list_tasks": {
@@ -9262,6 +9362,9 @@ DO NOT spawn more workers or create new tasks - that's the supervisor's job.`
 					ephemeral: true,
 					isWorker: true,
 					reportsTo: agentConfig.id,
+					// Inherit supervisor's model/provider so workers use the same LLM
+					model: agentConfig.model,
+					provider: agentConfig.provider,
 				}
 				log.info(`[spawn_worker] Creating worker ${workerId} with reportsTo=${agentConfig.id}`)
 				
@@ -9287,11 +9390,23 @@ DO NOT spawn more workers or create new tasks - that's the supervisor's job.`
 						const workerApiKey = apiKey || process.env.ANTHROPIC_API_KEY || ""
 						await runEphemeralWorker(workerConfig, project, workerApiKey, io)
 					} catch (err: any) {
-						log.error(`[Worker ${workerId}] Error in execution loop:`, err)
+						// Safely extract error message
+						let errorMsg = "Unknown error occurred"
+						if (err) {
+							if (typeof err === "string") {
+								errorMsg = err
+							} else if (err.message) {
+								errorMsg = err.message
+							} else if (err.toString) {
+								errorMsg = err.toString()
+							}
+						}
+						
+						log.error(`[Worker ${workerId}] Error in execution loop: ${errorMsg}`, err)
 						io.emit("worker-error", {
 							projectId: project.id,
 							workerId,
-							error: err.message,
+							error: errorMsg,
 							timestamp: Date.now(),
 						})
 						// Show error in chat so user can see it
@@ -9299,7 +9414,7 @@ DO NOT spawn more workers or create new tasks - that's the supervisor's job.`
 							agentId: workerId,
 							agentName: workerName,
 							projectId: project.id,
-							message: `❌ **Worker Error**\n\n${err.message}`,
+							message: `❌ **Worker Error**\n\n${errorMsg}`,
 							timestamp: Date.now(),
 							isStreaming: false,
 						})
@@ -10927,8 +11042,10 @@ async function handleSupervisorChat(
 		}
 		// Society Agent end
 
-		// Add the assistant's message (with tool_use blocks) to conversation
-		messages.push({ role: "assistant", content: finalMessage.content })
+		// Add the assistant's message (with tool_use blocks) to conversation.
+		// Normalise: strip text blocks when tool_use is present so providers like
+		// MiniMax 2.7 (strict about mixed content) don't reject the next request.
+		messages.push({ role: "assistant", content: normaliseAssistantContent(finalMessage.content as any[]) })
 
 		// Society Agent - Detect repeated tool calls (model stuck in loop)
 		const currentToolSignature = toolBlocks.map(tb => 
@@ -11286,51 +11403,85 @@ async function runEphemeralWorker(
 	const workerId = workerConfig.id
 	const workerName = workerConfig.name
 	
-	log.info(`[Worker ${workerName}] Starting execution loop`)
-	// Society Agent - Reset budget for this worker session
-	usageTracker.resetAgentSession(workerId)
-	
-	// Activity logging setup
-	const workerHomeFolder = workerConfig.homeFolder || "/"
-	const workerStartTime = Date.now()
-	let totalToolCalls = 0
-	
-	// Emit worker started event
-	io.emit("worker-started", {
-		projectId: project.id,
-		workerId,
-		workerName,
-		timestamp: Date.now(),
-	})
-	
-	// Get provider configuration
-	let anthropic: Anthropic | null = null
-	let openRouterClient: OpenAI | null = null
-	let model: string
-	let useOpenRouter = false
-
-	if (standaloneSettings.isInitialized() && standaloneSettings.hasApiKey()) {
-		const providerConfig = standaloneSettings.getProvider()
-		if (providerConfig.type === "openrouter") {
-			openRouterClient = new OpenAI({
-				baseURL: "https://openrouter.ai/api/v1",
-				apiKey: providerConfig.apiKey,
-			})
-			model = providerConfig.model
-			useOpenRouter = true
-		} else {
-			anthropic = new Anthropic({ apiKey: providerConfig.apiKey })
-			model = providerConfig.model
+	try {
+		console.log(`[WORKER_DEBUG] Starting ${workerName} (${workerId})`)
+		log.info(`[Worker ${workerName}] Starting execution loop`)
+		// Society Agent - Reset budget for this worker session
+		console.log(`[WORKER_DEBUG] Resetting usage tracker`)
+		try {
+			usageTracker.resetAgentSession(workerId)
+			console.log(`[WORKER_DEBUG] Usage tracker reset OK`)
+		} catch (e) {
+			console.log(`[WORKER_DEBUG] Usage tracker error:`, e)
 		}
-	} else if (apiKey) {
-		anthropic = new Anthropic({ apiKey })
-		model = "claude-sonnet-4-20250514"
-	} else {
-		throw new Error("No API key configured for worker")
-	}
-	
-	// Log worker start (after model is determined)
-	agentActivityLogger.logAgentStart(project.id, workerId, project.folder, workerHomeFolder, "task_claim", model)
+		
+		// Activity logging setup
+		const workerHomeFolder = workerConfig.homeFolder || "/"
+		const workerStartTime = Date.now()
+		let totalToolCalls = 0
+		
+		// Emit worker started event
+		console.log(`[WORKER_DEBUG] Emitting worker-started event`)
+		io.emit("worker-started", {
+			projectId: project.id,
+			workerId,
+			workerName,
+			timestamp: Date.now(),
+		})
+		console.log(`[WORKER_DEBUG] Emitted worker-started, now configuring provider`)
+		
+		// Get provider configuration
+		let anthropic: Anthropic | null = null
+		let openRouterClient: OpenAI | null = null
+		let model: string
+		let useOpenRouter = false
+
+		console.log(`[WORKER_DEBUG] Checking standaloneSettings: init=${standaloneSettings.isInitialized()}, hasKey=${standaloneSettings.hasApiKey()}`)
+		if (standaloneSettings.isInitialized() && standaloneSettings.hasApiKey()) {
+			console.log(`[WORKER_DEBUG] Using standaloneSettings`)
+			const providerConfig = standaloneSettings.getProvider()
+			// Use effective overrides if set (inherited from supervisor), otherwise fall back to server config
+			// Priority: workerConfig override > project override > server default (same as handleSupervisorChat)
+			const effectiveProvider = workerConfig.provider || project.provider || providerConfig.type
+			const effectiveModel = workerConfig.model || project.model || providerConfig.model
+			console.log(`[WORKER_DEBUG] Provider config: type=${providerConfig.type}, model=${providerConfig.model}, effectiveProvider=${effectiveProvider}, effectiveModel=${effectiveModel}`)
+			if (effectiveProvider === "openrouter") {
+				openRouterClient = new OpenAI({
+					baseURL: "https://openrouter.ai/api/v1",
+					apiKey: providerConfig.apiKey,
+				})
+				model = effectiveModel
+				useOpenRouter = true
+			} else if (effectiveProvider === "minimax") {
+				anthropic = new Anthropic({
+					apiKey: providerConfig.apiKey,
+					baseURL: "https://api.minimax.io/anthropic",
+				})
+				model = effectiveModel
+			} else if (effectiveProvider === "openai" || effectiveProvider === "groq" || effectiveProvider === "deepseek" || effectiveProvider === "mistral") {
+				useOpenRouter = true
+				openRouterClient = new OpenAI({
+					baseURL: providerConfig.baseUrl || PROVIDER_BASE_URLS[effectiveProvider],
+					apiKey: providerConfig.apiKey,
+				})
+				model = effectiveModel
+			} else {
+				anthropic = new Anthropic({ apiKey: providerConfig.apiKey })
+				model = effectiveModel
+			}
+		} else if (apiKey) {
+			console.log(`[WORKER_DEBUG] Using passed apiKey`)
+			anthropic = new Anthropic({ apiKey })
+			model = "claude-sonnet-4-20250514"
+		} else {
+			console.log(`[WORKER_DEBUG] No API key configured!`)
+			throw new Error("No API key configured for worker")
+		}
+		
+		console.log(`[WORKER_DEBUG] Model configured: ${model}, useOpenRouter=${useOpenRouter}`)
+		
+		// Log worker start (after model is determined)
+		agentActivityLogger.logAgentStart(project.id, workerId, project.folder, workerHomeFolder, "task_claim", model)
 	
 	// Build worker system prompt
 	const systemPrompt = workerConfig.systemPrompt || `You are an ephemeral worker agent.
@@ -11355,7 +11506,25 @@ You will self-destruct after completing or failing. Focus on your task.`
 	let fullResponse = ""
 	const MAX_ITERATIONS = 100 // Society Agent - increased from 20 to allow workers to complete more complex tasks
 	let taskCompleted = false
-	let loopExitReason: "max_iterations" | "stopped_by_user" | "model_stopped" | "too_many_errors" = "max_iterations"
+	let loopExitReason: "max_iterations" | "stopped_by_user" | "model_stopped" | "too_many_errors" | "timeout_stalled" = "max_iterations"
+	const WORKER_MAX_WALL_TIME_MS = 45 * 60 * 1000 // Hard cap to prevent zombie workers
+	const WORKER_API_TIMEOUT_MS = 8 * 60 * 1000 // Protect against hung model calls
+	const WORKER_TOOL_TIMEOUT_MS = 10 * 60 * 1000 // Protect against hung tool calls
+
+	function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.ceil(ms / 1000)}s`)), ms)
+			promise
+				.then((value) => {
+					clearTimeout(timer)
+					resolve(value)
+				})
+				.catch((err) => {
+					clearTimeout(timer)
+					reject(err)
+				})
+		})
+	}
 	let hasWrittenFiles = false // Track if agent made any modifications
 	const READ_ONLY_TOOLS = new Set(["read_project_file", "list_project_files", "read_file", "list_dir", "get_team_info", "list_files", "search_in_files"])
 	let consecutiveReadOnlyStops = 0 // Track consecutive stops after only reading
@@ -11377,6 +11546,20 @@ You will self-destruct after completing or failing. Focus on your task.`
 	
 	for (let iteration = 0; iteration < MAX_ITERATIONS && !taskCompleted; iteration++) {
 		actualIterations = iteration + 1
+
+		if (Date.now() - workerStartTime > WORKER_MAX_WALL_TIME_MS) {
+			loopExitReason = "timeout_stalled"
+			log.warn(`[Worker ${workerName}] Exceeded max wall time (${Math.round(WORKER_MAX_WALL_TIME_MS / 60000)}m), forcing stop`)
+			io.emit("agent-message", {
+				agentId: workerId,
+				agentName: workerName,
+				projectId: project.id,
+				message: `\n⏱️ **Worker timed out after ${Math.round(WORKER_MAX_WALL_TIME_MS / 60000)} minutes**`,
+				timestamp: Date.now(),
+				isStreaming: false,
+			})
+			break
+		}
 		
 		// Society Agent - Check if worker should stop
 		if (stoppedAgents.has(workerId)) {
@@ -11470,12 +11653,12 @@ You will self-destruct after completing or failing. Focus on your task.`
 				},
 			}))
 			
-			const completion = await openRouterClient.chat.completions.create({
+			const completion = await withTimeout(openRouterClient.chat.completions.create({
 				model,
 				messages: [{ role: "system", content: systemPrompt }, ...orMessages],
 				tools: orTools,
 				max_tokens: 8192,
-			})
+			}), WORKER_API_TIMEOUT_MS, "OpenRouter worker call")
 			
 			log.info(`[Worker ${workerName}] OpenRouter API response received`)
 			// Society Agent - Track worker usage
@@ -11573,14 +11756,14 @@ You will self-destruct after completing or failing. Focus on your task.`
 					timestamp: Date.now(),
 				})
 				
-				const { result, filesCreated } = await executeAgentTool(
+				const { result, filesCreated } = await withTimeout(executeAgentTool(
 					toolName,
 					toolInput,
 					workerConfig,
 					project,
 					io,
 					apiKey,
-				)
+				), WORKER_TOOL_TIMEOUT_MS, `Worker tool ${toolName}`)
 				
 				// Activity logging: log tool result
 				agentActivityLogger.logToolResult(project.id, workerId, project.folder, workerHomeFolder, toolName, result, !result.startsWith("❌"), iteration, totalToolCalls, toolStartTime)
@@ -11640,7 +11823,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 				tools: EPHEMERAL_TOOLS,
 			})
 			
-			response = await stream.finalMessage()
+			response = await withTimeout(stream.finalMessage(), WORKER_API_TIMEOUT_MS, "Anthropic worker stream")
 			log.info(`[Worker ${workerName}] Anthropic response received, stop_reason: ${response.stop_reason}`)
 			// Society Agent - Track worker usage
 			if (response.usage) {
@@ -11703,8 +11886,10 @@ You will self-destruct after completing or failing. Focus on your task.`
 				break
 			}
 			
-			// Process tool calls
-			messages.push({ role: "assistant", content: response.content })
+			// Process tool calls.
+			// Normalise assistant content: drop text blocks when tool_use is present
+			// so providers like MiniMax 2.7 don't reject the request on the next turn.
+			messages.push({ role: "assistant", content: normaliseAssistantContent(response.content as any[]) })
 			const toolResults: Anthropic.ToolResultBlockParam[] = []
 			
 			for (const toolBlock of toolBlocks) {
@@ -11745,14 +11930,14 @@ You will self-destruct after completing or failing. Focus on your task.`
 					timestamp: Date.now(),
 				})
 				
-				const { result, filesCreated } = await executeAgentTool(
+				const { result, filesCreated } = await withTimeout(executeAgentTool(
 					toolName,
 					toolInput,
 					workerConfig,
 					project,
 					io,
 					apiKey,
-				)
+				), WORKER_TOOL_TIMEOUT_MS, `Worker tool ${toolName}`)
 				
 				// Activity logging: log tool result
 				agentActivityLogger.logToolResult(project.id, workerId, project.folder, workerHomeFolder, toolName, result, !result.startsWith("❌"), iteration, totalToolCalls, toolStartTime)
@@ -11806,11 +11991,30 @@ You will self-destruct after completing or failing. Focus on your task.`
 			messages.push({ role: "user", content: toolResults })
 		}
 		} catch (iterErr: any) {
-			log.error(`[Worker ${workerName}] Error in iteration ${iteration + 1}:`, iterErr)
+			let normalizedError = "Unknown worker iteration error"
+			if (iterErr) {
+				if (typeof iterErr === "string") {
+					normalizedError = iterErr
+				} else if (iterErr.message && typeof iterErr.message === "string") {
+					normalizedError = iterErr.message
+				} else if (typeof iterErr.toString === "function") {
+					normalizedError = iterErr.toString()
+					if (!normalizedError || normalizedError === "[object Object]") {
+						try {
+							normalizedError = JSON.stringify(iterErr)
+						} catch {
+							normalizedError = "Unknown worker iteration error"
+						}
+					}
+				}
+			}
+
+			log.error(`[Worker ${workerName}] Error in iteration ${iteration + 1}: ${normalizedError}`, iterErr)
 			io.emit("worker-error", {
 				projectId: project.id,
 				workerId,
-				errorMessage: iterErr.message,
+				error: normalizedError,
+				errorMessage: normalizedError,
 				iteration: iteration + 1,
 				timestamp: Date.now(),
 			})
@@ -11819,7 +12023,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 				agentId: workerId,
 				agentName: workerName,
 				projectId: project.id,
-				message: `❌ **Worker Error (iteration ${iteration + 1})**\n\n${iterErr.message}`,
+				message: `❌ **Worker Error (iteration ${iteration + 1})**\n\n${normalizedError}`,
 				timestamp: Date.now(),
 				isStreaming: false,
 			})
@@ -11853,6 +12057,8 @@ You will self-destruct after completing or failing. Focus on your task.`
 				? "model stopped before complete_task/fail_task"
 				: loopExitReason === "too_many_errors"
 				? "too many internal errors"
+				: loopExitReason === "timeout_stalled"
+				? "timed out while waiting on model/tools"
 				: `hit max iterations (${MAX_ITERATIONS})`
 		log.warn(`[Worker ${workerName}] Exited without completion: ${reasonLabel}`)
 		const orphanedTask = projectStore
@@ -11876,6 +12082,8 @@ You will self-destruct after completing or failing. Focus on your task.`
 					? `Worker stopped before calling complete_task/fail_task. Task auto-returned to pool.`
 					: loopExitReason === "too_many_errors"
 					? `Worker aborted after repeated internal errors. Task auto-returned to pool.`
+					: loopExitReason === "timeout_stalled"
+					? `Worker timed out while waiting on model/tools. Task auto-returned to pool.`
 					: `Worker hit max iterations without completion. Task auto-returned to pool.`
 			projectStore.failTask(project.id, orphanedTask.id, failReason)
 			const failedTask = projectStore.getTask(project.id, orphanedTask.id)
@@ -11966,6 +12174,9 @@ You will self-destruct after completing or failing. Focus on your task.`
 							ephemeral: true,
 							isWorker: true,
 							reportsTo: supervisor.id,
+							// Inherit supervisor's model/provider so retry workers use the same LLM
+							model: supervisor.model,
+							provider: supervisor.provider,
 						}
 
 						projectStore.addAgent(project.id, retryWorkerConfig)
@@ -12048,6 +12259,8 @@ You will self-destruct after completing or failing. Focus on your task.`
 					? `⚠️ Worker ${workerName} stopped before finalizing the task. Task was returned to the pool.`
 					: loopExitReason === "too_many_errors"
 					? `⚠️ Worker ${workerName} aborted after repeated errors. Task was returned to the pool.`
+					: loopExitReason === "timeout_stalled"
+					? `⚠️ Worker ${workerName} timed out while waiting on model/tools. Task was returned to the pool.`
 					: `⚠️ Worker ${workerName} hit max iterations (${MAX_ITERATIONS}). Task was returned to the pool.`,
 			timestamp: Date.now(),
 		})
@@ -12074,26 +12287,46 @@ You will self-destruct after completing or failing. Focus on your task.`
 	})
 	
 	log.info(`[Worker ${workerName}] Finished (completed: ${taskCompleted})`)
+	} catch (initErr: any) {
+		console.log(`[WORKER_DEBUG] Caught error in runEphemeralWorker:`, initErr)
+		const workerId = workerConfig.id
+		const workerName = workerConfig.name
+		let errorMsg = "Unknown initialization error"
+		if (initErr) {
+			if (typeof initErr === "string") {
+				errorMsg = initErr
+			} else if (initErr.message) {
+				errorMsg = initErr.message
+			} else if (initErr.toString) {
+				errorMsg = initErr.toString()
+			}
+		}
+		log.error(`[Worker ${workerName}] Initialization/execution error: ${errorMsg}`, initErr)
+		io.emit("worker-error", {
+			projectId: project.id,
+			workerId,
+			error: errorMsg,
+			timestamp: Date.now(),
+		})
+		io.emit("agent-message", {
+			agentId: workerId,
+			agentName: workerName,
+			projectId: project.id,
+			message: `❌ **Worker Error**\n\n${errorMsg}`,
+			timestamp: Date.now(),
+			isStreaming: false,
+		})
+		io.emit("worker-finished", {
+			projectId: project.id,
+			workerId,
+			workerName,
+			completed: false,
+			timestamp: Date.now(),
+		})
+	}
 }
 
-/**
- * Helper: create a ConversationAgent from a ProjectAgentConfig + project context
- */
-function getOrCreateProjectAgent(
-	agentConfig: ProjectAgentConfig,
-	project: Project,
-	apiKey: string,
-): ConversationAgent {
-	// Bug fix: key must be project-scoped — two projects can have the same agent id (e.g. "supervisor")
-	const cacheKey = `${project.id}:${agentConfig.id}`
-	const existing = activeAgents.get(cacheKey)
-	if (existing) return existing
-
-	// Society Agent start - Defensive checks
-	if (!project || !project.id) {
-		log.error(`[getOrCreateProjectAgent] Invalid project: ${JSON.stringify(project)}`)
-		throw new Error(`Invalid project object - missing id`)
-	}
+function getOrCreateProjectAgent(agentConfig: ProjectAgentConfig, project: Project, apiKey: string): ConversationAgent {
 	if (!agentConfig || !agentConfig.id) {
 		log.error(`[getOrCreateProjectAgent] Invalid agentConfig: ${JSON.stringify(agentConfig)}`)
 		throw new Error(`Invalid agentConfig - missing id`)

@@ -10,3 +10,11 @@ projects/john/
 # Local settings with API keys
 .society-agent/
 *.png
+
+# Local runtime databases
+email-client.db
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
