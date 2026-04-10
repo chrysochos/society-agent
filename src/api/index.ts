@@ -5,6 +5,7 @@
 
 import Anthropic from "@anthropic-ai/sdk"
 import OpenAI from "openai"
+import * as fs from "fs"
 import { ApiStream, ApiStreamChunk } from "./stream"
 
 // Re-export stream types
@@ -130,6 +131,9 @@ const OPENAI_COMPATIBLE_BASE_URLS: Record<string, string> = {
 	groq: "https://api.groq.com/openai/v1",
 	mistral: "https://api.mistral.ai/v1",
 	openrouter: "https://openrouter.ai/api/v1",
+	ollama: process.env.OLLAMA_BASE_URL || ((process.platform === "linux" && (fs.existsSync("/.dockerenv") || process.env.REMOTE_CONTAINERS || process.env.DEVCONTAINER))
+		? "http://host.docker.internal:11434/v1"
+		: "http://localhost:11434/v1"),
 }
 
 export interface OpenAIHandlerOptions {

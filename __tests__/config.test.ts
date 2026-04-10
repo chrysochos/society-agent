@@ -9,7 +9,7 @@ import {
 	requiresApproval,
 	validateRole,
 	mergeConfig,
-} from "../config"
+} from "../src/config"
 
 // Mock the logger
 vi.mock("../logger", () => ({

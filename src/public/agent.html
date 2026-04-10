@@ -147,6 +147,12 @@
   .message-wrapper { position: relative; display: flex; flex-direction: column; }
   .message-wrapper.user { align-self: flex-end; align-items: flex-end; }
   .message-wrapper.assistant { align-self: flex-start; align-items: flex-start; }
+  .message-wrapper.peer-thread { border-left: 3px solid rgba(88,166,255,0.5); padding-left: 10px; margin-left: 6px; }
+  .message-wrapper.peer-thread .thread-tag {
+    display: inline-block; margin-bottom: 6px; font-size: 10px; letter-spacing: 0.3px;
+    color: var(--accent); border: 1px solid rgba(88,166,255,0.35); border-radius: 999px;
+    padding: 1px 8px; background: rgba(88,166,255,0.08);
+  }
   .message-actions { display: none; gap: 4px; margin-top: 4px; }
   .message-wrapper:hover .message-actions { display: flex; }
   .message-actions button { padding: 3px 8px; font-size: 11px; background: var(--surface); border: 1px solid var(--border);
@@ -346,6 +352,43 @@
   .worker-meta { display: flex; gap: 8px; margin-top: 4px; font-size: 10px; color: var(--muted); }
   .worker-meta-item { display: flex; align-items: center; gap: 3px; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Worker Leases Dashboard */
+  .worker-leases-container { display: flex; flex-direction: column; gap: 12px; }
+  .lease-group { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .lease-group-header { padding: 8px 12px; background: var(--border); display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 12px; }
+  .lease-group-header .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .lease-group-header .status-dot.healthy { background: var(--green); }
+  .lease-group-header .status-dot.stale { background: var(--yellow); }
+  .lease-group-header .status-dot.expired { background: var(--red); }
+  .lease-group-header .status-dot.none { background: var(--muted); }
+  .lease-group-header .count { margin-left: auto; color: var(--muted); font-size: 11px; background: var(--surface); padding: 2px 8px; border-radius: 10px; }
+  .lease-list { display: flex; flex-direction: column; }
+  .lease-item { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: flex-start; gap: 10px; transition: background 0.15s; }
+  .lease-item:last-child { border-bottom: none; }
+  .lease-item:hover { background: rgba(88,166,255,0.05); }
+  .lease-item.healthy { border-left: 3px solid var(--green); }
+  .lease-item.stale { border-left: 3px solid var(--yellow); }
+  .lease-item.expired { border-left: 3px solid var(--red); }
+  .lease-item .indicator { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 3px; }
+  .lease-item .indicator.healthy { background: var(--green); }
+  .lease-item .indicator.stale { background: var(--yellow); }
+  .lease-item .indicator.expired { background: var(--red); }
+  .lease-info { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .lease-title { display: flex; gap: 6px; align-items: center; font-weight: 600; font-size: 12px; color: var(--text); }
+  .lease-worker-id { color: var(--accent); font-family: monospace; font-size: 11px; }
+  .lease-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 11px; color: var(--muted); }
+  .lease-meta-item { display: flex; gap: 4px; }
+  .lease-meta-item .label { color: var(--text); font-weight: 500; }
+  .lease-meta-item .value { color: var(--muted); font-family: monospace; }
+  .lease-task { padding: 6px 8px; background: var(--bg); border-radius: 4px; border-left: 2px solid var(--accent); font-size: 11px; }
+  .lease-task .task-id { color: var(--accent); font-weight: 600; font-family: monospace; }
+  .lease-task .task-title { color: var(--text); margin-left: 4px; }
+  .lease-countdown { display: flex; align-items: center; gap: 4px; font-size: 11px; padding: 4px 8px; border-radius: 4px; background: var(--bg); margin-top: 4px; }
+  .lease-countdown.warning { background: rgba(210,153,34,0.1); color: var(--yellow); }
+  .lease-countdown.danger { background: rgba(248,81,73,0.1); color: var(--red); }
+  .lease-countdown .icon { font-size: 12px; }
+  .lease-empty { padding: 20px; text-align: center; color: var(--muted); font-size: 12px; }
 
   /* Terminal */
   .terminal-container { flex: 1; background: #000; padding: 4px; overflow: hidden; }
@@ -652,7 +695,9 @@
       <div class="tab" onclick="switchTab('terminal')" id="tabTerminal">&#9000; Terminal</div>
       <div class="tab" onclick="switchTab('activity')" id="tabActivity">&#128203; Activity</div>
       <div class="tab" onclick="switchTab('tasks')" id="tabTasks">&#128203; Tasks <span id="taskBadge" class="badge" style="display:none">0</span></div>
+      <div class="tab" onclick="switchTab('leases')" id="tabLeases">&#9881; Leases <span id="leaseBadge" class="badge" style="display:none">0</span></div>
       <div style="flex:1"></div>
+      <button class="btn btn-secondary" id="threadFilterBtn" onclick="toggleThreadOnlyMode()" style="font-size:11px;padding:3px 10px;margin:4px 0" title="Show only cross-agent question/answer threads">Thread View: Off</button>
       <button class="btn btn-secondary" id="clearChatBtn" onclick="clearChat()" style="font-size:11px;padding:3px 10px;margin:4px 8px" title="Clear conversation history">&#128465; Clear Chat</button>
     </div>
 
@@ -782,6 +827,19 @@
       </div>
       <div class="activity-feed" id="activityFeed"><span style="color:var(--muted);padding:20px">Loading...</span></div>
     </div>
+
+    <!-- Worker Leases pane -->
+    <div class="tab-content" id="paneLeases">
+      <div class="activity-toolbar">
+        <span style="color:var(--muted);font-size:12px">Worker Sessions</span>
+        <div style="flex:1"></div>
+        <span id="leaseStats" style="color:var(--muted);font-size:11px"></span>
+        <button class="btn btn-secondary" onclick="loadWorkerLeases()" style="font-size:11px;padding:3px 10px">&#8635; Refresh</button>
+      </div>
+      <div class="worker-leases-container" id="workerLeasesContainer" style="flex:1;overflow-y:auto;padding:12px">
+        <span style="color:var(--muted);padding:20px">Loading worker leases...</span>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -854,6 +912,11 @@ let pendingRequestAttachmentSig = '';
 
 function makeRequestId() {
   return `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function normalizeErrorMessage(msg) {
+  const text = (msg || 'Unknown error').toString().trim();
+  return text.replace(/^(?:Error:\s*)+/i, '').trim() || 'Unknown error';
 }
 
 // Session error tracking for summary
@@ -1179,6 +1242,61 @@ socket.on('agent-reset', (data) => {
 let streamDidFire = false;
 let lastStreamChunk = ''; // Detect repeated chunks
 let repeatCount = 0;
+const pendingPeerReplies = new Map(); // exchangeId -> status message element
+const peerThreadAnchors = new Map(); // exchangeId -> latest message wrapper in thread
+let threadOnlyMode = false;
+
+function applyThreadOnlyFilter() {
+  const wrappers = document.querySelectorAll('#messages .message-wrapper');
+  wrappers.forEach(w => {
+    const isThread = w.classList.contains('peer-thread');
+    w.style.display = (!threadOnlyMode || isThread) ? '' : 'none';
+  });
+}
+
+function toggleThreadOnlyMode() {
+  threadOnlyMode = !threadOnlyMode;
+  const btn = document.getElementById('threadFilterBtn');
+  if (btn) {
+    btn.textContent = threadOnlyMode ? 'Thread View: On' : 'Thread View: Off';
+    btn.style.borderColor = threadOnlyMode ? 'var(--accent)' : 'var(--border)';
+    btn.style.color = threadOnlyMode ? 'var(--accent)' : 'var(--muted)';
+  }
+  applyThreadOnlyFilter();
+}
+
+function shortExchangeId(exchangeId) {
+  const id = (exchangeId || '').toString();
+  return id.length <= 8 ? id : id.slice(-8);
+}
+
+function tagThreadMessage(messageEl, exchangeId) {
+  if (!messageEl || !exchangeId) return null;
+  const wrapper = messageEl.closest('.message-wrapper');
+  if (!wrapper) return null;
+  wrapper.classList.add('peer-thread');
+  wrapper.dataset.exchangeId = exchangeId;
+  const contentEl = messageEl.querySelector('.content');
+  if (contentEl && !contentEl.querySelector('.thread-tag')) {
+    const tag = document.createElement('span');
+    tag.className = 'thread-tag';
+    tag.textContent = `Thread ${shortExchangeId(exchangeId)}`;
+    contentEl.prepend(tag);
+  }
+  return wrapper;
+}
+
+function appendToThread(exchangeId, messageEl) {
+  if (!exchangeId || !messageEl) return;
+  const wrapper = tagThreadMessage(messageEl, exchangeId);
+  if (!wrapper) return;
+  const anchor = peerThreadAnchors.get(exchangeId);
+  if (anchor && anchor.parentNode && wrapper.parentNode === anchor.parentNode) {
+    anchor.insertAdjacentElement('afterend', wrapper);
+  }
+  peerThreadAnchors.set(exchangeId, wrapper);
+  applyThreadOnlyFilter();
+}
 
 // Society Agent - Track worker streaming state separately
 const workerStreams = new Map(); // workerId -> { el, text }
@@ -1293,6 +1411,55 @@ socket.on('delegation-message', (data) => {
   scrollToBottom();
   
   addLog('info', `Received task from ${data.fromAgentName}`);
+});
+
+// Cross-agent messaging: render the same question/answer in both agents' chat views.
+socket.on('agent-peer-message', (data) => {
+  if (!data || data.projectId !== PROJECT_ID) return;
+  const isSenderView = data.fromAgentId === AGENT_ID;
+  const isReceiverView = data.toAgentId === AGENT_ID;
+  if (!isSenderView && !isReceiverView) return;
+
+  const urgent = data.priority === 'urgent' ? ' ⚠️ URGENT' : '';
+  if (isSenderView) {
+    const sentEl = addMessage('system', `📤 **To ${data.toAgentName}**${urgent}\n\n${data.message}`);
+    appendToThread(data.exchangeId, sentEl);
+    const pendingEl = addMessage('system', `⏳ Waiting reply from ${data.toAgentName}...`);
+    appendToThread(data.exchangeId, pendingEl);
+    pendingPeerReplies.set(data.exchangeId, pendingEl);
+  } else {
+    const questionEl = addMessage('user', `📨 **From ${data.fromAgentName}**${urgent}\n\n${data.message}`, data.fromAgentName);
+    appendToThread(data.exchangeId, questionEl);
+  }
+  scrollToBottom();
+});
+
+socket.on('agent-peer-response', (data) => {
+  if (!data || data.projectId !== PROJECT_ID) return;
+  const isSenderView = data.toAgentId === AGENT_ID;
+  const isResponderView = data.fromAgentId === AGENT_ID;
+  if (!isSenderView && !isResponderView) return;
+
+  if (isSenderView) {
+    const pendingEl = pendingPeerReplies.get(data.exchangeId);
+    if (pendingEl && pendingEl.querySelector('.content')) {
+      if (data.status === 'answered') {
+        pendingEl.querySelector('.content').textContent = `✅ Reply received from ${data.fromAgentName}`;
+      } else if (data.status === 'queued') {
+        pendingEl.querySelector('.content').textContent = `📥 Queued in ${data.fromAgentName}'s inbox`;
+      } else {
+        pendingEl.querySelector('.content').textContent = `❌ Reply failed from ${data.fromAgentName}`;
+      }
+      appendToThread(data.exchangeId, pendingEl);
+    }
+    const replyEl = addMessage('assistant', `📨 **Reply from ${data.fromAgentName}:**\n\n${data.message}`, data.fromAgentName);
+    appendToThread(data.exchangeId, replyEl);
+    pendingPeerReplies.delete(data.exchangeId);
+  } else {
+    const sentReplyEl = addMessage('system', `📤 **Reply sent to ${data.toAgentName}:**\n\n${data.message}`);
+    appendToThread(data.exchangeId, sentReplyEl);
+  }
+  scrollToBottom();
 });
 
 // Show task claimed in worker's chat
@@ -2981,7 +3148,8 @@ async function sendMessage() {
 
     if (!res.ok) {
       removeTyping();
-      addMessage('system', `Error: ${data.error || 'Unknown error'}`);
+      const errorMsg = normalizeErrorMessage(data.error || 'Unknown error');
+      addMessage('system', `Error: ${errorMsg}`);
       isStreaming = false;
       document.getElementById('sendBtn').disabled = false;
       document.getElementById('stopBtn').style.display = 'none'; // Society Agent - hide stop button
@@ -3027,7 +3195,8 @@ async function sendMessage() {
     loadAgent();
   } catch (e) {
     removeTyping();
-    addMessage('system', `Network error: ${e.message}`);
+    const errorMsg = normalizeErrorMessage(e?.message || String(e));
+    addMessage('system', `Network error: ${errorMsg}`);
     addMessage('system', 'If this request actually reached the server, re-sending the same prompt will resume via request ID deduplication.');
     isStreaming = false;
     // Society Agent start - Reset stream state on error so next message starts fresh
@@ -4921,6 +5090,10 @@ function switchTab(tab) {
     document.getElementById('tabTasks').classList.add('active');
     document.getElementById('paneTasks').classList.add('active');
     loadAgentTasks();
+  } else if (tab === 'leases') {
+    document.getElementById('tabLeases').classList.add('active');
+    document.getElementById('paneLeases').classList.add('active');
+    loadWorkerLeases();
   } else {
     document.getElementById('tabChat').classList.add('active');
     document.getElementById('paneChat').classList.add('active');
@@ -5343,6 +5516,7 @@ function addMessage(role, content, sender, attachments) {
   wrapper.appendChild(actions);
   
   document.getElementById('messages').appendChild(wrapper);
+  applyThreadOnlyFilter();
   scrollToBottom();
   return el;
 }
@@ -5949,6 +6123,190 @@ function showToast(msg, type = 'success') {
 loadServerProviderConfig();
 loadProjectConfig();
 // Society Agent end
+
+// ============================================================================
+// Worker Leases Dashboard
+// ============================================================================
+async function loadWorkerLeases() {
+  if (!PROJECT_ID) {
+    document.getElementById('workerLeasesContainer').innerHTML = '<div class="lease-empty">No project ID</div>';
+    return;
+  }
+  
+  try {
+    const res = await fetch(`${API}/api/worker-leases/${PROJECT_ID}`);
+    if (!res.ok) {
+      document.getElementById('workerLeasesContainer').innerHTML = '<div class="lease-empty">Failed to load worker leases</div>';
+      return;
+    }
+    
+    const data = await res.json();
+    renderWorkerLeases(data);
+  } catch (e) {
+    document.getElementById('workerLeasesContainer').innerHTML = `<div class="lease-empty">Error: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function renderWorkerLeases(data) {
+  const container = document.getElementById('workerLeasesContainer');
+  
+  if (!data.workers || data.workers.length === 0) {
+    container.innerHTML = '<div class="lease-empty">No active worker sessions</div>';
+    // Update stats
+    document.getElementById('leaseStats').textContent = 'Total: 0 | Healthy: 0 | Stale: 0 | Expired: 0';
+    document.getElementById('leaseBadge').style.display = 'none';
+    return;
+  }
+  
+  // Update stats badge
+  const totalCount = data.workers.length;
+  if (totalCount > 0) {
+    document.getElementById('leaseBadge').textContent = totalCount;
+    document.getElementById('leaseBadge').style.display = 'inline';
+  }
+  
+  // Update stats line
+  document.getElementById('leaseStats').textContent = 
+    `Total: ${data.sessionCount} | Healthy: ${data.healthySessions} | Stale: ${data.staleSessions} | Expired: ${data.expiredLeases}`;
+  
+  // Group workers by health status
+  const healthy = data.workers.filter(w => w.healthy);
+  const stale = data.workers.filter(w => !w.healthy && w.heartbeatAgeMs > 5*60*1000);
+  const expired = data.workers.filter(w => w.leaseExpired);
+  const stopping = data.workers.filter(w => w.status === 'stopping');
+  
+  let html = '';
+  
+  if (healthy.length > 0) {
+    html += `<div class="lease-group">
+      <div class="lease-group-header">
+        <span class="status-dot healthy" title="Healthy"></span>
+        <span>Healthy Workers</span>
+        <span class="count">${healthy.length}</span>
+      </div>
+      <div class="lease-list">
+        ${healthy.map(w => renderWorkerLeaseItem(w)).join('')}
+      </div>
+    </div>`;
+  }
+  
+  if (stale.length > 0) {
+    html += `<div class="lease-group">
+      <div class="lease-group-header">
+        <span class="status-dot stale" title="Stale"></span>
+        <span>Stale Workers</span>
+        <span class="count">${stale.length}</span>
+      </div>
+      <div class="lease-list">
+        ${stale.map(w => renderWorkerLeaseItem(w)).join('')}
+      </div>
+    </div>`;
+  }
+  
+  if (expired.length > 0) {
+    html += `<div class="lease-group">
+      <div class="lease-group-header">
+        <span class="status-dot expired" title="Expired"></span>
+        <span>Expired Leases</span>
+        <span class="count">${expired.length}</span>
+      </div>
+      <div class="lease-list">
+        ${expired.map(w => renderWorkerLeaseItem(w)).join('')}
+      </div>
+    </div>`;
+  }
+  
+  if (stopping.length > 0) {
+    html += `<div class="lease-group">
+      <div class="lease-group-header">
+        <span class="status-dot none" title="Stopping"></span>
+        <span>Stopping Workers</span>
+        <span class="count">${stopping.length}</span>
+      </div>
+      <div class="lease-list">
+        ${stopping.map(w => renderWorkerLeaseItem(w)).join('')}
+      </div>
+    </div>`;
+  }
+  
+  container.innerHTML = html;
+}
+
+function renderWorkerLeaseItem(worker) {
+  const healthStatus = worker.healthy ? 'healthy' : 
+                      worker.leaseExpired ? 'expired' : 
+                      worker.heartbeatAgeMs > 5*60*1000 ? 'stale' : 'none';
+  
+  const heartbeatAgoMs = worker.heartbeatAgeMs;
+  const heartbeatHbs = formatDuration(heartbeatAgoMs);
+  
+  const startedAgoMs = worker.startedAgoMs;
+  const startedHbs = formatDuration(startedAgoMs);
+  
+  let leaseHtml = '';
+  if (worker.taskId && worker.leaseExpiresInMs !== undefined) {
+    const leaseRemaining = worker.leaseExpiresInMs;
+    const leaseWarning = leaseRemaining < 60000; // < 1 minute
+    const leaseDanger = leaseRemaining < 0;
+    const classStr = leaseDanger ? 'danger' : leaseWarning ? 'warning' : '';
+    
+    leaseHtml = `<div class="lease-countdown ${classStr}">
+      <span class="icon">⏱</span>
+      <span>Lease expires in ${formatDuration(Math.max(0, leaseRemaining))}</span>
+    </div>`;
+  }
+  
+  let taskHtml = '';
+  if (worker.taskId && worker.taskTitle) {
+    taskHtml = `<div class="lease-task">
+      <span class="task-id">${escHtml(worker.taskId)}</span>
+      <span class="task-title">${escHtml(worker.taskTitle)}</span>
+      ${leaseHtml}
+    </div>`;
+  } else if (worker.taskId) {
+    taskHtml = `<div class="lease-task">
+      <span class="task-id">${escHtml(worker.taskId)}</span>
+      <span class="dim"> (no title) | status: ${escHtml(worker.agentStatus)}</span>
+      ${leaseHtml}
+    </div>`;
+  }
+  
+  return `<div class="lease-item ${healthStatus}">
+    <div class="indicator ${healthStatus}"></div>
+    <div class="lease-info">
+      <div class="lease-title">
+        <span class="lease-worker-id">${escHtml(worker.workerId)}</span>
+        <span style="color:var(--muted);font-size:10px">@${escHtml(PROJECT_ID || 'project')}</span>
+      </div>
+      <div class="lease-meta">
+        <div class="lease-meta-item">
+          <span class="label">Started:</span>
+          <span class="value">${startedHbs}</span>
+        </div>
+        <div class="lease-meta-item">
+          <span class="label">Heartbeat:</span>
+          <span class="value">${heartbeatHbs}</span>
+        </div>
+        <div class="lease-meta-item">
+          <span class="label">Status:</span>
+          <span class="value">${escHtml(worker.status)}</span>
+        </div>
+        <div class="lease-meta-item">
+          <span class="label">Reports To:</span>
+          <span class="value">${worker.reportsTo ? escHtml(worker.reportsTo) : '—'}</span>
+        </div>
+      </div>
+      ${taskHtml}
+    </div>
+  </div>`;
+}
+
+function formatDuration(ms) {
+  if (ms < 1000) return 'just now';
+  if (ms < 60000) return Math.floor(ms / 1000) + 's ago';
+  if (ms < 3600000) return Math.floor(ms / 60000) + 'm ago';
+  return Math.floor(ms / 3600000) + 'h ago';
+}
 </script>
 </body>
 </html>

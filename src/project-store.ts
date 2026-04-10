@@ -289,6 +289,10 @@ export interface Task {
 	lastClaimedBy?: string
 	/** Last claim timestamp (preserved on failure/reset) */
 	lastClaimedAt?: string
+	/** Last worker heartbeat while task is active */
+	lastHeartbeatAt?: string
+	/** Lease expiry timestamp for automatic recovery */
+	leaseExpiresAt?: string
 	/** Full context for execution */
 	context: TaskContext
 	/** Result after completion */
@@ -345,6 +349,17 @@ export interface ScheduledTask {
 	/** When created */
 	createdAt: string
 }
+
+export interface WorkerSession {
+	workerId: string
+	projectId: string
+	reportsTo?: string
+	taskId?: string
+	status: "starting" | "running" | "stopping"
+	startedAt: string
+	lastHeartbeatAt: string
+	updatedAt: string
+}
 // Society Agent end
 
 /**
@@ -372,6 +387,8 @@ export interface Project {
 	tasks: Task[]
 	/** Maximum concurrent ephemeral workers (default: 3) */
 	maxConcurrentWorkers: number
+	/** Persisted worker sessions for crash-safe recovery */
+	workerSessions?: WorkerSession[]
 	// Society Agent end
 	// Society Agent start - Enhanced task management (Proposal 1, 2)
 	/** Managed tasks with stable IDs and state machine */
@@ -442,6 +459,7 @@ function createDefaultProjects(): Project[] {
 			// Society Agent start - Task pool
 			tasks: [],
 			maxConcurrentWorkers: 3,
+			workerSessions: [],
 			// Society Agent end
 			status: "active",
 			createdAt: now,
@@ -1191,10 +1209,91 @@ A task is NOT done until ALL four are true:
 		if (idx === -1) return false
 
 		project.agents.splice(idx, 1)
+		if (project.workerSessions?.length) {
+			project.workerSessions = project.workerSessions.filter((s) => s.workerId !== agentId)
+		}
 		project.updatedAt = new Date().toISOString()
 		this.save()
 		log.info(`Removed agent ${agentId} from project ${project.name}`)
 		return true
+	}
+
+	registerWorkerSession(projectId: string, session: Omit<WorkerSession, "updatedAt">): void {
+		const project = this.get(projectId)
+		if (!project) return
+		if (!project.workerSessions) project.workerSessions = []
+		const nowIso = new Date().toISOString()
+		const next: WorkerSession = { ...session, updatedAt: nowIso }
+		const idx = project.workerSessions.findIndex((s) => s.workerId === session.workerId)
+		if (idx >= 0) {
+			project.workerSessions[idx] = next
+		} else {
+			project.workerSessions.push(next)
+		}
+		project.updatedAt = nowIso
+		this.save()
+	}
+
+	heartbeatWorkerSession(projectId: string, workerId: string, updates?: { taskId?: string | null; status?: WorkerSession["status"] }): void {
+		const project = this.get(projectId)
+		if (!project?.workerSessions) return
+		const session = project.workerSessions.find((s) => s.workerId === workerId)
+		if (!session) return
+		const nowIso = new Date().toISOString()
+		session.lastHeartbeatAt = nowIso
+		session.updatedAt = nowIso
+		if (updates?.taskId !== undefined) session.taskId = updates.taskId ?? undefined
+		if (updates?.status) session.status = updates.status
+		project.updatedAt = nowIso
+		this.save()
+	}
+
+	removeWorkerSession(projectId: string, workerId: string): void {
+		const project = this.get(projectId)
+		if (!project?.workerSessions) return
+		const prev = project.workerSessions.length
+		project.workerSessions = project.workerSessions.filter((s) => s.workerId !== workerId)
+		if (project.workerSessions.length !== prev) {
+			project.updatedAt = new Date().toISOString()
+			this.save()
+		}
+	}
+
+	getWorkerSessions(projectId: string): WorkerSession[] {
+		const project = this.get(projectId)
+		return project?.workerSessions || []
+	}
+
+	reconcileWorkerSessionsOnStartup(projectId: string, staleMs: number = 5 * 60 * 1000): { removedSessions: number; removedWorkers: number } {
+		const project = this.get(projectId)
+		if (!project) return { removedSessions: 0, removedWorkers: 0 }
+		if (!project.workerSessions || project.workerSessions.length === 0) return { removedSessions: 0, removedWorkers: 0 }
+
+		const now = Date.now()
+		const staleWorkerIds = new Set<string>()
+		for (const s of project.workerSessions) {
+			const hb = new Date(s.lastHeartbeatAt).getTime()
+			if (!hb || now - hb > staleMs) {
+				staleWorkerIds.add(s.workerId)
+			}
+		}
+
+		const beforeSessions = project.workerSessions.length
+		project.workerSessions = project.workerSessions.filter((s) => !staleWorkerIds.has(s.workerId))
+		const removedSessions = beforeSessions - project.workerSessions.length
+
+		const beforeAgents = project.agents.length
+		if (staleWorkerIds.size > 0) {
+			project.agents = project.agents.filter((a) => !(a.ephemeral && staleWorkerIds.has(a.id)))
+		}
+		const removedWorkers = beforeAgents - project.agents.length
+
+		if (removedSessions > 0 || removedWorkers > 0) {
+			project.updatedAt = new Date().toISOString()
+			this.save()
+		}
+
+		return { removedSessions, removedWorkers }
 	}
 
 	/** Record activity for an agent - just updates lastActiveAt */
@@ -1312,11 +1411,15 @@ A task is NOT done until ALL four are true:
 		const task = project.tasks?.find((t) => t.id === taskId)
 		if (!task || task.status !== "available") return undefined
 
+		const nowIso = new Date().toISOString()
+		const leaseMs = 10 * 60 * 1000
 		task.status = "claimed"
 		task.claimedBy = agentId
-		task.claimedAt = new Date().toISOString()
+		task.claimedAt = nowIso
 		task.lastClaimedBy = agentId
 		task.lastClaimedAt = task.claimedAt
+		task.lastHeartbeatAt = nowIso
+		task.leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString()
 		project.updatedAt = new Date().toISOString()
 		this.save()
 		log.info(`Task "${task.title}" claimed by ${agentId}`)
@@ -1363,10 +1466,30 @@ A task is NOT done until ALL four are true:
 		if (!task || task.status !== "claimed") return undefined
 
 		task.status = "in-progress"
+		task.lastHeartbeatAt = new Date().toISOString()
+		task.leaseExpiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
 		project.updatedAt = new Date().toISOString()
 		this.save()
 		log.info(`Task "${task.title}" started`)
 		return task
+	}
+
+	/** Heartbeat an active task to extend its lease */
+	heartbeatTask(projectId: string, taskId: string, agentId: string, leaseMs: number = 10 * 60 * 1000): boolean {
+		const project = this.get(projectId)
+		if (!project) return false
+
+		const task = project.tasks?.find((t) => t.id === taskId)
+		if (!task) return false
+		if (!task.claimedBy || task.claimedBy !== agentId) return false
+		if (!["claimed", "in-progress"].includes(task.status)) return false
+
+		const now = Date.now()
+		task.lastHeartbeatAt = new Date(now).toISOString()
+		task.leaseExpiresAt = new Date(now + leaseMs).toISOString()
+		project.updatedAt = new Date().toISOString()
+		this.save()
+		return true
 	}
 
 	/** Complete a task */
@@ -1384,6 +1507,12 @@ A task is NOT done until ALL four are true:
 		task.status = "completed"
 		task.result = result
 		task.completedAt = new Date().toISOString()
+		task.lastClaimedBy = task.claimedBy || task.lastClaimedBy
+		task.lastClaimedAt = task.claimedAt || task.lastClaimedAt
+		task.claimedBy = undefined
+		task.claimedAt = undefined
+		task.lastHeartbeatAt = undefined
+		task.leaseExpiresAt = undefined
 		project.updatedAt = new Date().toISOString()
 		this.save()
 		log.info(`Task "${task.title}" completed`)
@@ -1405,6 +1534,8 @@ A task is NOT done until ALL four are true:
 		task.lastClaimedAt = task.claimedAt || task.lastClaimedAt
 		task.claimedBy = undefined
 		task.claimedAt = undefined
+		task.lastHeartbeatAt = undefined
+		task.leaseExpiresAt = undefined
 		project.updatedAt = new Date().toISOString()
 		this.save()
 		log.info(`Task "${task.title}" failed: ${error}, returned to pool`)
@@ -1491,19 +1622,28 @@ A task is NOT done until ALL four are true:
 			// If filtering by spawnedBy: include if our worker OR if orphaned
 			if (myWorkerIds && !myWorkerIds.has(task.claimedBy) && !isOrphan) continue
 
-			// Check if the task has been claimed for too long
+			// Check stale/expired lease
 			const claimedAt = task.claimedAt ? new Date(task.claimedAt).getTime() : 0
-			const isStale = claimedAt && (now - claimedAt) > maxAgeMs
+			const heartbeatAt = task.lastHeartbeatAt ? new Date(task.lastHeartbeatAt).getTime() : claimedAt
+			const leaseExpiresAt = task.leaseExpiresAt ? new Date(task.leaseExpiresAt).getTime() : 0
+			const isLeaseExpired = leaseExpiresAt > 0 && now >= leaseExpiresAt
+			const isStale = heartbeatAt && (now - heartbeatAt) > maxAgeMs
 
-			if (isOrphan || isStale) {
+			if (isOrphan || isStale || isLeaseExpired) {
 				task.status = "available"
 				task.lastClaimedBy = task.claimedBy || task.lastClaimedBy
 				task.lastClaimedAt = task.claimedAt || task.lastClaimedAt
 				task.claimedBy = undefined
 				task.claimedAt = undefined
-				task.error = isOrphan ? "Orphaned - claiming agent removed" : "Stale - exceeded time limit"
+				task.lastHeartbeatAt = undefined
+				task.leaseExpiresAt = undefined
+				task.error = isOrphan
+					? "Orphaned - claiming agent removed"
+					: isLeaseExpired
+					? "Lease expired - worker heartbeat missing"
+					: "Stale - exceeded heartbeat time limit"
 				resetCount++
-				log.info(`Reset stale task "${task.title}" (orphan: ${isOrphan}, stale: ${isStale})`)
+				log.info(`Reset stale task "${task.title}" (orphan: ${isOrphan}, stale: ${isStale}, leaseExpired: ${isLeaseExpired})`)
 			}
 		}
 

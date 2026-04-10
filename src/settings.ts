@@ -27,6 +27,7 @@ export type ProviderType =
 	| "deepseek"
 	| "groq"
 	| "mistral"
+	| "ollama"
 
 export interface ProviderConfig {
 	type: ProviderType
@@ -84,6 +85,7 @@ export const DEFAULT_MODELS: Record<ProviderType, string> = {
 	deepseek: "deepseek-chat",
 	groq: "llama-3.1-70b-versatile",
 	mistral: "mistral-large-latest",
+	ollama: "qwen2.5-coder:7b",
 }
 
 // Base URLs per provider
@@ -96,6 +98,9 @@ export const PROVIDER_BASE_URLS: Record<ProviderType, string> = {
 	deepseek: "https://api.deepseek.com/v1",
 	groq: "https://api.groq.com/openai/v1",
 	mistral: "https://api.mistral.ai/v1",
+	ollama: process.env.OLLAMA_BASE_URL || (fs.existsSync("/.dockerenv") || !!process.env.REMOTE_CONTAINERS || !!process.env.DEVCONTAINER
+		? "http://host.docker.internal:11434/v1"
+		: "http://localhost:11434/v1"),
 }
 
 // Map provider types to their API key environment variable names
@@ -108,6 +113,7 @@ const API_KEY_ENV_MAP: Record<ProviderType, string> = {
 	deepseek: "DEEPSEEK_API_KEY",
 	groq: "GROQ_API_KEY",
 	mistral: "MISTRAL_API_KEY",
+	ollama: "OLLAMA_API_KEY",
 }
 
 // ============================================================================
@@ -230,12 +236,13 @@ class SettingsManager {
 			// Use explicitly selected provider
 			const apiKeyEnv = API_KEY_ENV_MAP[activeProvider]
 			const apiKey = process.env[apiKeyEnv]
+			const isKeylessProvider = activeProvider === "ollama"
 
-			if (apiKey) {
+			if (apiKey || isKeylessProvider) {
 				this.settings.provider = {
 					type: activeProvider,
-					apiKey,
-					model: activeModel || DEFAULT_MODELS[activeProvider],
+					apiKey: apiKey || "ollama",
+					model: activeModel || process.env.OLLAMA_MODEL_ID || DEFAULT_MODELS[activeProvider],
 				}
 				log.info(`Loaded ${activeProvider} config from .env (ACTIVE_PROVIDER)`)
 			} else {
@@ -264,6 +271,13 @@ class SettingsManager {
 					model: process.env.OPENAI_MODEL_ID || DEFAULT_MODELS.openai,
 				}
 				log.info("Loaded OpenAI config from .env")
+			} else if (process.env.OLLAMA_MODEL_ID || process.env.OLLAMA_BASE_URL) {
+				this.settings.provider = {
+					type: "ollama",
+					apiKey: process.env.OLLAMA_API_KEY || "ollama",
+					model: process.env.OLLAMA_MODEL_ID || DEFAULT_MODELS.ollama,
+				}
+				log.info("Loaded Ollama config from .env")
 			}
 		}
 
@@ -291,6 +305,9 @@ class SettingsManager {
 		const apiKeyEnv = API_KEY_ENV_MAP[this.settings.provider.type]
 		if (apiKeyEnv && this.settings.provider.apiKey) {
 			updates[apiKeyEnv] = this.settings.provider.apiKey
+		}
+		if (this.settings.provider.type === "ollama") {
+			updates.OLLAMA_MODEL_ID = this.settings.provider.model
 		}
 
 		updateEnvFile(this.envPath, updates)
@@ -337,13 +354,14 @@ class SettingsManager {
 	 * Check if API key is configured
 	 */
 	hasApiKey(): boolean {
-		return !!this.settings.provider.apiKey
+		return this.settings.provider.type === "ollama" || !!this.settings.provider.apiKey
 	}
 
 	/**
 	 * Get masked API key for display
 	 */
 	getMaskedApiKey(): string {
+		if (this.settings.provider.type === "ollama") return "Not required (local)"
 		const key = this.settings.provider.apiKey
 		if (!key || key.length < 12) return "Not configured"
 		return `${key.slice(0, 8)}...${key.slice(-4)}`

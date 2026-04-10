@@ -204,8 +204,7 @@ export class UnifiedMessageHandler {
 			return
 		}
 
-		const { ClineProvider } = await import("../../core/webview/ClineProvider")
-		const provider = ClineProvider.getVisibleInstance()
+		const provider = await this.getVisibleProvider()
 		const currentTask = provider?.getCurrentTask()
 
 		if (currentTask) {
@@ -251,14 +250,13 @@ export class UnifiedMessageHandler {
 	 * QUEUE: Add to task queue, process when current task finishes
 	 */
 	private async handleQueue(message: SignedMessage): Promise<void> {
-		const { ClineProvider } = await import("../../core/webview/ClineProvider")
-		const provider = ClineProvider.getVisibleInstance()
+		const provider = await this.getVisibleProvider()
 		const currentTask = provider?.getCurrentTask()
 
 		if (!currentTask) {
 			// Agent is idle — start immediately
 			if (provider) {
-				this.currentTask = message
+				this.currentTask = message 
 				// Track who sent this so we can route the response back
 				this.responseContext = { lastSender: message.from, messageId: message.id }
 				const formatted = this.formatForNewTask(message)
@@ -267,7 +265,7 @@ export class UnifiedMessageHandler {
 			}
 		} else {
 			// Agent is busy — queue it
-			this.taskQueue.push(message)
+			this.taskQueue.push(message) 
 			getLog().info(`Queued ${message.type} from ${message.from} (queue size: ${this.taskQueue.length})`)
 			vscode.window.showInformationMessage(
 				`📋 Task from ${message.from} queued (position ${this.taskQueue.length})`,
@@ -280,7 +278,6 @@ export class UnifiedMessageHandler {
 	 */
 	private async handleLog(message: SignedMessage): Promise<void> {
 		getLog().info(`${message.type} from ${message.from}: ${message.content.substring(0, 100)}`)
-
 		// Show subtle notification for status updates
 		if (message.type === "task_complete") {
 			vscode.window.showInformationMessage(
@@ -343,8 +340,7 @@ export class UnifiedMessageHandler {
 
 		getLog().info(`Starting next queued task from ${next.from} (${this.taskQueue.length} remaining)`)
 
-		const { ClineProvider } = await import("../../core/webview/ClineProvider")
-		const provider = ClineProvider.getVisibleInstance()
+		const provider = await this.getVisibleProvider()
 		if (provider) {
 			const formatted = this.formatForNewTask(next)
 			await provider.createTask(formatted)
@@ -369,6 +365,15 @@ export class UnifiedMessageHandler {
 	 */
 	getResponseContext(): { lastSender: string; messageId: string } | null {
 		return this.responseContext
+	}
+
+	private async getVisibleProvider(): Promise<any | null> {
+		try {
+			const { ClineProvider } = await import("../../core/webview/ClineProvider")
+			return ClineProvider.getVisibleInstance()
+		} catch {
+			return null
+		}
 	}
 
 	/**

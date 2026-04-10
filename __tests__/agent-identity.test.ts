@@ -8,7 +8,7 @@ import {
 	getMessagePriority,
 	isReplayAttack,
 	type SignedMessage,
-} from "../agent-identity"
+} from "../src/agent-identity"
 
 // Mock the logger
 vi.mock("../logger", () => ({

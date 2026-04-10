@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { createChannelLog, setSocietyLog, getLog, type SocietyLog } from "../logger"
+import { createChannelLog, setSocietyLog, getLog, type SocietyLog } from "../src/logger"
 
 describe("SocietyLog", () => {
 	describe("createChannelLog", () => {

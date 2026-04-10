@@ -3,8 +3,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import * as fs from "fs"
 import * as path from "path"
 import * as os from "os"
-import { ExecutionLogger } from "../execution-logger"
-import type { LogEntry } from "../execution-logger"
+import { ExecutionLogger } from "../src/execution-logger"
+import type { LogEntry } from "../src/execution-logger"
 
 // Mock the logger
 vi.mock("../logger", () => ({

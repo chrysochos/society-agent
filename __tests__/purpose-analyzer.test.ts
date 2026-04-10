@@ -1,6 +1,6 @@
 // Society Agent - new file
 import { describe, it, expect } from "vitest"
-import { PurposeAnalyzer, type PurposeContext } from "../purpose-analyzer"
+import { PurposeAnalyzer, type PurposeContext } from "../src/purpose-analyzer"
 
 describe("PurposeAnalyzer", () => {
 	describe("analyze", () => {

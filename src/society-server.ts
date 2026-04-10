@@ -99,6 +99,14 @@ import {
 	DelegationRequest,
 } from "./delegation-tracker"
 // Society Agent end
+import {
+	inferRequestIntent,
+	createInitialTaskState,
+	composePromptPackage,
+	toPromptString,
+	validateCompletionSummary,
+	type PromptTaskState,
+} from "./prompt-orchestration"
 
 const app = express()
 const server = http.createServer(app)
@@ -156,6 +164,274 @@ function extractPortsFromCommand(cmd: string): number[] {
 	return [...new Set(ports)]
 }
 
+function getDefaultOllamaBaseUrl(): string {
+	if (process.env.OLLAMA_BASE_URL) return process.env.OLLAMA_BASE_URL
+	const runningInContainer = fs.existsSync("/.dockerenv") || !!process.env.REMOTE_CONTAINERS || !!process.env.DEVCONTAINER
+	return runningInContainer ? "http://host.docker.internal:11434/v1" : "http://localhost:11434/v1"
+}
+
+function normalizeErrorMessage(error: unknown): string {
+	let message = ""
+	if (error instanceof Error) {
+		message = error.message
+	} else if (typeof error === "string") {
+		message = error
+	} else {
+		try {
+			message = JSON.stringify(error)
+		} catch {
+			message = String(error)
+		}
+	}
+
+	if (!message || message === "[object Object]") {
+		message = "Unknown error"
+	}
+
+	return message.replace(/^(?:Error:\s*)+/i, "").trim()
+}
+
+function withOllamaConnectionHint(message: string, modelHint?: string): string {
+	const normalized = normalizeErrorMessage(message)
+	const msgLower = normalized.toLowerCase()
+	const requestedModelMatch = normalized.match(/model\s+'([^']+)'\s+not\s+found/i)
+	const requestedModel = requestedModelMatch?.[1] || modelHint || process.env.OLLAMA_MODEL_ID || "qwen2.5-coder:7b"
+	const isModelNotFound = msgLower.includes("model") && msgLower.includes("not found")
+	const isConnectionIssue =
+		msgLower.includes("connection error") ||
+		msgLower.includes("econnrefused") ||
+		msgLower.includes("fetch failed") ||
+		msgLower.includes("socket hang up") ||
+		msgLower.includes("timed out")
+
+	if (isModelNotFound) {
+		const baseUrl = getDefaultOllamaBaseUrl()
+		return `${normalized}\n\nOllama model troubleshooting (WSL + dev-container + Windows browser):\n- In WSL (where Ollama runs), check models: \`ollama list\`\n- Pull the requested model in WSL: \`ollama pull ${requestedModel}\`\n- From dev-container, verify Ollama API: \`curl ${baseUrl}/models\`\n- In the web app (Windows browser), select a model that exists in WSL Ollama output`
+	}
+
+	if (!isConnectionIssue) {
+		return normalized
+	}
+
+	const model = requestedModel
+	const baseUrl = getDefaultOllamaBaseUrl()
+	return `${normalized}\n\nOllama troubleshooting:\n- Ensure Ollama is running: \`ollama serve\`\n- Verify API is reachable: \`curl ${baseUrl}/models\`\n- Ensure model exists locally: \`ollama pull ${model}\`\n- If needed, set \`OLLAMA_BASE_URL\` explicitly for your network setup`
+}
+
+async function fetchOllamaModelIds(): Promise<{ baseUrl: string; models: string[]; fromApi: boolean; error?: string }> {
+	const baseUrl = getDefaultOllamaBaseUrl()
+	const normalizeModelList = (items: string[]): string[] => {
+		const models = Array.from(new Set(items.filter((id) => !!id))).sort((a, b) => a.localeCompare(b))
+		return models
+	}
+
+	// 1) OpenAI-compatible endpoint (some Ollama builds return data:null even when reachable).
+	try {
+		const res = await fetch(`${baseUrl}/models`)
+		if (!res.ok) {
+			// fall through to native endpoint
+		} else {
+			const payload: any = await res.json()
+			const models: string[] = Array.isArray(payload?.data)
+				? payload.data
+					.map((m: any) => (typeof m?.id === "string" ? m.id : ""))
+					.filter((id: string) => !!id)
+				: []
+			const normalized = normalizeModelList(models)
+			if (normalized.length > 0) {
+				return { baseUrl, models: normalized, fromApi: true }
+			}
+		}
+	} catch {
+		// try native endpoint below
+	}
+
+	// 2) Native Ollama endpoint.
+	try {
+		const res = await fetch(baseUrl.replace(/\/v1\/?$/, "") + "/api/tags")
+		if (!res.ok) {
+			return { baseUrl, models: [], fromApi: false, error: `HTTP ${res.status} ${res.statusText}` }
+		}
+		const payload: any = await res.json()
+		const models: string[] = Array.isArray(payload?.models)
+			? payload.models
+				.map((m: any) => (typeof m?.model === "string" ? m.model : (typeof m?.name === "string" ? m.name : "")))
+				.filter((id: string) => !!id)
+			: []
+		const normalized = normalizeModelList(models)
+		if (normalized.length === 0) {
+			return { baseUrl, models: [], fromApi: true }
+		}
+		return { baseUrl, models: normalized, fromApi: true }
+	} catch (error) {
+		return { baseUrl, models: [], fromApi: false, error: normalizeErrorMessage(error) }
+	}
+}
+
+async function resolveOllamaModelOrFallback(preferredModel?: string): Promise<string> {
+	const desired = preferredModel || process.env.OLLAMA_MODEL_ID || "qwen2.5-coder:7b"
+	const ollama = await fetchOllamaModelIds()
+	if (!Array.isArray(ollama.models) || ollama.models.length === 0) {
+		return desired
+	}
+	if (ollama.models.includes(desired)) {
+		return desired
+	}
+	const fallback = ollama.models[0]
+	log.warn(`[Ollama] Model '${desired}' not found at ${ollama.baseUrl}. Falling back to '${fallback}'.`)
+	return fallback
+}
+
+type SharedCacheEntry = {
+	value: unknown
+	setBy: string
+	createdAt: number
+	expiresAt?: number
+}
+
+// Shared in-memory cache used by all agents in this server process.
+// Namespaced by project + scope so supervisors and workers can coordinate.
+const sharedCoordinationCache = new Map<string, SharedCacheEntry>()
+const loadedPersistentCacheProjects = new Set<string>()
+const SHARED_CACHE_MAX_ENTRIES_RAW = parseInt(process.env.SHARED_CACHE_MAX_ENTRIES || "5000", 10)
+const SHARED_CACHE_MAX_ENTRIES = Number.isFinite(SHARED_CACHE_MAX_ENTRIES_RAW) && SHARED_CACHE_MAX_ENTRIES_RAW > 0
+	? SHARED_CACHE_MAX_ENTRIES_RAW
+	: 5000
+
+function cleanupExpiredCacheEntries(): void {
+	const now = Date.now()
+	for (const [k, entry] of sharedCoordinationCache.entries()) {
+		if (entry.expiresAt !== undefined && entry.expiresAt <= now) {
+			sharedCoordinationCache.delete(k)
+		}
+	}
+}
+
+function enforceSharedCacheSizeLimit(): void {
+	if (sharedCoordinationCache.size <= SHARED_CACHE_MAX_ENTRIES) return
+	const overflow = sharedCoordinationCache.size - SHARED_CACHE_MAX_ENTRIES
+	const oldest = [...sharedCoordinationCache.entries()]
+		.sort((a, b) => a[1].createdAt - b[1].createdAt)
+		.slice(0, overflow)
+	for (const [key] of oldest) {
+		sharedCoordinationCache.delete(key)
+	}
+	if (oldest.length > 0) {
+		log.warn(`[SharedCache] Evicted ${oldest.length} oldest cache entr${oldest.length === 1 ? "y" : "ies"} to enforce limit=${SHARED_CACHE_MAX_ENTRIES}`)
+	}
+}
+
+function getProjectCachePrefix(projectId: string): string {
+	return `project:${projectId}`
+}
+
+function getProjectCacheFilePath(projectId: string): string {
+	return path.join(projectStore.projectDir(projectId), ".society-shared-cache.json")
+}
+
+function ensureProjectCacheLoaded(projectId: string): void {
+	if (loadedPersistentCacheProjects.has(projectId)) return
+	loadedPersistentCacheProjects.add(projectId)
+
+	try {
+		const filePath = getProjectCacheFilePath(projectId)
+		if (!fs.existsSync(filePath)) return
+		const raw = fs.readFileSync(filePath, "utf-8")
+		const parsed = JSON.parse(raw) as { entries?: Record<string, SharedCacheEntry> }
+		if (!parsed || typeof parsed !== "object" || !parsed.entries) return
+
+		const now = Date.now()
+		for (const [key, entry] of Object.entries(parsed.entries)) {
+			if (!key.startsWith(getProjectCachePrefix(projectId))) continue
+			if (!entry || typeof entry !== "object") continue
+			if (entry.expiresAt !== undefined && entry.expiresAt <= now) continue
+			sharedCoordinationCache.set(key, entry)
+		}
+		enforceSharedCacheSizeLimit()
+	} catch (err: any) {
+		log.warn(`[SharedCache] Failed to load persistent cache for ${projectId}: ${err.message}`)
+	}
+}
+
+function persistProjectCache(projectId: string): void {
+	try {
+		const filePath = getProjectCacheFilePath(projectId)
+		const projectPrefix = `${getProjectCachePrefix(projectId)}:`
+		const entries: Record<string, SharedCacheEntry> = {}
+		const now = Date.now()
+
+		for (const [key, entry] of sharedCoordinationCache.entries()) {
+			if (!key.startsWith(projectPrefix)) continue
+			if (entry.expiresAt !== undefined && entry.expiresAt <= now) continue
+			entries[key] = entry
+		}
+
+		const payload = {
+			version: 1,
+			projectId,
+			updatedAt: new Date().toISOString(),
+			entries,
+		}
+		fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf-8")
+	} catch (err: any) {
+		log.warn(`[SharedCache] Failed to persist cache for ${projectId}: ${err.message}`)
+	}
+}
+
+function resolveCacheNamespace(projectId: string, agentConfig: ProjectAgentConfig, scope?: string): string {
+	const normalized = (scope || "project").trim().toLowerCase()
+	if (normalized === "project") {
+		return `project:${projectId}`
+	}
+	if (normalized === "supervisor") {
+		return `project:${projectId}:supervisor:${agentConfig.reportsTo || agentConfig.id}`
+	}
+	if (normalized.startsWith("custom:")) {
+		const suffix = normalized.slice("custom:".length).trim()
+		return suffix ? `project:${projectId}:custom:${suffix}` : `project:${projectId}:custom:default`
+	}
+	return `project:${projectId}:custom:${normalized}`
+}
+
+function buildSharedCacheKey(namespace: string, key: string): string {
+	return `${namespace}::${key}`
+}
+
+function runStartupSelfHealing(): void {
+	const enabled = (process.env.STARTUP_SELF_HEALING || "true").toLowerCase() !== "false"
+	if (!enabled) {
+		log.info("[SelfHealing] Startup self-healing disabled via STARTUP_SELF_HEALING=false")
+		return
+	}
+
+	const staleMinutesRaw = parseInt(process.env.STARTUP_STALE_TASK_MAX_AGE_MINUTES || "15", 10)
+	const staleMinutes = Number.isFinite(staleMinutesRaw) && staleMinutesRaw > 0 ? staleMinutesRaw : 15
+	const staleMs = staleMinutes * 60 * 1000
+
+	let projectCount = 0
+	let workersRemoved = 0
+	let sessionsRemoved = 0
+	let orphanWorkersRemoved = 0
+	let tasksReset = 0
+
+	for (const project of projectStore.getAll()) {
+		projectCount += 1
+		const reconciled = projectStore.reconcileWorkerSessionsOnStartup(project.id, staleMs)
+		const removedOrphans = projectStore.removeEphemeralWorkers(project.id, "__startup__", true)
+		const reset = projectStore.resetStaleTasks(project.id, staleMs)
+		sessionsRemoved += reconciled.removedSessions
+		workersRemoved += reconciled.removedWorkers
+		orphanWorkersRemoved += removedOrphans
+		tasksReset += reset
+
+		if (reconciled.removedSessions > 0 || reconciled.removedWorkers > 0 || removedOrphans > 0 || reset > 0) {
+			log.info(`[SelfHealing] Project ${project.id}: removed ${reconciled.removedSessions} stale session(s), removed ${reconciled.removedWorkers} stale worker(s), removed ${removedOrphans} orphan worker(s), reset ${reset} stale task(s)`)
+		}
+	}
+
+	log.info(`[SelfHealing] Checked ${projectCount} project(s). Removed ${sessionsRemoved} stale session(s), ${workersRemoved} stale worker(s), ${orphanWorkersRemoved} orphan worker(s), reset ${tasksReset} stale task(s).`)
+}
+
 // Society Agent - Hierarchical visibility: check if an agent can access a given path
 // Rules:
 // 1. Agent can read within their homeFolder and subdirectories
@@ -165,7 +441,7 @@ function extractPortsFromCommand(cmd: string): number[] {
 // 5. Project root ("/") homeFolder grants full access
 function canAgentAccessPath(
 	agentConfig: ProjectAgentConfig,
-	project: ProjectStoreState,
+	project: Project,
 	requestedPath: string
 ): { allowed: boolean; reason: string } {
 	// Normalize paths - remove leading/trailing slashes for consistent comparison
@@ -249,7 +525,7 @@ function canAgentAccessPath(
 // Society Agent - Get the list of folders an agent can access (for filtered root listing)
 function getAgentAccessibleFolders(
 	agentConfig: ProjectAgentConfig,
-	project: ProjectStoreState
+	project: Project
 ): string[] {
 	const normalize = (p: string) => p.replace(/^\/+|\/+$/g, "")
 	const normHome = normalize(agentConfig.homeFolder || "/")
@@ -1327,6 +1603,20 @@ let currentProviderSettings: ProviderSettings | null = null
 function getApiHandlerFromConfig(): ApiHandler {
 	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 
+	// Prefer dynamic provider settings loaded from .env so runtime follows
+	// /api/config/provider changes immediately (including Ollama keyless mode).
+	if (!currentProviderSettings) {
+		try {
+			currentProviderSettings = loadProviderSettings(workspacePath)
+		} catch {
+			// Fall back to standalone/legacy config paths below.
+		}
+	}
+
+	if (currentProviderSettings) {
+		return buildApiHandlerFromSettings(currentProviderSettings)
+	}
+
 	// Society Agent start - Check standalone settings first (supports OpenRouter and all providers)
 	if (standaloneSettings.isInitialized() && standaloneSettings.hasApiKey()) {
 		const providerConfig = standaloneSettings.getProvider()
@@ -1348,19 +1638,6 @@ function getApiHandlerFromConfig(): ApiHandler {
 		}
 	}
 	// Society Agent end
-
-	// Try to use the new full ProviderSettings first
-	if (!currentProviderSettings) {
-		try {
-			currentProviderSettings = loadProviderSettings(workspacePath)
-		} catch {
-			// Fall back to legacy config
-		}
-	}
-
-	if (currentProviderSettings) {
-		return buildApiHandlerFromSettings(currentProviderSettings)
-	}
 
 	// Fallback to legacy provider config
 	if (!currentProviderConfig) {
@@ -2585,9 +2862,10 @@ app.post("/api/config/workspace-path", async (req, res): Promise<void> => {
  * GET /api/config/provider - Get current provider configuration
  * Returns both legacy and full provider settings
  */
-app.get("/api/config/provider", (req, res) => {
+app.get("/api/config/provider", async (req, res) => {
 	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 	try {
+		const ollama = await fetchOllamaModelIds()
 		// Try to load full provider settings first
 		try {
 			const settings = loadProviderSettings(workspacePath)
@@ -2600,6 +2878,7 @@ app.get("/api/config/provider", (req, res) => {
 					settings.ollamaModelId ||
 					null,
 				apiKeyConfigured: !!(
+					settings.apiProvider === "ollama" ||
 					settings.apiKey ||
 					settings.openRouterApiKey ||
 					settings.minimaxApiKey ||
@@ -2608,6 +2887,10 @@ app.get("/api/config/provider", (req, res) => {
 				),
 				configuredProviders: getConfiguredProviders(workspacePath),
 				allProviders: getAllProviderNames(),
+				ollamaBaseUrl: ollama.baseUrl,
+				ollamaModels: ollama.models,
+				ollamaModelsFromApi: ollama.fromApi,
+				ollamaModelsError: ollama.error || null,
 				settingsType: "full",
 			})
 			return
@@ -2623,6 +2906,10 @@ app.get("/api/config/provider", (req, res) => {
 				apiKeyConfigured: false,
 				configuredProviders: getConfiguredProviders(workspacePath),
 				allProviders: getAllProviderNames(),
+				ollamaBaseUrl: ollama.baseUrl,
+				ollamaModels: ollama.models,
+				ollamaModelsFromApi: ollama.fromApi,
+				ollamaModelsError: ollama.error || null,
 				settingsType: "legacy",
 			})
 			return
@@ -2635,15 +2922,24 @@ app.get("/api/config/provider", (req, res) => {
 			apiKeyMasked: config.apiKey ? `${config.apiKey.slice(0, 8)}...${config.apiKey.slice(-4)}` : null,
 			configuredProviders: getConfiguredProviders(workspacePath),
 			allProviders: getAllProviderNames(),
+			ollamaBaseUrl: ollama.baseUrl,
+			ollamaModels: ollama.models,
+			ollamaModelsFromApi: ollama.fromApi,
+			ollamaModelsError: ollama.error || null,
 			settingsType: "legacy",
 		})
 	} catch (error) {
+		const ollama = await fetchOllamaModelIds()
 		res.json({
 			provider: null,
 			model: null,
 			apiKeyConfigured: false,
 			configuredProviders: getConfiguredProviders(workspacePath),
 			allProviders: getAllProviderNames(),
+			ollamaBaseUrl: ollama.baseUrl,
+			ollamaModels: ollama.models,
+			ollamaModelsFromApi: ollama.fromApi,
+			ollamaModelsError: ollama.error || null,
 			error: String(error),
 		})
 	}
@@ -2688,12 +2984,12 @@ app.post("/api/config/provider", async (req, res): Promise<void> => {
 
 		// Legacy format
 		const { provider, apiKey, model } = req.body
-		if (!provider || !apiKey) {
-			res.status(400).json({ error: "'provider' and 'apiKey' are required" })
+		if (!provider || (provider !== "ollama" && !apiKey)) {
+			res.status(400).json({ error: "'provider' is required; 'apiKey' is required for non-ollama providers" })
 			return
 		}
 
-		const validProviders: ProviderType[] = ["anthropic", "minimax", "openrouter", "openai", "custom"]
+		const validProviders: ProviderType[] = ["anthropic", "minimax", "openrouter", "openai", "custom", "ollama"]
 		if (!validProviders.includes(provider)) {
 			res.status(400).json({ error: `Invalid provider. Must be one of: ${validProviders.join(", ")}` })
 			return
@@ -2732,7 +3028,7 @@ app.get("/api/config/providers", (req, res) => {
 	const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 	res.json({
 		// Legacy providers for backward compatibility
-		legacyProviders: ["anthropic", "minimax", "openrouter", "openai", "custom"],
+		legacyProviders: ["anthropic", "minimax", "openrouter", "openai", "custom", "ollama"],
 		// All supported providers (30+)
 		allProviders: getAllProviderNames(),
 		configured: getConfiguredProviders(workspacePath),
@@ -3612,6 +3908,7 @@ app.get("/api/projects/:id/tasks", (req, res): void => {
 			return
 		}
 		const tasks = projectStore.getTasks(req.params.id)
+		const completedTaskIds = new Set(tasks.filter(t => t.status === "completed").map(t => t.id))
 		const counts = {
 			total: tasks.length,
 			available: tasks.filter(t => t.status === "available").length,
@@ -3619,7 +3916,12 @@ app.get("/api/projects/:id/tasks", (req, res): void => {
 			inProgress: tasks.filter(t => t.status === "in-progress").length,
 			completed: tasks.filter(t => t.status === "completed").length,
 			failed: tasks.filter(t => t.status === "failed").length,
-			blocked: tasks.filter(t => t.status === "blocked").length,
+			blocked: tasks.filter(t =>
+				t.status === "available" &&
+				Array.isArray(t.dependencies) &&
+				t.dependencies.length > 0 &&
+				t.dependencies.some(depId => !completedTaskIds.has(depId))
+			).length,
 		}
 		res.json({ tasks, counts })
 	} catch (error) {
@@ -3691,7 +3993,7 @@ app.post("/api/projects/:id/tasks/:taskId/reset", (req, res): void => {
 		task.claimedBy = undefined
 		task.claimedAt = undefined
 		task.error = "Reset by supervisor"
-		projectStore.save()
+		projectStore.update(req.params.id, {})
 		
 		io.emit("task-reset", { 
 			projectId: req.params.id, 
@@ -3722,7 +4024,7 @@ app.delete("/api/projects/:id/tasks/:taskId", (req, res): void => {
 		}
 		const task = project.tasks![taskIndex]
 		project.tasks!.splice(taskIndex, 1)
-		projectStore.save()
+		projectStore.update(req.params.id, {})
 		
 		io.emit("task-deleted", { 
 			projectId: req.params.id, 
@@ -3731,6 +4033,286 @@ app.delete("/api/projects/:id/tasks/:taskId", (req, res): void => {
 			timestamp: Date.now()
 		})
 		res.json({ success: true })
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/worker-leases - Worker lease dashboard showing all active sessions across projects
+ * Returns comprehensive information about worker sessions, lease expiry times, heartbeat age, and task bindings
+ */
+app.get("/api/worker-leases", (req, res): void => {
+	try {
+		const now = new Date()
+		const nowTime = now.getTime()
+		
+		interface WorkerLeaseInfo {
+			workerId: string
+			projectId: string
+			projectName: string
+			reportsTo?: string
+			taskId?: string
+			taskTitle?: string
+			status: "starting" | "running" | "stopping"
+			startedAt: string
+			startedAgoMs: number
+			lastHeartbeatAt: string
+			heartbeatAgeMs: number
+			leaseExpiresAt?: string
+			leaseExpiresInMs?: number
+			leaseExpired: boolean
+			healthy: boolean
+			agentStatus?: string
+		}
+		
+		interface ProjectLeaseStats {
+			projectId: string
+			projectName: string
+			sessionCount: number
+			healthySessions: number
+			staleSessions: number
+			leasesExpired: number
+			averageHeartbeatAgeMs: number
+			sessions: WorkerLeaseInfo[]
+		}
+		
+		interface DashboardResponse {
+			timestamp: string
+			totalProjects: number
+			totalSessions: number
+			totalHealthySessions: number
+			totalStaleSessions: number
+			totalExpiredLeases: number
+			projects: ProjectLeaseStats[]
+			stats: {
+				averageSessionLifespanMs: number
+				averageHeartbeatAgeMs: number
+				sessionUptime: {
+					[status: string]: number
+				}
+			}
+		}
+		
+		const allProjects = projectStore.getAll()
+		const projectStats: ProjectLeaseStats[] = []
+		
+		let totalSessions = 0
+		let totalHealthySessions = 0
+		let totalStaleSessions = 0
+		let totalExpiredLeases = 0
+		let allHeartbeatAges: number[] = []
+		let allLifespans: number[] = []
+		
+		for (const project of allProjects) {
+			const sessions = projectStore.getWorkerSessions(project.id)
+			const projectSessions: WorkerLeaseInfo[] = []
+			const tasks = projectStore.getTasks(project.id)
+			
+			let projectHealthy = 0
+			let projectStale = 0
+			let projectExpired = 0
+			const heartbeatAges: number[] = []
+			
+			for (const session of sessions) {
+				const heartbeatTime = new Date(session.lastHeartbeatAt).getTime()
+				const startTime = new Date(session.startedAt).getTime()
+				const heartbeatAgeMs = nowTime - heartbeatTime
+				const lifespanMs = nowTime - startTime
+				
+				// Find associated task if bound
+				const boundTask = session.taskId ? tasks.find(t => t.id === session.taskId) : undefined
+				
+				// Determine lease expiry if set
+				const leaseExpiresAtTime = session.taskId && boundTask?.leaseExpiresAt 
+					? new Date(boundTask.leaseExpiresAt).getTime() 
+					: undefined
+				const leaseExpired = leaseExpiresAtTime !== undefined && nowTime >= leaseExpiresAtTime
+				const leaseExpiresInMs = leaseExpiresAtTime !== undefined ? leaseExpiresAtTime - nowTime : undefined
+				
+				// Health checks
+				const HEARTBEAT_STALE_MS = 5 * 60 * 1000 // 5 minutes
+				const isStale = heartbeatAgeMs > HEARTBEAT_STALE_MS
+				const healthy = !isStale && !leaseExpired && session.status !== "stopping"
+				
+				const workerInfo: WorkerLeaseInfo = {
+					workerId: session.workerId,
+					projectId: project.id,
+					projectName: project.name,
+					reportsTo: session.reportsTo,
+					taskId: session.taskId,
+					taskTitle: boundTask?.title,
+					status: session.status,
+					startedAt: session.startedAt,
+					startedAgoMs: lifespanMs,
+					lastHeartbeatAt: session.lastHeartbeatAt,
+					heartbeatAgeMs,
+					leaseExpiresAt: leaseExpiresAtTime ? new Date(leaseExpiresAtTime).toISOString() : undefined,
+					leaseExpiresInMs,
+					leaseExpired,
+					healthy,
+					agentStatus: boundTask?.status || "no-task",
+				}
+				
+				projectSessions.push(workerInfo)
+				allHeartbeatAges.push(heartbeatAgeMs)
+				allLifespans.push(lifespanMs)
+				
+				if (healthy) projectHealthy++
+				if (isStale) {
+					projectStale++
+					totalStaleSessions++
+				}
+				if (leaseExpired) {
+					projectExpired++
+					totalExpiredLeases++
+				}
+			}
+			
+			if (sessions.length > 0) {
+				projectStats.push({
+					projectId: project.id,
+					projectName: project.name,
+					sessionCount: sessions.length,
+					healthySessions: projectHealthy,
+					staleSessions: projectStale,
+					leasesExpired: projectExpired,
+					averageHeartbeatAgeMs: heartbeatAges.length > 0 
+						? Math.round(heartbeatAges.reduce((a, b) => a + b, 0) / heartbeatAges.length)
+						: 0,
+					sessions: projectSessions.sort((a, b) => b.heartbeatAgeMs - a.heartbeatAgeMs),
+				})
+			}
+			
+			totalSessions += sessions.length
+			totalHealthySessions += projectHealthy
+		}
+		
+		const statusByLifespan = allLifespans.reduce((acc: {[k: string]: number}, ms) => {
+			if (ms < 60000) acc["<1m"] = (acc["<1m"] || 0) + 1
+			else if (ms < 300000) acc["1-5m"] = (acc["1-5m"] || 0) + 1
+			else if (ms < 3600000) acc["5m-1h"] = (acc["5m-1h"] || 0) + 1
+			else acc[">1h"] = (acc[">1h"] || 0) + 1
+			return acc
+		}, {})
+		
+		const response: DashboardResponse = {
+			timestamp: now.toISOString(),
+			totalProjects: allProjects.length,
+			totalSessions,
+			totalHealthySessions,
+			totalStaleSessions,
+			totalExpiredLeases,
+			projects: projectStats.sort((a, b) => b.sessionCount - a.sessionCount),
+			stats: {
+				averageSessionLifespanMs: allLifespans.length > 0 
+					? Math.round(allLifespans.reduce((a, b) => a + b, 0) / allLifespans.length)
+					: 0,
+				averageHeartbeatAgeMs: allHeartbeatAges.length > 0 
+					? Math.round(allHeartbeatAges.reduce((a, b) => a + b, 0) / allHeartbeatAges.length)
+					: 0,
+				sessionUptime: statusByLifespan,
+			},
+		}
+		
+		res.json(response)
+	} catch (error) {
+		res.status(500).json({ error: String(error) })
+	}
+})
+
+/**
+ * GET /api/worker-leases/:projectId - Worker lease dashboard for a specific project
+ */
+app.get("/api/worker-leases/:projectId", (req, res): void => {
+	try {
+		const project = projectStore.get(req.params.projectId)
+		if (!project) {
+			res.status(404).json({ error: "Project not found" })
+			return
+		}
+		
+		const now = new Date()
+		const nowTime = now.getTime()
+		
+		interface WorkerLeaseInfo {
+			workerId: string
+			taskId?: string
+			taskTitle?: string
+			status: "starting" | "running" | "stopping"
+			startedAt: string
+			startedAgoMs: number
+			lastHeartbeatAt: string
+			heartbeatAgeMs: number
+			leaseExpiresAt?: string
+			leaseExpiresInMs?: number
+			leaseExpired: boolean
+			healthy: boolean
+			agentStatus?: string
+		}
+		
+		const sessions = projectStore.getWorkerSessions(project.id)
+		const tasks = projectStore.getTasks(project.id)
+		
+		const workerInfos: WorkerLeaseInfo[] = []
+		let healthyCount = 0
+		let staleCount = 0
+		let expiredCount = 0
+		const heartbeatAges: number[] = []
+		
+		for (const session of sessions) {
+			const heartbeatTime = new Date(session.lastHeartbeatAt).getTime()
+			const startTime = new Date(session.startedAt).getTime()
+			const heartbeatAgeMs = nowTime - heartbeatTime
+			const lifespanMs = nowTime - startTime
+			
+			const boundTask = session.taskId ? tasks.find(t => t.id === session.taskId) : undefined
+			
+			const leaseExpiresAtTime = session.taskId && boundTask?.leaseExpiresAt 
+				? new Date(boundTask.leaseExpiresAt).getTime() 
+				: undefined
+			const leaseExpired = leaseExpiresAtTime !== undefined && nowTime >= leaseExpiresAtTime
+			const leaseExpiresInMs = leaseExpiresAtTime !== undefined ? leaseExpiresAtTime - nowTime : undefined
+			
+			const HEARTBEAT_STALE_MS = 5 * 60 * 1000
+			const isStale = heartbeatAgeMs > HEARTBEAT_STALE_MS
+			const healthy = !isStale && !leaseExpired && session.status !== "stopping"
+			
+			workerInfos.push({
+				workerId: session.workerId,
+				taskId: session.taskId,
+				taskTitle: boundTask?.title,
+				status: session.status,
+				startedAt: session.startedAt,
+				startedAgoMs: lifespanMs,
+				lastHeartbeatAt: session.lastHeartbeatAt,
+				heartbeatAgeMs,
+				leaseExpiresAt: leaseExpiresAtTime ? new Date(leaseExpiresAtTime).toISOString() : undefined,
+				leaseExpiresInMs,
+				leaseExpired,
+				healthy,
+				agentStatus: boundTask?.status || "no-task",
+			})
+			
+			heartbeatAges.push(heartbeatAgeMs)
+			if (healthy) healthyCount++
+			if (isStale) staleCount++
+			if (leaseExpired) expiredCount++
+		}
+		
+		res.json({
+			timestamp: now.toISOString(),
+			projectId: project.id,
+			projectName: project.name,
+			sessionCount: sessions.length,
+			healthySessions: healthyCount,
+			staleSessions: staleCount,
+			expiredLeases: expiredCount,
+			averageHeartbeatAgeMs: heartbeatAges.length > 0
+				? Math.round(heartbeatAges.reduce((a, b) => a + b, 0) / heartbeatAges.length)
+				: 0,
+			workers: workerInfos.sort((a, b) => b.heartbeatAgeMs - a.heartbeatAgeMs),
+		})
 	} catch (error) {
 		res.status(500).json({ error: String(error) })
 	}
@@ -6291,6 +6873,79 @@ const AGENT_TOOLS: Anthropic.Tool[] = [
 		},
 	},
 	{
+		name: "shared_cache_set",
+		description: "Set a value in the shared in-memory cache. Use this to coordinate short-lived state between supervisors and workers.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				key: { type: "string", description: "Cache key" },
+				value: { description: "Any JSON-serializable value" },
+				scope: { type: "string", description: "Optional scope: project (default), supervisor, or custom:<name>" },
+				ttl_seconds: { type: "number", description: "Optional TTL in seconds. Omit for no expiration." },
+			},
+			required: ["key", "value"],
+		},
+	},
+	{
+		name: "shared_cache_get",
+		description: "Read a value from the shared in-memory cache. Returns cache miss if not found or expired.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				key: { type: "string", description: "Cache key" },
+				scope: { type: "string", description: "Optional scope: project (default), supervisor, or custom:<name>" },
+			},
+			required: ["key"],
+		},
+	},
+	{
+		name: "shared_cache_delete",
+		description: "Delete a value from the shared in-memory cache.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				key: { type: "string", description: "Cache key" },
+				scope: { type: "string", description: "Optional scope: project (default), supervisor, or custom:<name>" },
+			},
+			required: ["key"],
+		},
+	},
+	{
+		name: "shared_cache_list",
+		description: "List keys in the shared in-memory cache for a scope. Useful for debugging coordination state.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				scope: { type: "string", description: "Optional scope: project (default), supervisor, or custom:<name>" },
+				prefix: { type: "string", description: "Optional key prefix filter" },
+			},
+			required: [],
+		},
+	},
+	{
+		name: "shared_cache_stats",
+		description: "Show cache statistics for this project/scope including key counts and persistence details.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				scope: { type: "string", description: "Optional scope: project (default), supervisor, or custom:<name>" },
+			},
+			required: [],
+		},
+	},
+	{
+		name: "shared_cache_clear_scope",
+		description: "Delete all cache keys in a scope. Useful for resetting coordination state.",
+		input_schema: {
+			type: "object" as const,
+			properties: {
+				scope: { type: "string", description: "Optional scope: project (default), supervisor, or custom:<name>" },
+				prefix: { type: "string", description: "Optional key prefix filter (only clear matching keys)" },
+			},
+			required: [],
+		},
+	},
+	{
 		name: "read_agent_file",
 		description: "Read a file from another agent's folder. Use this to check their files, code, or notes.",
 		input_schema: {
@@ -6607,6 +7262,27 @@ async function executeAgentTool(
 	io: SocketIOServer,
 	apiKey?: string, // Society Agent - Optional API key for spawning sub-agents
 ): Promise<{ result: string; filesCreated: number }> {
+	const normalizeToolErrorMessage = (err: unknown): string => {
+		let message = ""
+		if (err instanceof Error) {
+			message = err.message
+		} else if (typeof err === "string") {
+			message = err
+		} else {
+			try {
+				message = JSON.stringify(err)
+			} catch {
+				message = String(err)
+			}
+		}
+
+		if (!message || message === "[object Object]") {
+			message = "Unknown error"
+		}
+
+		return message.replace(/^(?:Error:\s*)+/i, "").trim()
+	}
+
 	// Society Agent start - Defensive checks
 	if (!project || !project.id) {
 		log.error(`[executeAgentTool] Invalid project passed to tool execution`)
@@ -6677,6 +7353,18 @@ async function executeAgentTool(
 				return `🔍 Finding: ${toolInput.pattern} in ${toolInput.directory || '.'}`
 			case "search_files":
 				return `🔎 Searching for: "${toolInput.query}" in ${toolInput.directory || '.'}`
+			case "shared_cache_set":
+				return `🧠 Cache set: ${toolInput.scope || 'project'} / ${toolInput.key}`
+			case "shared_cache_get":
+				return `🧠 Cache get: ${toolInput.scope || 'project'} / ${toolInput.key}`
+			case "shared_cache_delete":
+				return `🧠 Cache delete: ${toolInput.scope || 'project'} / ${toolInput.key}`
+			case "shared_cache_list":
+				return `🧠 Cache list: ${toolInput.scope || 'project'}${toolInput.prefix ? ` (prefix=${toolInput.prefix})` : ''}`
+			case "shared_cache_stats":
+				return `🧠 Cache stats: ${toolInput.scope || 'project'}`
+			case "shared_cache_clear_scope":
+				return `🧠 Cache clear: ${toolInput.scope || 'project'}${toolInput.prefix ? ` (prefix=${toolInput.prefix})` : ''}`
 			default:
 				return `🔧 ${toolName}: ${JSON.stringify(toolInput).substring(0, 100)}`
 		}
@@ -7579,90 +8267,21 @@ async function executeAgentTool(
 	// Society Agent start - Inter-agent communication tools
 	case "ask_agent": {
 			const { agent_id, question } = toolInput as { agent_id: string; question: string }
-			const targetAgent = project.agents.find(a => a.id === agent_id)
-			
-			if (!targetAgent) {
-				const available = project.agents.map(a => a.id).join(', ')
-				return { result: `❌ Agent "${agent_id}" not found. Available agents: ${available}`, filesCreated: 0 }
-			}
-			
-			if (targetAgent.id === agentConfig.id) {
-				return { result: `❌ You cannot ask yourself questions. Save your own notes with write_file.`, filesCreated: 0 }
-			}
-
-			log.info(`[${agentConfig.name}] Asking ${targetAgent.name}: ${question.substring(0, 80)}...`)
-			
-			// Show in REQUESTER's panel: "I'm asking X..."
-			io.emit("agent-message", {
-				agentId: agentConfig.id,
-				agentName: agentConfig.name,
-				projectId: project.id,
-				message: `\n💬 **Asking ${targetAgent.name}:** ${question}\n`,
-				timestamp: Date.now(),
-				isStreaming: false,
-			})
-			
-			// Show in TARGET's panel: "X is asking me..."
-			io.emit("agent-message", {
-				agentId: targetAgent.id,
-				agentName: targetAgent.name,
-				projectId: project.id,
-				message: `\n📨 **Question from ${agentConfig.name}:** ${question}\n`,
-				timestamp: Date.now(),
-				isStreaming: false,
-			})
-
-			try {
-				const targetFolder = projectStore.agentHomeDir(project.id, targetAgent.id)
-				const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
-				
-				const answer = await createOneShot(
-					workspacePath,
-					`You are ${targetAgent.name}, role: ${targetAgent.role}. 
-Your folder is: ${targetFolder}
-Another agent (${agentConfig.name}) is asking you a question. Answer briefly and helpfully.
-If you don't know, say so. Be concise.`,
-					`[Question from ${agentConfig.name}]: ${question}`
-				)
-				
-				// Show answer in REQUESTER's panel (the agent who asked)
-				io.emit("agent-message", {
-					agentId: agentConfig.id,
-					agentName: agentConfig.name,
-					projectId: project.id,
-					message: `\n✅ **${targetAgent.name} replied:**\n${answer || '(no response)'}\n`,
-					timestamp: Date.now(),
-					isStreaming: false,
-				})
-				
-				// Also show in TARGET's panel so they see what they "said"
-				io.emit("agent-message", {
-					agentId: targetAgent.id,
-					agentName: targetAgent.name,
-					projectId: project.id,
-					message: `\n📤 **My reply to ${agentConfig.name}:**\n${answer || '(no response)'}\n`,
-					timestamp: Date.now(),
-					isStreaming: false,
-				})
-
-				log.info(`[${agentConfig.name}] Got reply from ${targetAgent.name}: ${(answer || '').substring(0, 80)}...`)
-				return { result: `📨 **Response from ${targetAgent.name}:**\n${answer || '(no response)'}`, filesCreated: 0 }
-			} catch (err: any) {
-				log.error(`[${agentConfig.name}] ask_agent failed:`, err)
-				
-				// Show error in both panels
-				const errorMsg = `❌ Failed to reach ${targetAgent.name}: ${err.message}`
-				io.emit("agent-message", {
-					agentId: agentConfig.id,
-					agentName: agentConfig.name,
-					projectId: project.id,
-					message: `\n${errorMsg}\n`,
-					timestamp: Date.now(),
-					isStreaming: false,
-				})
-				
-				return { result: errorMsg, filesCreated: 0 }
-			}
+			// Route ask_agent through send_message so exchanges are visible in both chat views
+			// and the target agent actually runs in its own persistent context.
+			return executeAgentTool(
+				"send_message",
+				{
+					agent_id,
+					message: question,
+					priority: "normal",
+					wait_for_response: true,
+				},
+				agentConfig,
+				project,
+				io,
+				apiKey,
+			)
 		}
 
 		case "list_agents": {
@@ -7695,6 +8314,143 @@ If you don't know, say so. Be concise.`,
 			}
 			
 			return { result, filesCreated: 0 }
+		}
+
+		case "shared_cache_set": {
+			ensureProjectCacheLoaded(project.id)
+			cleanupExpiredCacheEntries()
+			const { key, value, scope, ttl_seconds } = toolInput as { key: string; value: unknown; scope?: string; ttl_seconds?: number }
+			if (typeof key !== "string" || key.trim().length === 0) {
+				return { result: "❌ `key` is required for shared_cache_set", filesCreated: 0 }
+			}
+			const namespace = resolveCacheNamespace(project.id, agentConfig, scope)
+			const fullKey = buildSharedCacheKey(namespace, key)
+			const now = Date.now()
+			const ttlMs = typeof ttl_seconds === "number" && ttl_seconds > 0 ? Math.floor(ttl_seconds * 1000) : undefined
+			sharedCoordinationCache.set(fullKey, {
+				value,
+				setBy: agentConfig.id,
+				createdAt: now,
+				expiresAt: ttlMs ? now + ttlMs : undefined,
+			})
+			enforceSharedCacheSizeLimit()
+			persistProjectCache(project.id)
+			return {
+				result: `✅ Cache set: ${namespace} / ${key}${ttlMs ? ` (ttl=${Math.floor(ttlMs / 1000)}s)` : ""} [persistent]`,
+				filesCreated: 0,
+			}
+		}
+
+		case "shared_cache_get": {
+			ensureProjectCacheLoaded(project.id)
+			cleanupExpiredCacheEntries()
+			const { key, scope } = toolInput as { key: string; scope?: string }
+			if (typeof key !== "string" || key.trim().length === 0) {
+				return { result: "❌ `key` is required for shared_cache_get", filesCreated: 0 }
+			}
+			const namespace = resolveCacheNamespace(project.id, agentConfig, scope)
+			const fullKey = buildSharedCacheKey(namespace, key)
+			const entry = sharedCoordinationCache.get(fullKey)
+			if (!entry) {
+				return { result: `ℹ️ Cache miss: ${namespace} / ${key}`, filesCreated: 0 }
+			}
+			if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
+				sharedCoordinationCache.delete(fullKey)
+				persistProjectCache(project.id)
+				return { result: `ℹ️ Cache miss (expired): ${namespace} / ${key}`, filesCreated: 0 }
+			}
+			return {
+				result: `🧠 Cache hit: ${namespace} / ${key}\n\n${JSON.stringify(entry.value, null, 2)}`,
+				filesCreated: 0,
+			}
+		}
+
+		case "shared_cache_delete": {
+			ensureProjectCacheLoaded(project.id)
+			cleanupExpiredCacheEntries()
+			const { key, scope } = toolInput as { key: string; scope?: string }
+			if (typeof key !== "string" || key.trim().length === 0) {
+				return { result: "❌ `key` is required for shared_cache_delete", filesCreated: 0 }
+			}
+			const namespace = resolveCacheNamespace(project.id, agentConfig, scope)
+			const fullKey = buildSharedCacheKey(namespace, key)
+			const existed = sharedCoordinationCache.delete(fullKey)
+			if (existed) persistProjectCache(project.id)
+			return {
+				result: existed ? `🗑️ Cache key deleted: ${namespace} / ${key}` : `ℹ️ Cache key not found: ${namespace} / ${key}`,
+				filesCreated: 0,
+			}
+		}
+
+		case "shared_cache_list": {
+			ensureProjectCacheLoaded(project.id)
+			cleanupExpiredCacheEntries()
+			const { scope, prefix } = toolInput as { scope?: string; prefix?: string }
+			const namespace = resolveCacheNamespace(project.id, agentConfig, scope)
+			const namespacePrefix = `${namespace}::`
+			const keys = [...sharedCoordinationCache.keys()]
+				.filter((k) => k.startsWith(namespacePrefix))
+				.map((k) => k.slice(namespacePrefix.length))
+				.filter((k) => (prefix ? k.startsWith(prefix) : true))
+				.sort()
+			if (keys.length === 0) {
+				return { result: `ℹ️ No cache keys in ${namespace}${prefix ? ` with prefix "${prefix}"` : ""}.`, filesCreated: 0 }
+			}
+			return {
+				result: `🧠 Cache keys in ${namespace}${prefix ? ` (prefix=${prefix})` : ""}:\n${keys.map((k) => `- ${k}`).join("\n")}`,
+				filesCreated: 0,
+			}
+		}
+
+		case "shared_cache_stats": {
+			ensureProjectCacheLoaded(project.id)
+			cleanupExpiredCacheEntries()
+			const { scope } = toolInput as { scope?: string }
+			const namespace = resolveCacheNamespace(project.id, agentConfig, scope)
+			const namespacePrefix = `${namespace}::`
+			const keys = [...sharedCoordinationCache.keys()].filter((k) => k.startsWith(namespacePrefix))
+			const projectPrefix = `${getProjectCachePrefix(project.id)}:`
+			const projectTotal = [...sharedCoordinationCache.keys()].filter((k) => k.startsWith(projectPrefix)).length
+			const stats = keys
+				.map((k) => sharedCoordinationCache.get(k))
+				.filter((v): v is SharedCacheEntry => !!v)
+			const oldest = stats.length > 0 ? Math.min(...stats.map((s) => s.createdAt)) : undefined
+			const newest = stats.length > 0 ? Math.max(...stats.map((s) => s.createdAt)) : undefined
+			return {
+				result:
+					`🧠 Cache stats for ${namespace}\n` +
+					`- scopeKeys: ${keys.length}\n` +
+					`- projectKeys: ${projectTotal}\n` +
+					`- globalEntries: ${sharedCoordinationCache.size}\n` +
+					`- maxEntries: ${SHARED_CACHE_MAX_ENTRIES}\n` +
+					`- persistentFile: ${getProjectCacheFilePath(project.id)}\n` +
+					`- oldestInScope: ${oldest ? new Date(oldest).toISOString() : "n/a"}\n` +
+					`- newestInScope: ${newest ? new Date(newest).toISOString() : "n/a"}`,
+				filesCreated: 0,
+			}
+		}
+
+		case "shared_cache_clear_scope": {
+			ensureProjectCacheLoaded(project.id)
+			cleanupExpiredCacheEntries()
+			const { scope, prefix } = toolInput as { scope?: string; prefix?: string }
+			const namespace = resolveCacheNamespace(project.id, agentConfig, scope)
+			const namespacePrefix = `${namespace}::`
+			const toDelete = [...sharedCoordinationCache.keys()]
+				.filter((k) => k.startsWith(namespacePrefix))
+				.filter((k) => {
+					if (!prefix) return true
+					const shortKey = k.slice(namespacePrefix.length)
+					return shortKey.startsWith(prefix)
+				})
+			for (const k of toDelete) {
+				sharedCoordinationCache.delete(k)
+			}
+			if (toDelete.length > 0) persistProjectCache(project.id)
+			return {
+				result: `🧹 Cleared ${toDelete.length} cache key(s) from ${namespace}${prefix ? ` with prefix "${prefix}"` : ""}.`,
+				filesCreated: 0,
+			}
 		}
 
 		// Society Agent start - Agent configuration tools
@@ -8370,10 +9126,14 @@ If you don't know, say so. Be concise.`,
 		case "search_in_files": {
 			const { pattern, path: searchPath, file_pattern } = toolInput as { pattern: string; path?: string; file_pattern?: string }
 			const { execSync } = await import("child_process")
+			const isTopLevelSupervisor = !agentConfig.reportsTo && (agentConfig.homeFolder || "/") === "/"
 			
 			let searchDir = agentFolder
 			let singleFile: string | null = null
 			if (searchPath?.startsWith("project:")) {
+				if (!isTopLevelSupervisor) {
+					return { result: `❌ Project-wide search is restricted. Search only inside your own folder.`, filesCreated: 0 }
+				}
 				const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 				searchDir = path.join(workspacePath, "projects", project.folder || project.id)
 			} else if (searchPath) {
@@ -8422,9 +9182,13 @@ If you don't know, say so. Be concise.`,
 		case "find_files": {
 			const { name_pattern, path: searchPath, type } = toolInput as { name_pattern: string; path?: string; type?: string }
 			const { execSync } = await import("child_process")
+			const isTopLevelSupervisor = !agentConfig.reportsTo && (agentConfig.homeFolder || "/") === "/"
 			
 			let searchDir = agentFolder
 			if (searchPath?.startsWith("project:")) {
+				if (!isTopLevelSupervisor) {
+					return { result: `❌ Project-wide search is restricted. Search only inside your own folder.`, filesCreated: 0 }
+				}
 				const workspacePath = process.env.WORKSPACE_PATH || process.cwd()
 				searchDir = path.join(workspacePath, "projects", project.folder || project.id)
 			} else if (searchPath) {
@@ -8525,16 +9289,17 @@ If you don't know, say so. Be concise.`,
 				
 				return { result: `📡 **${method.toUpperCase()} ${url}**\nStatus: ${response.status} ${response.statusText}\n\`\`\`\n${truncated}\n\`\`\``, filesCreated: 0 }
 			} catch (err: any) {
+				const errorMessage = normalizeToolErrorMessage(err)
 				// Provide more helpful error messages for common issues
 				let hint = ""
-				if (err.message.includes("Headers constructor")) {
+				if (errorMessage.includes("Headers constructor")) {
 					hint = "\n\n💡 **Header format issue.** Headers must be a plain object like: { \"Content-Type\": \"application/json\" }"
-				} else if (err.message.includes("aborted") || err.name === "AbortError") {
+				} else if (errorMessage.includes("aborted") || err?.name === "AbortError") {
 					hint = "\n\n💡 **Request timed out.** Try increasing timeout_ms or check if the server is running."
-				} else if (err.message.includes("ECONNREFUSED")) {
+				} else if (errorMessage.includes("ECONNREFUSED")) {
 					hint = "\n\n💡 **Connection refused.** The server may not be running. Check with `get_processes({ port: PORT })`"
 				}
-				return { result: `❌ Request failed: ${err.message}${hint}`, filesCreated: 0 }
+				return { result: `❌ Request failed: ${errorMessage}${hint}`, filesCreated: 0 }
 			}
 		}
 
@@ -8598,7 +9363,7 @@ If you don't know, say so. Be concise.`,
 				const output = execSync(cmd, { encoding: "utf-8", timeout: 5000 })
 				return { result: `${header}\n\`\`\`\n${output}\n\`\`\`${protectedPortsInfo}`, filesCreated: 0 }
 			} catch (err: any) {
-				return { result: `❌ Error: ${err.message}`, filesCreated: 0 }
+				return { result: `❌ Error: ${normalizeToolErrorMessage(err)}`, filesCreated: 0 }
 			}
 		}
 
@@ -8686,7 +9451,7 @@ If you don't know, say so. Be concise.`,
 					return { result: `❌ Specify port, pid, or name`, filesCreated: 0 }
 				}
 			} catch (err: any) {
-				return { result: `❌ Error: ${err.message}`, filesCreated: 0 }
+				return { result: `❌ Error: ${normalizeToolErrorMessage(err)}`, filesCreated: 0 }
 			}
 		}
 
@@ -8708,7 +9473,7 @@ If you don't know, say so. Be concise.`,
 				}
 				return { result: info, filesCreated: 0 }
 			} catch (err: any) {
-				return { result: `❌ Error: ${err.message}`, filesCreated: 0 }
+				return { result: `❌ Error: ${normalizeToolErrorMessage(err)}`, filesCreated: 0 }
 			}
 		}
 
@@ -8807,7 +9572,7 @@ If you don't know, say so. Be concise.`,
 				const diff = execSync(`diff -u "${path1}" "${path2}" 2>/dev/null | head -50 || echo "(files are identical or one doesn't exist)"`, { encoding: "utf-8" })
 				return { result: `📝 **Diff: ${file1} vs ${file2}**\n\`\`\`diff\n${diff}\n\`\`\``, filesCreated: 0 }
 			} catch (err: any) {
-				return { result: `❌ Error: ${err.message}`, filesCreated: 0 }
+				return { result: `❌ Error: ${normalizeToolErrorMessage(err)}`, filesCreated: 0 }
 			}
 		}
 
@@ -8823,7 +9588,7 @@ If you don't know, say so. Be concise.`,
 				fs.mkdirSync(fullPath, { recursive: true })
 				return { result: `✅ Created directory: ${dirPath}`, filesCreated: 0 }
 			} catch (err: any) {
-				return { result: `❌ Error: ${err.message}`, filesCreated: 0 }
+				return { result: `❌ Error: ${normalizeToolErrorMessage(err)}`, filesCreated: 0 }
 			}
 		}
 		// Society Agent end
@@ -8832,6 +9597,7 @@ If you don't know, say so. Be concise.`,
 		case "send_message": {
 			const { agent_id, message, priority, wait_for_response } = toolInput as { agent_id: string; message: string; priority?: string; wait_for_response?: boolean }
 			const targetAgent = project.agents.find(a => a.id === agent_id)
+			const exchangeId = `xmsg_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`
 
 			if (!targetAgent) {
 				return { result: `❌ Agent "${agent_id}" not found. Use list_agents to see available agents.`, filesCreated: 0 }
@@ -8872,8 +9638,43 @@ If you don't know, say so. Be concise.`,
 			// If ephemeral worker, just save to inbox (they can't be triggered)
 			if (targetAgent.ephemeral) {
 				sendToInbox(project.id, { id: agentConfig.id, name: agentConfig.name }, agent_id, message, (priority as "normal" | "urgent") || "normal")
+				io.emit("agent-peer-message", {
+					exchangeId,
+					projectId: project.id,
+					fromAgentId: agentConfig.id,
+					fromAgentName: agentConfig.name,
+					toAgentId: targetAgent.id,
+					toAgentName: targetAgent.name,
+					message,
+					priority: (priority as "normal" | "urgent") || "normal",
+					timestamp: Date.now(),
+				})
+				io.emit("agent-peer-response", {
+					exchangeId,
+					projectId: project.id,
+					fromAgentId: targetAgent.id,
+					fromAgentName: targetAgent.name,
+					toAgentId: agentConfig.id,
+					toAgentName: agentConfig.name,
+					message: "(delivered to inbox; target is ephemeral and will respond when it processes inbox)",
+					timestamp: Date.now(),
+					status: "queued",
+				})
 				return { result: `✅ Message saved to ${targetAgent.name}'s inbox (ephemeral worker - will see on next task).`, filesCreated: 0 }
 			}
+
+			// Emit explicit peer-question event so both sender and receiver chat views show the same question.
+			io.emit("agent-peer-message", {
+				exchangeId,
+				projectId: project.id,
+				fromAgentId: agentConfig.id,
+				fromAgentName: agentConfig.name,
+				toAgentId: targetAgent.id,
+				toAgentName: targetAgent.name,
+				message,
+				priority: (priority as "normal" | "urgent") || "normal",
+				timestamp: Date.now(),
+			})
 
 			io.emit("agent-message", {
 				agentId: agentConfig.id,
@@ -8911,6 +9712,19 @@ If you don't know, say so. Be concise.`,
 
 				const responseText = result.fullResponse?.trim() || "(no response)"
 				const responsePreview = responseText.substring(0, 1500) + (responseText.length > 1500 ? "...(truncated)" : "")
+
+				// Emit explicit peer-answer event so both sender and receiver chat views show the same answer.
+				io.emit("agent-peer-response", {
+					exchangeId,
+					projectId: project.id,
+					fromAgentId: targetAgent.id,
+					fromAgentName: targetAgent.name,
+					toAgentId: agentConfig.id,
+					toAgentName: agentConfig.name,
+					message: responsePreview,
+					timestamp: Date.now(),
+					status: "answered",
+				})
 
 				// Always show the response in the sender panel so replies are visible without wait_for_response.
 				io.emit("agent-message", {
@@ -8958,6 +9772,17 @@ If you don't know, say so. Be concise.`,
 					}
 				}
 			} catch (err: any) {
+				io.emit("agent-peer-response", {
+					exchangeId,
+					projectId: project.id,
+					fromAgentId: targetAgent.id,
+					fromAgentName: targetAgent.name,
+					toAgentId: agentConfig.id,
+					toAgentName: agentConfig.name,
+					message: `❌ No reply: ${err.message}`,
+					timestamp: Date.now(),
+					status: "failed",
+				})
 				return { result: `❌ Message delivery failed: ${err.message}`, filesCreated: 0 }
 			}
 		}
@@ -9024,6 +9849,8 @@ If you don't know, say so. Be concise.`,
 			
 			// Mark as in-progress
 			projectStore.startTask(project.id, task.id)
+			projectStore.heartbeatTask(project.id, task.id, agentConfig.id)
+			projectStore.heartbeatWorkerSession(project.id, agentConfig.id, { taskId: task.id, status: "running" })
 			
 			// Format task details
 			let result = `🎯 **Task Claimed: ${task.title}**\n\n`
@@ -9127,6 +9954,7 @@ If you don't know, say so. Be concise.`,
 			}
 			
 			projectStore.completeTask(project.id, myTask.id, result)
+			projectStore.heartbeatWorkerSession(project.id, agentConfig.id, { taskId: null, status: "stopping" })
 			const reportOwnerId = myTask.createdBy || agentConfig.reportsTo || agentConfig.id
 			const reportPath = writeChangeReportDoc(project, reportOwnerId, myTask, agentConfig.id, result)
 			
@@ -9168,6 +9996,7 @@ If you don't know, say so. Be concise.`,
 			}
 			
 			projectStore.failTask(project.id, myTask.id, reason)
+			projectStore.heartbeatWorkerSession(project.id, agentConfig.id, { taskId: null, status: "stopping" })
 			
 			io.emit("task-failed", {
 				projectId: project.id,
@@ -9323,7 +10152,7 @@ If you don't know, say so. Be concise.`,
 				const workerId = `worker-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
 				// Increment project-level counter for globally unique worker names
 				project.workerSequence = (project.workerSequence || 0) + 1
-				projectStore.save()
+				projectStore.update(project.id, {})
 				const workerName = `Worker #${project.workerSequence}`
 				
 				// Build worker system prompt with supervisor's instructions inherited
@@ -9778,6 +10607,10 @@ ${constraints?.map(c => `- ${c}`).join("\n") || "- None specified"}
 ## 📝 Context
 ${context || "No additional context."}
 
+## 📂 Scope (Hard Limit)
+- Allowed workspace: ${targetAgent.homeFolder || "/"}
+- Do not modify other agent folders.
+
 ---
 
 **Instructions:**
@@ -9785,7 +10618,13 @@ ${context || "No additional context."}
 2. Work autonomously to achieve the desired state
 3. Use \`report_to_supervisor\` to report progress, blockers, or completion
 4. Your DESIRED_STATE.md file has been updated with these specs
-5. If you cannot complete something, report it - don't guess`
+5. If you cannot complete something, report it - don't guess
+
+**Terminal Completion Contract (Mandatory):**
+- Do not stop with \`end_turn\` while task is active.
+- Before stopping, you MUST call exactly one:
+	- \`complete_task(files_created, files_modified, summary)\` when done
+	- \`fail_task("QUESTION: <specific blocker>")\` when blocked`
 			
 			io.emit("delegation-message", {
 				projectId: project.id,
@@ -9851,10 +10690,19 @@ ${context || "No additional context."}
 				blockers?: string[]
 				questions?: string[]
 			}
+			const exchangeId = `rpt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`
 			
 			// Find this agent's supervisor (reportsTo field, or first supervisor in project)
 			const supervisorId = agentConfig.reportsTo || project.agents.find(a => a.role?.toLowerCase().includes("supervisor"))?.id
 			const supervisor = supervisorId ? project.agents.find(a => a.id === supervisorId) : null
+			const reportBody = [
+				`**Status:** ${status}`,
+				`**Summary:** ${summary}`,
+				completion_percentage !== undefined ? `**Progress:** ${completion_percentage}%` : "",
+				details ? `**Details:**\n${details}` : "",
+				blockers?.length ? `**Blockers:**\n${blockers.map(b => `- ${b}`).join("\n")}` : "",
+				questions?.length ? `**Questions:**\n${questions.map(q => `- ${q}`).join("\n")}` : "",
+			].filter(Boolean).join("\n\n")
 			
 			// Emit the report
 			io.emit("agent-report", {
@@ -9871,6 +10719,34 @@ ${context || "No additional context."}
 				questions,
 				timestamp: Date.now(),
 			})
+
+			// Mirror report in chat for BOTH sides using the same exchange channel as send_message.
+			if (supervisorId && supervisor) {
+				io.emit("agent-peer-message", {
+					exchangeId,
+					projectId: project.id,
+					fromAgentId: agentConfig.id,
+					fromAgentName: agentConfig.name,
+					toAgentId: supervisorId,
+					toAgentName: supervisor.name,
+					message: `📣 **Report to supervisor**\n\n${reportBody}`,
+					priority: status === "blocked" || status === "needs_info" || status === "failed" ? "urgent" : "normal",
+					timestamp: Date.now(),
+				})
+
+				// Immediate delivery ack so sender can see confirmation in chat thread.
+				io.emit("agent-peer-response", {
+					exchangeId,
+					projectId: project.id,
+					fromAgentId: supervisorId,
+					fromAgentName: supervisor.name,
+					toAgentId: agentConfig.id,
+					toAgentName: agentConfig.name,
+					message: `✅ Report delivered to ${supervisor.name}.`,
+					timestamp: Date.now(),
+					status: "answered",
+				})
+			}
 			
 			// Update the agent's DESIRED_STATE.md if it exists
 			const homeDir = projectStore.agentHomeDir(project.id, agentConfig.id)
@@ -9917,6 +10793,186 @@ ${context || "No additional context."}
 			return { result: `Unknown tool: ${toolName}`, filesCreated: 0 }
 	}
 }
+
+type OwnershipFileLike = { path: string; description?: string }
+type OwnershipRegistryLike = { files?: OwnershipFileLike[] }
+
+const RELEVANCE_STOPWORDS = new Set([
+	"the",
+	"and",
+	"for",
+	"with",
+	"that",
+	"this",
+	"from",
+	"into",
+	"about",
+	"your",
+	"you",
+	"please",
+	"need",
+	"make",
+	"have",
+	"has",
+	"are",
+	"was",
+	"were",
+	"will",
+	"would",
+	"should",
+	"could",
+	"can",
+	"to",
+	"of",
+	"in",
+	"on",
+	"by",
+	"at",
+	"it",
+	"is",
+	"be",
+	"as",
+	"do",
+	"go",
+	"now",
+])
+
+function tokenizeForRelevance(input: string): string[] {
+	const tokens = (input || "")
+		.toLowerCase()
+		.split(/[^a-z0-9_./-]+/g)
+		.filter((t) => t.length >= 3 && !RELEVANCE_STOPWORDS.has(t))
+
+	return Array.from(new Set(tokens)).slice(0, 24)
+}
+
+function extractPathHints(input: string): string[] {
+	const matches = input.match(/[a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+/g) || []
+	return Array.from(new Set(matches.map((m) => m.replace(/^\.?\//, "").toLowerCase())))
+}
+
+function buildRelevantContextFiles(params: {
+	request: string
+	taskFamily: string
+	registry?: OwnershipRegistryLike
+	limit?: number
+}): Array<{ path: string; why: string; score: number }> {
+	const { request, taskFamily, registry, limit = 8 } = params
+	const candidates = registry?.files || []
+	if (candidates.length === 0) return []
+
+	const tokens = tokenizeForRelevance(request)
+	const pathHints = extractPathHints(request)
+
+	const ranked: Array<{ path: string; why: string; score: number }> = []
+	for (const file of candidates) {
+		const filePath = (file.path || "").replace(/\\/g, "/")
+		if (!filePath) continue
+
+		const pathLower = filePath.toLowerCase()
+		const descriptionLower = (file.description || "").toLowerCase()
+		let score = 0
+		const reasons: string[] = []
+
+		for (const hint of pathHints) {
+			if (pathLower === hint) {
+				score += 8
+				reasons.push("exact path match")
+			} else if (pathLower.includes(hint)) {
+				score += 5
+				reasons.push("path hint match")
+			}
+		}
+
+		for (const token of tokens) {
+			if (pathLower.includes(token)) {
+				score += 2
+				reasons.push(`path contains '${token}'`)
+			} else if (descriptionLower.includes(token)) {
+				score += 1
+				reasons.push(`description contains '${token}'`)
+			}
+		}
+
+		if (taskFamily === "docs" && filePath.toLowerCase().endsWith(".md")) {
+			score += 1.5
+			reasons.push("docs task prefers markdown")
+		}
+		if (taskFamily === "test_generation" && /(^|\/)__tests__(\/|$)|\.test\.|\.spec\./i.test(filePath)) {
+			score += 2.5
+			reasons.push("test-related file")
+		}
+		if ((taskFamily === "feature" || taskFamily === "bug_fix" || taskFamily === "refactor") && /^src\//i.test(filePath)) {
+			score += 0.8
+			reasons.push("source file")
+		}
+
+		if (score > 0) {
+			ranked.push({
+				path: filePath,
+				why: reasons.slice(0, 2).join("; ") || "context match",
+				score,
+			})
+		}
+	}
+
+	ranked.sort((a, b) => b.score - a.score)
+	return ranked.slice(0, limit)
+}
+
+function deriveDetectedConventions(config?: ProjectConfig): string[] {
+	const conventions = ["minimal diff", "reuse existing patterns"]
+	if (!config) return conventions
+
+	if (config.paths.source?.length) {
+		conventions.push(`primary source paths: ${config.paths.source.join(", ")}`)
+	}
+	if (config.validation.typeCheck) {
+		conventions.push(`typecheck before done: ${config.validation.typeCheck}`)
+	}
+	if (config.validation.test) {
+		conventions.push(`run tests before done: ${config.validation.test}`)
+	}
+
+	return conventions
+}
+
+function deriveVerificationSteps(config?: ProjectConfig): string[] {
+	if (!config) {
+		return ["run targeted tests", "run typecheck if code changed"]
+	}
+
+	const steps: string[] = []
+	if (config.validation.test) steps.push(config.validation.test)
+	if (config.validation.typeCheck) steps.push(config.validation.typeCheck)
+	if (config.validation.lint) steps.push(config.validation.lint)
+	if (steps.length === 0) {
+		steps.push("run targeted tests", "run typecheck if code changed")
+	}
+	return Array.from(new Set(steps)).slice(0, 4)
+}
+
+const ORCHESTRATION_STATE_TTL_MS = 30 * 60 * 1000
+const supervisorOrchestrationStates = new Map<string, PromptTaskState>()
+
+function supervisorStateKey(projectId: string, supervisorId: string): string {
+	return `${projectId}:${supervisorId}`
+}
+
+function pruneOrchestrationStates(): void {
+	const now = Date.now()
+	for (const [key, state] of supervisorOrchestrationStates.entries()) {
+		const updated = Date.parse(state.updatedAt || "")
+		if (!Number.isFinite(updated) || now - updated > ORCHESTRATION_STATE_TTL_MS) {
+			supervisorOrchestrationStates.delete(key)
+		}
+	}
+}
+
+function isContinuationMessage(input: string): boolean {
+	return /^\s*(continue|go on|proceed|keep going|next|do whatever is needed)\b/i.test(input || "")
+}
+
 /**
  * Handle supervisor chat with an agentic tool-use loop.
  * The LLM decides when to delegate, list team, or propose agents via tool calls.
@@ -9979,6 +11035,13 @@ async function handleSupervisorChat(
 				apiKey: providerConfig.apiKey,
 			})
 			model = useModel
+		} else if (useProvider === "ollama") {
+			useOpenRouter = true
+			openRouterClient = new OpenAI({
+				baseURL: providerConfig.baseUrl || getDefaultOllamaBaseUrl(),
+				apiKey: providerConfig.apiKey || "ollama",
+			})
+			model = await resolveOllamaModelOrFallback(useModel)
 		} else if (useProvider === "anthropic" || useProvider === "minimax") {
 			anthropic = new Anthropic({
 				apiKey: providerConfig.apiKey,
@@ -10009,6 +11072,15 @@ async function handleSupervisorChat(
 			})
 			model = supervisorConfig.model || currentProviderSettings.openRouterModelId || "anthropic/claude-sonnet-4"
 			log.info(`[handleSupervisorChat] Using OpenRouter: ${model}`)
+		}
+		else if (provider === "ollama") {
+			useOpenRouter = true
+			openRouterClient = new OpenAI({
+				baseURL: getDefaultOllamaBaseUrl(),
+				apiKey: currentProviderSettings.apiKey || "ollama",
+			})
+			model = await resolveOllamaModelOrFallback(supervisorConfig.model || currentProviderSettings.ollamaModelId || currentProviderSettings.apiModelId)
+			log.info(`[handleSupervisorChat] Using Ollama: ${model}`)
 		}
 		// Society Agent end
 		// Tool calling requires Anthropic-compatible API (Anthropic or MiniMax)
@@ -10044,6 +11116,14 @@ async function handleSupervisorChat(
 			})
 			model = supervisorConfig.model || providerConfig.model || "anthropic/claude-sonnet-4"
 		}
+		else if (providerConfig && providerConfig.provider === "ollama") {
+			useOpenRouter = true
+			openRouterClient = new OpenAI({
+				baseURL: getDefaultOllamaBaseUrl(),
+				apiKey: providerConfig.apiKey || "ollama",
+			})
+			model = await resolveOllamaModelOrFallback(supervisorConfig.model || providerConfig.model)
+		}
 		// Society Agent end
 		// Tool calling requires Anthropic-compatible API (Anthropic or MiniMax)
 		else if (providerConfig && (providerConfig.provider === "anthropic" || providerConfig.provider === "minimax")) {
@@ -10066,11 +11146,63 @@ async function handleSupervisorChat(
 	// Access the agent's system prompt (private field, accessed via cast)
 	const systemPrompt = (agent as any).systemPrompt || supervisorConfig.systemPrompt
 
+	pruneOrchestrationStates()
+	const orchestrationKey = supervisorStateKey(project.id, supervisorConfig.id)
+
+	const projectRoot = projectStore.projectDir(project.id)
+	const cachedProjectConfig = await getProjectConfigCached(projectRoot).catch(() => undefined)
+	const ownershipRegistry = await projectStore.getOwnershipRegistry(project.id).catch(() => undefined)
+
+	// Add user message to agent history (with orchestration packet)
+	const inferredIntent = inferRequestIntent(userMessage)
+	const rankedFiles = buildRelevantContextFiles({
+		request: userMessage,
+		taskFamily: inferredIntent.taskFamily,
+		registry: ownershipRegistry as OwnershipRegistryLike | undefined,
+		limit: 8,
+	})
+	const allowedFiles = rankedFiles.map((f) => f.path)
+	const existingState = supervisorOrchestrationStates.get(orchestrationKey)
+	const shouldReuseState = !!existingState && isContinuationMessage(userMessage)
+	const orchestrationState = shouldReuseState && existingState
+		? {
+			...existingState,
+			allowedFiles: Array.from(new Set([...(existingState.allowedFiles || []), ...allowedFiles])),
+			updatedAt: new Date().toISOString(),
+		}
+		: createInitialTaskState(
+			`task_${Date.now().toString(36)}`,
+			userMessage,
+			inferredIntent,
+			allowedFiles,
+		)
+	const stack = [cachedProjectConfig?.language, cachedProjectConfig?.framework, cachedProjectConfig?.packageManager]
+		.filter((v): v is string => !!v)
+	const orchestrationPack = composePromptPackage({
+		intent: inferredIntent,
+		context: {
+			project: {
+				name: project.name,
+				stack,
+				testFramework: cachedProjectConfig?.validation.test,
+			},
+			relevantFiles: rankedFiles,
+			detectedConventions: deriveDetectedConventions(cachedProjectConfig),
+			constraints: ["stay within allowed scope", "verify before done"],
+		},
+		state: orchestrationState,
+		verificationSteps: deriveVerificationSteps(cachedProjectConfig),
+	})
+	orchestrationState.mode = orchestrationPack.mode
+	orchestrationState.updatedAt = new Date().toISOString()
+	supervisorOrchestrationStates.set(orchestrationKey, orchestrationState)
+	const orchestratedUserMessage = `${userMessage}\n\n<orchestration_packet>\n${toPromptString(orchestrationPack)}\n</orchestration_packet>`
+
 	// Add user message to agent history (with attachments if present)
 	if (attachments && attachments.length > 0) {
-		await (agent as any).addMessageWithAttachments("user", userMessage, attachments)
+		await (agent as any).addMessageWithAttachments("user", orchestratedUserMessage, attachments)
 	} else {
-		await (agent as any).addMessage("user", userMessage)
+		await (agent as any).addMessage("user", orchestratedUserMessage)
 	}
 
 	// Build messages from agent history
@@ -10149,10 +11281,12 @@ async function handleSupervisorChat(
 	let meaningfulActionsCount = 0
 	const PROGRESS_CHECK_INTERVAL = 10 // Check every 10 iterations
 	const STALL_THRESHOLD_MS = 300000 // 5 minutes without progress = stalled
+	let completionRetryCount = 0
+	let lastCompletionValidation: ReturnType<typeof validateCompletionSummary> | undefined
 	
 	// Society Agent - Track if agent made changes (vs only reading)
 	let hasWrittenFiles = false
-	const READ_ONLY_TOOLS = new Set(["read_project_file", "list_project_files", "read_file", "list_dir", "get_team_info", "search_files", "grep_search"])
+	const READ_ONLY_TOOLS = new Set(["read_project_file", "list_project_files", "read_file", "list_dir", "get_team_info", "search_files", "grep_search", "shared_cache_get", "shared_cache_list", "shared_cache_stats"])
 	let consecutiveReadOnlyStops = 0
 
 	// Society Agent - Ensure agents always summarize when they did meaningful work.
@@ -10542,6 +11676,20 @@ async function handleSupervisorChat(
 					log.info(`[Supervisor] ${supervisorConfig.name} end_turn after ${actTotalToolCalls} tools — requesting summary`)
 					messages.push({ role: "assistant", content: textContent || "" })
 					messages.push({ role: "user", content: "Please give a concise summary of everything you accomplished: what was built/changed, what is now running and on which ports, any issues found, and what the user should know or do next." })
+					continue
+				}
+				const completionValidation = validateCompletionSummary({
+					responseText: textContent || "",
+					totalToolCalls: actTotalToolCalls,
+					writeActions: writeActionsCount,
+					executeActions: executeActionsCount,
+				})
+				lastCompletionValidation = completionValidation
+				if (!completionValidation.ok && actTotalToolCalls > 0 && completionRetryCount < 1) {
+					completionRetryCount++
+					const issues = completionValidation.issues.map((i) => i.message).join("; ")
+					messages.push({ role: "assistant", content: textContent || "" })
+					messages.push({ role: "user", content: `Before finishing, tighten your completion summary. Missing quality checks: ${issues}. Include a clear summary, files changed, and verification/test status.` })
 					continue
 				}
 				break
@@ -11019,6 +12167,20 @@ async function handleSupervisorChat(
 					messages.push({ role: "user", content: "Please give a concise summary of everything you accomplished: what was built/changed, what is now running and on which ports, any issues found, and what the user should know or do next." })
 					continue
 				}
+				const completionValidation = validateCompletionSummary({
+					responseText: lastText || "",
+					totalToolCalls: actTotalToolCalls,
+					writeActions: writeActionsCount,
+					executeActions: executeActionsCount,
+				})
+				lastCompletionValidation = completionValidation
+				if (!completionValidation.ok && actTotalToolCalls > 0 && completionRetryCount < 1) {
+					completionRetryCount++
+					const issues = completionValidation.issues.map((i) => i.message).join("; ")
+					messages.push({ role: "assistant", content: finalMessage.content })
+					messages.push({ role: "user", content: `Before finishing, tighten your completion summary. Missing quality checks: ${issues}. Include a clear summary, files changed, and verification/test status.` })
+					continue
+				}
 				// Model explicitly finished - done
 				break
 			} else if (finalMessage.stop_reason === "max_tokens") {
@@ -11351,6 +12513,33 @@ async function handleSupervisorChat(
 	agentActivityLogger.logLoopExit(project.id, supervisorConfig.id, project.folder, supervisorConfig.homeFolder || "/", actLoopExitReason as any, iterationCount, actTotalToolCalls, actLoopStartTime)
 	// Society Agent end
 
+	const finalOrchestrationState = supervisorOrchestrationStates.get(orchestrationKey)
+	if (finalOrchestrationState) {
+		if (actLoopExitReason === "user_stopped") {
+			finalOrchestrationState.status = "blocked"
+		} else if (lastCompletionValidation && !lastCompletionValidation.ok) {
+			finalOrchestrationState.status = "in_progress"
+			finalOrchestrationState.unknowns = Array.from(new Set([
+				...(finalOrchestrationState.unknowns || []),
+				...lastCompletionValidation.issues.map((i) => i.message),
+			]))
+		} else {
+			finalOrchestrationState.status = "completed"
+			finalOrchestrationState.completedSteps = Array.from(new Set([
+				...(finalOrchestrationState.completedSteps || []),
+				"execute",
+				"verify",
+			]))
+		}
+		finalOrchestrationState.lastOutcome = {
+			stepId: "verify",
+			result: lastCompletionValidation && !lastCompletionValidation.ok ? "failure" : "success",
+			notes: actLoopExitReason,
+		}
+		finalOrchestrationState.updatedAt = new Date().toISOString()
+		supervisorOrchestrationStates.set(orchestrationKey, finalOrchestrationState)
+	}
+
 	// Society Agent - Pending-task auto-continue
 	// If the loop exited normally but the agent was working on tasks that aren't done,
 	// auto-fire a follow-up round so it doesn't silently go idle.
@@ -11377,7 +12566,7 @@ async function handleSupervisorChat(
 			// Re-invoke in background to avoid deep recursion; fire-and-forget with a small delay
 			setTimeout(async () => {
 				try {
-					await handleSupervisorChat(supervisorConfig, project, continueMsg, undefined, apiKey, io)
+					await handleSupervisorChat(continueMsg, supervisorConfig, project, apiKey, io)
 				} catch (err: any) {
 					log.error(`[Supervisor] ${supervisorConfig.name} auto-continue error:`, err)
 				}
@@ -11419,6 +12608,15 @@ async function runEphemeralWorker(
 		const workerHomeFolder = workerConfig.homeFolder || "/"
 		const workerStartTime = Date.now()
 		let totalToolCalls = 0
+		const workerStartedAtIso = new Date(workerStartTime).toISOString()
+		projectStore.registerWorkerSession(project.id, {
+			workerId,
+			projectId: project.id,
+			reportsTo: workerConfig.reportsTo,
+			status: "starting",
+			startedAt: workerStartedAtIso,
+			lastHeartbeatAt: workerStartedAtIso,
+		})
 		
 		// Emit worker started event
 		console.log(`[WORKER_DEBUG] Emitting worker-started event`)
@@ -11452,6 +12650,13 @@ async function runEphemeralWorker(
 				})
 				model = effectiveModel
 				useOpenRouter = true
+			} else if (effectiveProvider === "ollama") {
+				useOpenRouter = true
+				openRouterClient = new OpenAI({
+					baseURL: providerConfig.baseUrl || getDefaultOllamaBaseUrl(),
+					apiKey: providerConfig.apiKey || "ollama",
+				})
+				model = await resolveOllamaModelOrFallback(effectiveModel)
 			} else if (effectiveProvider === "minimax") {
 				anthropic = new Anthropic({
 					apiKey: providerConfig.apiKey,
@@ -11506,7 +12711,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 	let fullResponse = ""
 	const MAX_ITERATIONS = 100 // Society Agent - increased from 20 to allow workers to complete more complex tasks
 	let taskCompleted = false
-	let loopExitReason: "max_iterations" | "stopped_by_user" | "model_stopped" | "too_many_errors" | "timeout_stalled" = "max_iterations"
+	let loopExitReason: "max_iterations" | "user_stopped" | "model_stopped" | "too_many_errors" | "timeout_stalled" = "max_iterations"
 	const WORKER_MAX_WALL_TIME_MS = 45 * 60 * 1000 // Hard cap to prevent zombie workers
 	const WORKER_API_TIMEOUT_MS = 8 * 60 * 1000 // Protect against hung model calls
 	const WORKER_TOOL_TIMEOUT_MS = 10 * 60 * 1000 // Protect against hung tool calls
@@ -11526,8 +12731,11 @@ You will self-destruct after completing or failing. Focus on your task.`
 		})
 	}
 	let hasWrittenFiles = false // Track if agent made any modifications
-	const READ_ONLY_TOOLS = new Set(["read_project_file", "list_project_files", "read_file", "list_dir", "get_team_info", "list_files", "search_in_files"])
+	const READ_ONLY_TOOLS = new Set(["read_project_file", "list_project_files", "read_file", "list_dir", "get_team_info", "list_files", "search_in_files", "shared_cache_get", "shared_cache_list", "shared_cache_stats"])
 	let consecutiveReadOnlyStops = 0 // Track consecutive stops after only reading
+	let terminalReminderCount = 0 // Force worker to call complete_task/fail_task before exit when task is active
+	let lastIterationErrorSnippet = ""
+	const recentToolDiagnostics: string[] = []
 	let actualIterations = 0 // Track actual iterations for activity logging
 
 	// Investigation stall detection — prevent endless read-only loops
@@ -11543,9 +12751,21 @@ You will self-destruct after completing or failing. Focus on your task.`
 	function countDuplicateKey(key: string): number {
 		return recentToolCallKeys.filter(k => k === key).length
 	}
+	function captureToolDiagnostic(name: string, input: Record<string, any>, result: string): void {
+		const inputPreview = JSON.stringify(input).substring(0, 180)
+		const resultPreview = (result || "").replace(/\s+/g, " ").substring(0, 200)
+		recentToolDiagnostics.push(`- ${name}(${inputPreview}) -> ${resultPreview}`)
+		if (recentToolDiagnostics.length > 6) recentToolDiagnostics.shift()
+	}
 	
 	for (let iteration = 0; iteration < MAX_ITERATIONS && !taskCompleted; iteration++) {
 		actualIterations = iteration + 1
+		projectStore.heartbeatWorkerSession(project.id, workerId, { status: "running" })
+		const activeTask = projectStore.getTasks(project.id).find((t) => t.claimedBy === workerId && ["claimed", "in-progress"].includes(t.status))
+		if (activeTask) {
+			projectStore.heartbeatTask(project.id, activeTask.id, workerId)
+			projectStore.heartbeatWorkerSession(project.id, workerId, { taskId: activeTask.id, status: "running" })
+		}
 
 		if (Date.now() - workerStartTime > WORKER_MAX_WALL_TIME_MS) {
 			loopExitReason = "timeout_stalled"
@@ -11564,7 +12784,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 		// Society Agent - Check if worker should stop
 		if (stoppedAgents.has(workerId)) {
 			log.info(`[Worker ${workerName}] Stop requested by user`)
-			loopExitReason = "stopped_by_user"
+			loopExitReason = "user_stopped"
 			stoppedAgents.delete(workerId)
 			io.emit("agent-message", {
 				agentId: workerId,
@@ -11710,6 +12930,18 @@ You will self-destruct after completing or failing. Focus on your task.`
 						continue
 					}
 				}
+				const activeWorkerTask = projectStore
+					.getTasks(project.id)
+					.find((t) => t.claimedBy === workerId && ["claimed", "in-progress"].includes(t.status))
+				if (activeWorkerTask && terminalReminderCount < 2) {
+					terminalReminderCount++
+					messages.push({ role: "assistant", content: textContent })
+					messages.push({
+						role: "user",
+						content: `You still have an active claimed task (\`${activeWorkerTask.id}\`). You MUST call exactly one terminal tool before stopping: \`complete_task(...)\` if done, or \`fail_task("QUESTION: ...")\` if blocked. Do not end_turn without one of these.`,
+					})
+					continue
+				}
 				messages.push({ role: "assistant", content: textContent })
 				loopExitReason = "model_stopped"
 				break
@@ -11793,6 +13025,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 					status: result.startsWith("❌") ? "error" : "completed",
 					timestamp: Date.now(),
 				})
+				captureToolDiagnostic(toolName, toolInput, result)
 				
 				toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result })
 				
@@ -11876,6 +13109,18 @@ You will self-destruct after completing or failing. Focus on your task.`
 						messages.push({ role: "user", content: "You've analyzed the problem but stopped without implementing a fix. Please continue and make the necessary code changes using write_file to fix the issue you identified. Don't just analyze - implement the solution." })
 						continue
 					}
+				}
+				const activeWorkerTask = projectStore
+					.getTasks(project.id)
+					.find((t) => t.claimedBy === workerId && ["claimed", "in-progress"].includes(t.status))
+				if (activeWorkerTask && terminalReminderCount < 2) {
+					terminalReminderCount++
+					messages.push({ role: "assistant", content: response.content })
+					messages.push({
+						role: "user",
+						content: `You still have an active claimed task (\`${activeWorkerTask.id}\`). You MUST call exactly one terminal tool before stopping: \`complete_task(...)\` if done, or \`fail_task("QUESTION: ...")\` if blocked. Do not end_turn without one of these.`,
+					})
+					continue
 				}
 				messages.push({ role: "assistant", content: response.content })
 				break
@@ -11967,6 +13212,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 					status: result.startsWith("❌") ? "error" : "completed",
 					timestamp: Date.now(),
 				})
+				captureToolDiagnostic(toolName, toolInput, result)
 				
 				toolResults.push({
 					type: "tool_result",
@@ -12010,6 +13256,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 			}
 
 			log.error(`[Worker ${workerName}] Error in iteration ${iteration + 1}: ${normalizedError}`, iterErr)
+			lastIterationErrorSnippet = normalizedError.substring(0, 300)
 			io.emit("worker-error", {
 				projectId: project.id,
 				workerId,
@@ -12046,12 +13293,18 @@ You will self-destruct after completing or failing. Focus on your task.`
 	
 	// Activity logging: log loop exit
 	const exitReason = taskCompleted ? "end_turn" : loopExitReason
-	agentActivityLogger.logLoopExit(project.id, workerId, project.folder, workerHomeFolder, exitReason, actualIterations, totalToolCalls, workerStartTime, taskCompleted ? "Task completed" : "Worker loop ended")
+	const activityExitReason =
+		exitReason === "end_turn" ||
+		exitReason === "user_stopped" ||
+		exitReason === "max_iterations"
+			? exitReason
+			: "unknown"
+	agentActivityLogger.logLoopExit(project.id, workerId, project.folder, workerHomeFolder, activityExitReason, actualIterations, totalToolCalls, workerStartTime, taskCompleted ? "Task completed" : `Worker loop ended (${loopExitReason})`)
 	
 	// Society Agent - Warn if worker hit max iterations without completing
 	if (!taskCompleted) {
 		const reasonLabel =
-			loopExitReason === "stopped_by_user"
+			loopExitReason === "user_stopped"
 				? "stopped by user"
 				: loopExitReason === "model_stopped"
 				? "model stopped before complete_task/fail_task"
@@ -12065,6 +13318,17 @@ You will self-destruct after completing or failing. Focus on your task.`
 			.getTasks(project.id)
 			.find((t) => t.claimedBy === workerId && ["claimed", "in-progress"].includes(t.status))
 		if (orphanedTask) {
+			const diagnosticLines: string[] = []
+			if (recentToolDiagnostics.length > 0) {
+				diagnosticLines.push("## Last tool calls before exit")
+				diagnosticLines.push(recentToolDiagnostics.slice(-3).join("\n"))
+			}
+			if (lastIterationErrorSnippet) {
+				diagnosticLines.push("## Last error snippet")
+				diagnosticLines.push(`- ${lastIterationErrorSnippet}`)
+			}
+			const diagnosticBlock = diagnosticLines.join("\n\n")
+
 			// Save worker's conversation output as progress notes for the retry worker
 			if (fullResponse && fullResponse.trim().length > 50) {
 				const MAX_NOTES = 3500
@@ -12072,16 +13336,19 @@ You will self-destruct after completing or failing. Focus on your task.`
 					? "...(earlier output trimmed)...\n\n" + fullResponse.slice(fullResponse.length - MAX_NOTES)
 					: fullResponse
 				projectStore.appendTaskProgressNotes(project.id, orphanedTask.id,
-					`## Progress from ${workerName} (stopped: ${loopExitReason})\n\n${trimmedResponse}`)
+					`## Progress from ${workerName} (stopped: ${loopExitReason})\n\n${trimmedResponse}${diagnosticBlock ? `\n\n${diagnosticBlock}` : ""}`)
+			} else if (diagnosticBlock) {
+				projectStore.appendTaskProgressNotes(project.id, orphanedTask.id,
+					`## Diagnostics from ${workerName} (stopped: ${loopExitReason})\n\n${diagnosticBlock}`)
 			}
 
 			const failReason =
-				loopExitReason === "stopped_by_user"
+				loopExitReason === "user_stopped"
 					? `Worker stopped by user before completion. Task auto-returned to pool.`
 					: loopExitReason === "model_stopped"
-					? `Worker stopped before calling complete_task/fail_task. Task auto-returned to pool.`
+					? `Worker stopped before calling complete_task/fail_task. Task auto-returned to pool. ${lastIterationErrorSnippet ? `Last error: ${lastIterationErrorSnippet}` : ""}`.trim()
 					: loopExitReason === "too_many_errors"
-					? `Worker aborted after repeated internal errors. Task auto-returned to pool.`
+					? `Worker aborted after repeated internal errors. Task auto-returned to pool. ${lastIterationErrorSnippet ? `Last error: ${lastIterationErrorSnippet}` : ""}`.trim()
 					: loopExitReason === "timeout_stalled"
 					? `Worker timed out while waiting on model/tools. Task auto-returned to pool.`
 					: `Worker hit max iterations without completion. Task auto-returned to pool.`
@@ -12098,7 +13365,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 
 			// Auto-recovery: spawn replacement worker while retries remain.
 			const supervisorId = workerConfig.reportsTo
-			const canAutoRetry = loopExitReason !== "stopped_by_user" && !!supervisorId
+			const canAutoRetry = loopExitReason !== "user_stopped" && !!supervisorId
 			if (canAutoRetry && failedTask) {
 				const retryCount = failedTask.retryCount || 0
 				const maxRetries = failedTask.maxRetries ?? 2
@@ -12143,7 +13410,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 						})
 						const retryWorkerId = `worker-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
 						project.workerSequence = (project.workerSequence || 0) + 1
-						projectStore.save()
+						projectStore.update(project.id, {})
 						const retryWorkerName = `Worker #${project.workerSequence}`
 
 						let retryPrompt = `You are an ephemeral worker agent continuing work that a previous worker started but did not finish.
@@ -12253,7 +13520,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 			agentId: workerId,
 			projectId: project.id,
 			message:
-				loopExitReason === "stopped_by_user"
+				loopExitReason === "user_stopped"
 					? `⚠️ Worker ${workerName} was stopped by user. Task was returned to the pool.`
 					: loopExitReason === "model_stopped"
 					? `⚠️ Worker ${workerName} stopped before finalizing the task. Task was returned to the pool.`
@@ -12267,6 +13534,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 	}
 
 	if (workerConfig.ephemeral && !taskCompleted) {
+		projectStore.heartbeatWorkerSession(project.id, workerId, { status: "stopping" })
 		projectStore.removeAgent(project.id, workerId)
 		io.emit("agent-deleted", {
 			projectId: project.id,
@@ -12278,6 +13546,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 	}
 	
 	// Emit worker finished
+	projectStore.removeWorkerSession(project.id, workerId)
 	io.emit("worker-finished", {
 		projectId: project.id,
 		workerId,
@@ -12323,6 +13592,7 @@ You will self-destruct after completing or failing. Focus on your task.`
 			completed: false,
 			timestamp: Date.now(),
 		})
+		projectStore.removeWorkerSession(project.id, workerId)
 	}
 }
 
@@ -12381,7 +13651,8 @@ This ensures files are automatically saved in your project folder. Do NOT just d
 	// Society Agent start - All agents get mind tools for persistent memory
 	fullPrompt += `\n\n## Memory Tools
 - \`read_file(path)\` / \`write_file(path, content)\` / \`list_files(path)\` — your persistent memory in your folder
-- \`read_project_file(path)\` — read any file in the project (read-only)
+- \`read_project_file(path)\` — read-only access, but only within your allowed visibility scope
+- \`search_in_files\` / \`find_files\` — search only inside your own folder unless you are the top-level supervisor
 - Start sessions by reading AGENTS.md + your own notes; save key decisions/learnings after work
 - Knowledge storage: quick tips → KNOWLEDGE.md | procedures → skills/name/SKILL.md | state → AGENTS.md
 - Skills: project skills in \`skills/\` (you can create) · global skills in /skills/ (read-only, use \`read_global_skill\`)
@@ -12775,7 +14046,18 @@ app.post("/api/agent/:agentId/chat", async (req, res): Promise<void> => {
 			chatRequestCache.delete(key)
 		}
 		log.error("Error in agent chat:", error)
-		res.status(500).json({ error: String(error) })
+		const projectId = req.body?.projectId as string | undefined
+		const found = projectStore.findAgentProject(req.params.agentId, projectId)
+		const standaloneProvider = standaloneSettings.isInitialized() ? standaloneSettings.getProvider().type : undefined
+		const provider = found?.agent.provider || found?.project.provider || standaloneProvider || currentProviderSettings?.apiProvider || currentProviderConfig?.provider
+		const modelHint = found?.agent.model || found?.project.model || process.env.OLLAMA_MODEL_ID || "qwen2.5-coder:7b"
+
+		const baseMessage = normalizeErrorMessage(error)
+		const errorMessage = provider === "ollama"
+			? withOllamaConnectionHint(baseMessage, modelHint)
+			: baseMessage
+
+		res.status(500).json({ error: errorMessage })
 	}
 })
 
@@ -13557,6 +14839,7 @@ async function start() {
 		})
 		// Initialize protected ports from existing allocations
 		const existingAllocations = PortManager.getAllAllocations()
+		log.info(`[DEBUG] Got existing allocations: ${existingAllocations.length}`)
 		for (const alloc of existingAllocations) {
 			PROTECTED_PORTS.add(alloc.port)
 		}
@@ -13564,16 +14847,32 @@ async function start() {
 		// Society Agent end
 
 		// Society Agent start - start diagnostics watchers for existing projects
+		log.info(`[DEBUG] Getting all projects for diagnostics...`)
 		const existingProjects = projectStore.getAll()
+		log.info(`[DEBUG] Got ${existingProjects.length} projects`)
 		for (const p of existingProjects) {
+			log.info(`[DEBUG] Starting diagnostics watcher for project: ${p.id}`)
 			diagnosticsWatcher.startProject(p.id, p.folder || p.id)
 		}
 		log.info(`Diagnostics watchers started for ${existingProjects.length} existing project(s)`)
 		// Society Agent end
 
+		// Society Agent - startup self-healing for stale task/worker state
+		// runStartupSelfHealing()
+
 		log.info(`Society Agent Web Server | Environment: ${NODE_ENV} | Port: ${PORT}`)
 
 		// Don't initialize Society Manager at startup - wait for first request with API key
+
+		// Add error handler for server binding failures
+		server.on("error", (err: any) => {
+			if (err.code === "EADDRINUSE") {
+				log.error(`Port ${PORT} is already in use. Please free the port or set PORT env var.`)
+			} else {
+				log.error(`Server error:`, err)
+			}
+			process.exit(1)
+		})
 
 		// Bind to 0.0.0.0 (IPv4) for VS Code port forwarding compatibility
 		server.listen(PORT, "0.0.0.0", () => {

@@ -741,6 +741,7 @@
         <option value="openrouter">OpenRouter</option>
         <option value="openai">OpenAI</option>
         <option value="minimax">MiniMax</option>
+        <option value="ollama">Ollama (Local)</option>
         <option value="gemini">Google Gemini</option>
         <option value="deepseek">DeepSeek</option>
         <option value="groq">Groq</option>
@@ -853,6 +854,7 @@
         <option value="openrouter">OpenRouter</option>
         <option value="openai">OpenAI</option>
         <option value="minimax">MiniMax</option>
+        <option value="ollama">Ollama (Local)</option>
         <option value="gemini">Google Gemini</option>
         <option value="deepseek">DeepSeek</option>
         <option value="groq">Groq</option>
@@ -1100,6 +1102,8 @@ let heartbeats = {};  // agentId -> heartbeat entry
 let lastTasks = [];   // cached task list for worker history
 let serverProvider = 'anthropic';  // Current server provider
 let serverModel = null;  // Current server model
+let liveOllamaModels = []; // Live models discovered from backend Ollama connection
+let liveOllamaModelsFromApi = false;
 
 // ============================================================================
 // Model Configuration (same as index.html)
@@ -1148,6 +1152,13 @@ const MODELS_BY_PROVIDER = {
     { id: 'minimax/minimax-m2.5', name: 'MiniMax M2.5', input: 0.30, output: 1.10 },
     { id: 'minimax/minimax-m2.7', name: 'MiniMax M2.7', input: 0.60, output: 2.40 },
   ],
+  ollama: [
+    { id: 'qwen2.5-coder:7b', name: 'Qwen 2.5 Coder 7B (Local)', input: 0, output: 0 },
+    { id: 'llama3.1:8b', name: 'Llama 3.1 8B (Local)', input: 0, output: 0 },
+    { id: 'deepseek-coder-v2:16b', name: 'DeepSeek Coder V2 16B (Local)', input: 0, output: 0 },
+    { id: 'gemma3:12b', name: 'Gemma 3 12B (Local)', input: 0, output: 0 },
+    { id: 'gemma3:27b', name: 'Gemma 3 27B (Local)', input: 0, output: 0 },
+  ],
   gemini: [
     { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', input: 1.25, output: 5 },
     { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (Fast)', input: 0.075, output: 0.30 },
@@ -1172,9 +1183,18 @@ async function loadServerProviderConfig() {
     const data = await res.json();
     serverProvider = data.provider || 'anthropic';
     serverModel = data.model || null;
+    liveOllamaModels = Array.isArray(data.ollamaModels) ? data.ollamaModels : [];
+    liveOllamaModelsFromApi = !!data.ollamaModelsFromApi;
   } catch (e) {
     console.error('Failed to load server provider config:', e);
   }
+}
+
+function getProjectModelsForProvider(provider) {
+  if (provider === 'ollama' && liveOllamaModelsFromApi) {
+    return (Array.isArray(liveOllamaModels) ? liveOllamaModels : []).map(id => ({ id, name: id, input: 0, output: 0 }));
+  }
+  return MODELS_BY_PROVIDER[provider] || MODELS_BY_PROVIDER.anthropic;
 }
 
 function populateModelDropdown(currentModel = null, currentProvider = null) {
@@ -1184,7 +1204,7 @@ function populateModelDropdown(currentModel = null, currentProvider = null) {
   // Use agent's selected provider, or fall back to server default
   const agentProvider = currentProvider || document.getElementById('agentFormProvider')?.value || '';
   const effectiveProvider = agentProvider || serverProvider || 'anthropic';
-  const models = MODELS_BY_PROVIDER[effectiveProvider] || MODELS_BY_PROVIDER.anthropic;
+  const models = getProjectModelsForProvider(effectiveProvider);
 
   const search = (document.getElementById('agentFormModelSearch')?.value || '').trim().toLowerCase();
   const filtered = !search
@@ -1202,10 +1222,20 @@ function populateModelDropdown(currentModel = null, currentProvider = null) {
     html += '<option value="" disabled>No models match filter</option>';
   }
 
+  if (effectiveProvider === 'ollama') {
+    const sourceLabel = liveOllamaModelsFromApi
+      ? ((Array.isArray(liveOllamaModels) && liveOllamaModels.length > 0) ? 'Live from Ollama API' : 'Live API reachable, no models installed')
+      : 'Fallback static list';
+    html += `<option value="" disabled>-- ${sourceLabel} --</option>`;
+  }
+
   select.innerHTML = html;
 
   if (currentModel) {
     select.value = currentModel;
+    if (select.value !== currentModel && select.options.length > 0) {
+      select.selectedIndex = 0;
+    }
   }
 
   updateAgentModelCost();
@@ -1215,6 +1245,11 @@ function onAgentProviderChange() {
   // When provider changes, clear any prior filter and repopulate the model list.
   const searchInput = document.getElementById('agentFormModelSearch');
   if (searchInput) searchInput.value = '';
+  const selectedProvider = document.getElementById('agentFormProvider')?.value || '';
+  if (selectedProvider === 'ollama') {
+    loadServerProviderConfig().then(() => populateModelDropdown(null));
+    return;
+  }
   populateModelDropdown(null);
 }
 
@@ -1232,7 +1267,7 @@ function updateAgentModelCost() {
   }
   
   const effectiveProvider = agentProvider || serverProvider || 'anthropic';
-  const models = MODELS_BY_PROVIDER[effectiveProvider] || [];
+  const models = getProjectModelsForProvider(effectiveProvider) || [];
   const model = models.find(m => m.id === modelId);
   if (model) {
     costEl.textContent = `Cost: $${model.input}/1M input, $${model.output}/1M output`;
@@ -3154,7 +3189,12 @@ function editProjectSettings() {
 function onProjectProviderChange() {
   const searchInput = document.getElementById('editProjectModelSearch');
   if (searchInput) searchInput.value = '';
-  populateProjectModelDropdown(null, document.getElementById('editProjectProvider').value);
+  const selectedProvider = document.getElementById('editProjectProvider').value;
+  if (selectedProvider === 'ollama') {
+    loadServerProviderConfig().then(() => populateProjectModelDropdown(null, selectedProvider));
+    return;
+  }
+  populateProjectModelDropdown(null, selectedProvider);
 }
 
 function populateProjectModelDropdown(currentModel = null, currentProvider = null) {
@@ -3162,7 +3202,7 @@ function populateProjectModelDropdown(currentModel = null, currentProvider = nul
   if (!select) return;
 
   const effectiveProvider = currentProvider || serverProvider || 'anthropic';
-  const models = MODELS_BY_PROVIDER[effectiveProvider] || MODELS_BY_PROVIDER.anthropic;
+  const models = getProjectModelsForProvider(effectiveProvider);
 
   const search = (document.getElementById('editProjectModelSearch')?.value || '').trim().toLowerCase();
   const filtered = !search
@@ -3179,11 +3219,21 @@ function populateProjectModelDropdown(currentModel = null, currentProvider = nul
     html += '<option value="" disabled>No models match filter</option>';
   }
 
+  if (effectiveProvider === 'ollama') {
+    const sourceLabel = liveOllamaModelsFromApi
+      ? ((Array.isArray(liveOllamaModels) && liveOllamaModels.length > 0) ? 'Live from Ollama API' : 'Live API reachable, no models installed')
+      : 'Fallback static list';
+    html += `<option value="" disabled>-- ${sourceLabel} --</option>`;
+  }
+
   select.innerHTML = html;
 
   // Set current model if provided
   if (currentModel) {
     select.value = currentModel;
+    if (select.value !== currentModel && select.options.length > 0) {
+      select.selectedIndex = 0;
+    }
   }
 }
 

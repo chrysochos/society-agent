@@ -45,7 +45,7 @@ vi.mock("../conversation-agent", () => {
 	}
 })
 
-import { SupervisorAgent, type EscalationRequest } from "../supervisor-agent"
+import { SupervisorAgent, type EscalationRequest } from "../src/supervisor-agent"
 
 describe("SupervisorAgent", () => {
 	describe("escalation mechanism", () => {

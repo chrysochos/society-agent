@@ -3,8 +3,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import * as fs from "fs/promises"
 import * as path from "path"
 import * as os from "os"
-import { AgentDirectory } from "../agent-directory"
-import type { AgentDirectoryEntry } from "../types"
+import { AgentDirectory } from "../src/agent-directory"
+import type { AgentDirectoryEntry } from "../src/types"
 
 // Mock the logger
 vi.mock("../logger", () => ({

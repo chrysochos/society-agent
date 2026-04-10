@@ -10,11 +10,17 @@ import { getLog } from "./logger"
 
 const log = getLog()
 
+function getDefaultOllamaBaseUrl(): string {
+	if (process.env.OLLAMA_BASE_URL) return process.env.OLLAMA_BASE_URL
+	const runningInContainer = fs.existsSync("/.dockerenv") || !!process.env.REMOTE_CONTAINERS || !!process.env.DEVCONTAINER
+	return runningInContainer ? "http://host.docker.internal:11434/v1" : "http://localhost:11434/v1"
+}
+
 // ============================================================================
 // Types
 // ============================================================================
 
-export type ProviderType = "anthropic" | "openrouter" | "openai" | "minimax" | "custom" | "gemini" | "deepseek" | "groq" | "mistral"
+export type ProviderType = "anthropic" | "openrouter" | "openai" | "minimax" | "custom" | "gemini" | "deepseek" | "groq" | "mistral" | "ollama"
 
 export interface ProviderSettings {
 	apiProvider: ProviderType
@@ -46,7 +52,7 @@ export interface ProviderSettings {
 }
 
 export type ProviderName = ProviderType
-export const providerNames = ["anthropic", "openrouter", "openai", "minimax", "custom", "gemini", "deepseek", "groq", "mistral"] as const
+export const providerNames = ["anthropic", "openrouter", "openai", "minimax", "custom", "gemini", "deepseek", "groq", "mistral", "ollama"] as const
 
 export interface ProviderConfig {
 	provider: ProviderType
@@ -70,6 +76,7 @@ const API_KEY_ENV_MAP: Record<ProviderType, string> = {
 	deepseek: "DEEPSEEK_API_KEY",
 	groq: "GROQ_API_KEY",
 	mistral: "MISTRAL_API_KEY",
+	ollama: "OLLAMA_API_KEY",
 	custom: "CUSTOM_API_KEY",
 }
 
@@ -151,6 +158,7 @@ export function loadProviderSettings(workspacePath: string): ProviderSettings {
 		deepseekApiKey: process.env.DEEPSEEK_API_KEY,
 		groqApiKey: process.env.GROQ_API_KEY,
 		mistralApiKey: process.env.MISTRAL_API_KEY,
+		ollamaModelId: process.env.OLLAMA_MODEL_ID,
 	}
 
 	log.info(`Loaded ProviderSettings from .env: provider=${activeProvider}`)
@@ -168,6 +176,7 @@ function detectActiveProvider(): ProviderType {
 	if (process.env.DEEPSEEK_API_KEY) return "deepseek"
 	if (process.env.GROQ_API_KEY) return "groq"
 	if (process.env.MISTRAL_API_KEY) return "mistral"
+	if (process.env.OLLAMA_MODEL_ID || process.env.OLLAMA_BASE_URL) return "ollama"
 	return "anthropic" // fallback
 }
 
@@ -193,6 +202,7 @@ export async function saveProviderSettings(workspacePath: string, settings: Prov
 	if (settings.deepseekApiKey) updates.DEEPSEEK_API_KEY = settings.deepseekApiKey
 	if (settings.groqApiKey) updates.GROQ_API_KEY = settings.groqApiKey
 	if (settings.mistralApiKey) updates.MISTRAL_API_KEY = settings.mistralApiKey
+	if (settings.ollamaModelId) updates.OLLAMA_MODEL_ID = settings.ollamaModelId
 	if (settings.apiKey) {
 		// Generic apiKey - use for active provider
 		const keyEnv = API_KEY_ENV_MAP[settings.apiProvider]
@@ -315,6 +325,17 @@ export function buildApiHandlerFromSettings(settings: ProviderSettings): ApiHand
 				temperature: settings.temperature,
 			})
 
+		case "ollama":
+			apiKey = settings.apiKey || process.env.OLLAMA_API_KEY || "ollama"
+			model = settings.ollamaModelId || settings.apiModelId || process.env.OLLAMA_MODEL_ID || "qwen2.5-coder:7b"
+			return buildOpenAIHandler(provider, {
+				apiKey,
+				model,
+				baseURL: getDefaultOllamaBaseUrl(),
+				maxTokens: settings.maxTokens,
+				temperature: settings.temperature,
+			})
+
 		case "gemini":
 			apiKey = settings.geminiApiKey || process.env.GEMINI_API_KEY
 			if (!apiKey) {
@@ -324,7 +345,7 @@ export function buildApiHandlerFromSettings(settings: ProviderSettings): ApiHand
 			throw new Error("Gemini provider not yet fully implemented. Please use Anthropic, OpenAI, MiniMax, or OpenRouter.")
 
 		default:
-			throw new Error(`Unknown provider: ${provider}. Supported: anthropic, openai, minimax, openrouter, deepseek, groq, mistral`)
+			throw new Error(`Unknown provider: ${provider}. Supported: anthropic, openai, minimax, openrouter, deepseek, groq, mistral, ollama`)
 	}
 }
 
@@ -363,10 +384,35 @@ export function buildSocietyApiHandler(workspacePath?: string): ApiHandler {
  */
 export function getCurrentProviderConfig(workspacePath: string): ProviderConfig {
 	const settings = loadProviderSettings(workspacePath)
+	const provider = settings.apiProvider || "anthropic"
+	const apiKeyByProvider: Partial<Record<ProviderType, string | undefined>> = {
+		anthropic: settings.anthropicApiKey || process.env.ANTHROPIC_API_KEY,
+		openrouter: settings.openRouterApiKey || process.env.OPENROUTER_API_KEY,
+		openai: settings.openAiApiKey || process.env.OPENAI_API_KEY,
+		minimax: settings.minimaxApiKey || process.env.MINIMAX_API_KEY,
+		deepseek: settings.deepseekApiKey || process.env.DEEPSEEK_API_KEY,
+		groq: settings.groqApiKey || process.env.GROQ_API_KEY,
+		mistral: settings.mistralApiKey || process.env.MISTRAL_API_KEY,
+		gemini: settings.geminiApiKey || process.env.GEMINI_API_KEY,
+		custom: settings.apiKey || process.env.CUSTOM_API_KEY,
+		ollama: settings.apiKey || process.env.OLLAMA_API_KEY || "ollama",
+	}
+	const fallbackModelByProvider: Record<ProviderType, string> = {
+		anthropic: "claude-sonnet-4-20250514",
+		openrouter: "anthropic/claude-3.5-sonnet",
+		openai: "gpt-4o",
+		minimax: "MiniMax-Text-01",
+		deepseek: "deepseek-chat",
+		groq: "llama-3.1-70b-versatile",
+		mistral: "mistral-large-latest",
+		gemini: "gemini-1.5-pro",
+		custom: "custom-model",
+		ollama: settings.ollamaModelId || process.env.OLLAMA_MODEL_ID || "qwen2.5-coder:7b",
+	}
 	return {
-		provider: "anthropic",
-		apiKey: settings.anthropicApiKey || process.env.ANTHROPIC_API_KEY || "",
-		model: settings.apiModelId || "claude-sonnet-4-20250514",
+		provider,
+		apiKey: apiKeyByProvider[provider] || "",
+		model: settings.apiModelId || settings.ollamaModelId || fallbackModelByProvider[provider],
 		maxTokens: settings.maxTokens,
 		temperature: settings.temperature,
 	}
@@ -378,9 +424,11 @@ export function getCurrentProviderConfig(workspacePath: string): ProviderConfig 
 export function isProviderConfigured(workspacePath?: string): boolean {
 	const apiKey = process.env.ANTHROPIC_API_KEY
 	if (apiKey) return true
+	if (process.env.ACTIVE_PROVIDER === "ollama" || !!process.env.OLLAMA_MODEL_ID || !!process.env.OLLAMA_BASE_URL) return true
 
 	if (workspacePath) {
 		const settings = loadProviderSettings(workspacePath)
+		if (settings.apiProvider === "ollama") return true
 		return !!settings.anthropicApiKey
 	}
 
@@ -400,7 +448,8 @@ export function loadProviderConfig(workspacePath: string): ProviderConfig | null
 	const hasKey = settings.anthropicApiKey || settings.openRouterApiKey || settings.openAiApiKey || 
 		settings.minimaxApiKey || settings.apiKey || process.env.ANTHROPIC_API_KEY || 
 		process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY
-	if (!hasKey) {
+	const hasOllama = settings.apiProvider === "ollama" || !!settings.ollamaModelId || process.env.ACTIVE_PROVIDER === "ollama" || !!process.env.OLLAMA_MODEL_ID || !!process.env.OLLAMA_BASE_URL
+	if (!hasKey && !hasOllama) {
 		return null
 	}
 	return getCurrentProviderConfig(workspacePath)
@@ -428,6 +477,8 @@ export async function saveProviderConfig(workspacePath: string, config: Provider
 		settings.openAiModelId = config.model
 	} else if (config.provider === "minimax") {
 		settings.minimaxApiKey = config.apiKey
+	} else if (config.provider === "ollama") {
+		settings.ollamaModelId = config.model
 	}
 	await saveProviderSettings(workspacePath, settings)
 }
@@ -441,6 +492,7 @@ export function getConfiguredProviders(workspacePath: string): ProviderType[] {
 	if (process.env.OPENROUTER_API_KEY) providers.push("openrouter")
 	if (process.env.OPENAI_API_KEY) providers.push("openai")
 	if (process.env.MINIMAX_API_KEY) providers.push("minimax")
+	if (process.env.ACTIVE_PROVIDER === "ollama" || process.env.OLLAMA_MODEL_ID || process.env.OLLAMA_BASE_URL) providers.push("ollama")
 	return providers.length > 0 ? providers : ["anthropic"]
 }
 

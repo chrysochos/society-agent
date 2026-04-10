@@ -1,6 +1,6 @@
 // Society Agent - new file
 import { describe, it, expect, beforeEach } from "vitest"
-import { PortManager } from "../port-manager"
+import { PortManager } from "../src/port-manager"
 
 describe("PortManager", () => {
 	beforeEach(() => {

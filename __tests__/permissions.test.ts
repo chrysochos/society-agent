@@ -1,7 +1,7 @@
 // Society Agent - new file
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import { PermissionChecker, defaultToolCapabilityMap, getPermissionChecker, resetPermissionChecker } from "../permissions"
-import type { AgentIdentity, AgentCapability } from "../types"
+import { PermissionChecker, defaultToolCapabilityMap, getPermissionChecker, resetPermissionChecker } from "../src/permissions"
+import type { AgentIdentity, AgentCapability } from "../src/types"
 
 // Mock the logger
 vi.mock("../logger", () => ({

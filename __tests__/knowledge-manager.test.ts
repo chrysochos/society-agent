@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import * as fs from "fs/promises"
 import * as path from "path"
 import * as os from "os"
-import { KnowledgeManager } from "../knowledge-manager"
+import { KnowledgeManager } from "../src/knowledge-manager"
 
 // Mock the logger
 vi.mock("../logger", () => ({

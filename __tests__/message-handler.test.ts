@@ -56,8 +56,8 @@ vi.mock("../agent-identity", () => ({
 }))
 
 import crypto from "crypto"
-import { UnifiedMessageHandler } from "../message-handler"
-import type { SignedMessage } from "../agent-identity"
+import { UnifiedMessageHandler } from "../src/message-handler"
+import type { SignedMessage } from "../src/agent-identity"
 
 function createMockIdentityManager() {
 	return {

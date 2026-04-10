@@ -736,6 +736,7 @@
         <option value="openrouter">OpenRouter (multi-model)</option>
         <option value="openai">OpenAI</option>
         <option value="minimax">MiniMax</option>
+        <option value="ollama">Ollama (Local)</option>
         <option value="gemini">Google Gemini</option>
         <option value="deepseek">DeepSeek</option>
         <option value="groq">Groq</option>
@@ -3405,6 +3406,13 @@ const MODELS_BY_PROVIDER = {
     { id: 'minimax/minimax-m2.5', name: 'MiniMax M2.5', input: 0.30, output: 1.10 },
     { id: 'minimax/minimax-m2.7', name: 'MiniMax M2.7', input: 0.60, output: 2.40 },
   ],
+  ollama: [
+    { id: 'qwen2.5-coder:7b', name: 'Qwen 2.5 Coder 7B (Local)', input: 0, output: 0 },
+    { id: 'llama3.1:8b', name: 'Llama 3.1 8B (Local)', input: 0, output: 0 },
+    { id: 'deepseek-coder-v2:16b', name: 'DeepSeek Coder V2 16B (Local)', input: 0, output: 0 },
+    { id: 'gemma3:12b', name: 'Gemma 3 12B (Local)', input: 0, output: 0 },
+    { id: 'gemma3:27b', name: 'Gemma 3 27B (Local)', input: 0, output: 0 },
+  ],
   gemini: [
     { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', input: 1.25, output: 5 },
     { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (Fast)', input: 0.075, output: 0.30 },
@@ -3431,6 +3439,7 @@ const API_KEY_LABELS = {
   openrouter: 'OpenRouter API Key',
   openai: 'OpenAI API Key',
   minimax: 'MiniMax API Key',
+  ollama: 'Local Model (no API key required)',
   gemini: 'Google AI API Key',
   deepseek: 'DeepSeek API Key',
   groq: 'Groq API Key',
@@ -3442,6 +3451,7 @@ const API_KEY_PLACEHOLDERS = {
   openrouter: 'sk-or-v1-...',
   openai: 'sk-...',
   minimax: 'minimax-...',
+  ollama: 'Not required for local Ollama',
   gemini: 'AIza...',
   deepseek: 'sk-...',
   groq: 'gsk_...',
@@ -3449,6 +3459,14 @@ const API_KEY_PLACEHOLDERS = {
 };
 
 let currentSettings = null;
+
+function getModelsForProvider(provider) {
+  if (provider === 'ollama' && currentSettings?.ollamaModelsFromApi) {
+    const live = Array.isArray(currentSettings?.ollamaModels) ? currentSettings.ollamaModels : [];
+    return live.map(id => ({ id, name: id, input: 0, output: 0 }));
+  }
+  return MODELS_BY_PROVIDER[provider] || [];
+}
 
 async function showApiKeyModal() {
   // Load current settings from server
@@ -3466,7 +3484,11 @@ async function showApiKeyModal() {
     
     // Set current model
     if (data.model) {
-      document.getElementById('settingsModel').value = data.model;
+      const modelSelect = document.getElementById('settingsModel');
+      modelSelect.value = data.model;
+      if (modelSelect.value !== data.model && modelSelect.options.length > 0) {
+        modelSelect.selectedIndex = 0;
+      }
       updateModelCost();
     }
     
@@ -3500,27 +3522,53 @@ function hideApiKeyModal() {
   document.getElementById('apiKeyModal').style.display = 'none'; 
 }
 
-function onProviderChange() {
+async function onProviderChange() {
   const provider = document.getElementById('settingsProvider').value;
+
+  // Refresh live Ollama model list on demand so UI doesn't stay on stale fallback data.
+  if (provider === 'ollama') {
+    try {
+      const res = await fetch(`${API}/api/config/provider`);
+      const data = await res.json();
+      currentSettings = { ...(currentSettings || {}), ...data };
+    } catch (e) {
+      console.error('Failed to refresh Ollama models:', e);
+    }
+  }
+
   renderModelOptions(provider, '');
   const searchEl = document.getElementById('settingsModelSearch');
   if (searchEl) searchEl.value = '';
+
+  const apiKeyInput = document.getElementById('settingsApiKey');
+  const apiKeyStatus = document.getElementById('settingsApiKeyStatus');
+  const apiKeyNotRequired = provider === 'ollama';
   
   // Update API key label and placeholder
   document.getElementById('settingsApiKeyLabel').textContent = API_KEY_LABELS[provider] || 'API Key';
-  document.getElementById('settingsApiKey').placeholder = API_KEY_PLACEHOLDERS[provider] || 'sk-...';
+  apiKeyInput.placeholder = API_KEY_PLACEHOLDERS[provider] || 'sk-...';
+  apiKeyInput.disabled = apiKeyNotRequired;
+  apiKeyInput.style.opacity = apiKeyNotRequired ? '0.6' : '1';
   
   // Clear API key field (different provider needs different key)
-  document.getElementById('settingsApiKey').value = '';
-  document.getElementById('settingsApiKeyStatus').textContent = 'Enter API key for ' + provider;
-  document.getElementById('settingsApiKeyStatus').style.color = 'var(--muted)';
+  apiKeyInput.value = '';
+  if (provider === 'ollama' && currentSettings?.ollamaModelsFromApi && Array.isArray(currentSettings?.ollamaModels) && currentSettings.ollamaModels.length === 0) {
+    apiKeyStatus.textContent = `Ollama is reachable at ${currentSettings.ollamaBaseUrl || 'configured URL'}, but no models are installed.`;
+    apiKeyStatus.style.color = 'var(--muted)';
+  } else if (provider === 'ollama' && currentSettings?.ollamaModelsError) {
+    apiKeyStatus.textContent = `Could not query Ollama models at ${currentSettings.ollamaBaseUrl || 'configured URL'}: ${currentSettings.ollamaModelsError}`;
+    apiKeyStatus.style.color = 'var(--error)';
+  } else {
+    apiKeyStatus.textContent = apiKeyNotRequired ? 'No API key required for local Ollama' : 'Enter API key for ' + provider;
+    apiKeyStatus.style.color = 'var(--muted)';
+  }
   
   updateModelCost();
 }
 
 function renderModelOptions(provider, query = '') {
   const modelSelect = document.getElementById('settingsModel');
-  const models = MODELS_BY_PROVIDER[provider] || [];
+  const models = getModelsForProvider(provider);
   const q = (query || '').trim().toLowerCase();
 
   const filtered = !q
@@ -3540,7 +3588,15 @@ function renderModelOptions(provider, query = '') {
   if (costEl) {
     const total = models.length;
     const shown = filtered.length;
-    if (shown !== total) {
+    if (provider === 'ollama') {
+      if (currentSettings?.ollamaModelsFromApi && Array.isArray(currentSettings?.ollamaModels) && currentSettings.ollamaModels.length > 0) {
+        costEl.textContent = `Live Ollama models (${shown}/${total}) from ${currentSettings.ollamaBaseUrl || 'configured URL'}`;
+      } else if (currentSettings?.ollamaModelsFromApi) {
+        costEl.textContent = `Live Ollama API reachable at ${currentSettings.ollamaBaseUrl || 'configured URL'}, but no models installed.`;
+      } else {
+        costEl.textContent = `Fallback model list (${shown}/${total})`;
+      }
+    } else if (shown !== total) {
       costEl.textContent = `Showing ${shown}/${total} models`;
     }
   }
@@ -3549,7 +3605,7 @@ function renderModelOptions(provider, query = '') {
 function updateModelCost() {
   const provider = document.getElementById('settingsProvider').value;
   const modelId = document.getElementById('settingsModel').value;
-  const models = MODELS_BY_PROVIDER[provider] || [];
+  const models = getModelsForProvider(provider);
   const model = models.find(m => m.id === modelId);
   
   const costEl = document.getElementById('settingsModelCost');
@@ -3599,7 +3655,7 @@ async function saveSettings() {
   const temperature = parseFloat(document.getElementById('settingsTemperature').value) || 0.7;
   
   // Validate
-  if (!apiKey && !currentSettings?.apiKeyConfigured) {
+  if (provider !== 'ollama' && !apiKey && !currentSettings?.apiKeyConfigured) {
     alert('Please enter an API key');
     return;
   }
@@ -3612,6 +3668,9 @@ async function saveSettings() {
       maxTokens,
       temperature,
     };
+    if (provider === 'ollama') {
+      providerPayload.ollamaModelId = model;
+    }
     
     // Add appropriate API key field based on provider
     if (apiKey) {

@@ -95,7 +95,7 @@ export class PortManager {
 			port = preferred
 		} else {
 			// Find a new available port
-			port = await this.findAvailablePort()
+			port = await this.findAvailablePortInRange(this.MIN_PORT, this.MAX_PORT, false)
 		}
 		
 		// Create allocation record
@@ -136,14 +136,14 @@ export class PortManager {
 	/**
 	 * Release a port (mark it as available for reuse)
 	 */
-	static releasePort(port: number, projectId: string): { success: boolean; reason?: string } {
+	static releasePort(port: number, projectId?: string): { success: boolean; reason?: string } {
 		const allocation = this.allocations.get(port)
 		
 		if (!allocation) {
 			return { success: false, reason: `Port ${port} is not allocated` }
 		}
 		
-		if (allocation.projectId !== projectId) {
+		if (projectId && allocation.projectId !== projectId) {
 			return { 
 				success: false, 
 				reason: `Port ${port} belongs to project "${allocation.projectId}", not "${projectId}"` 
@@ -211,8 +211,29 @@ export class PortManager {
 	/**
 	 * Find an available port in the range
 	 */
-	private static async findAvailablePort(): Promise<number> {
-		for (let port = this.MIN_PORT; port <= this.MAX_PORT; port++) {
+	static async findAvailablePort(minPort = 3000, maxPort = 4000): Promise<number> {
+		const port = await this.findAvailablePortInRange(minPort, maxPort, true)
+
+		// Legacy behavior: reserve immediately so the next call doesn't return same port.
+		if (!this.allocations.has(port)) {
+			const allocation: PortAllocation = {
+				port,
+				projectId: "legacy",
+				serviceName: `legacy-${port}`,
+				allocatedAt: new Date().toISOString(),
+				lastUsed: new Date().toISOString(),
+			}
+			this.allocations.set(port, allocation)
+			this.serviceToPort.set(`${allocation.projectId}:${allocation.serviceName}`, port)
+			this.saveAllocations()
+			this.notifyChange()
+		}
+
+		return port
+	}
+
+	private static async findAvailablePortInRange(minPort: number, maxPort: number, checkLegacyAvailability: boolean): Promise<number> {
+		for (let port = minPort; port <= maxPort; port++) {
 			// Skip system port
 			if (port === this.SYSTEM_PORT) continue
 			
@@ -225,7 +246,9 @@ export class PortManager {
 			}
 		}
 		
-		throw new Error(`No available ports in range ${this.MIN_PORT}-${this.MAX_PORT}`)
+		const lower = checkLegacyAvailability ? minPort : this.MIN_PORT
+		const upper = checkLegacyAvailability ? maxPort : this.MAX_PORT
+		throw new Error(`No available ports in range ${lower}-${upper}`)
 	}
 
 	/**

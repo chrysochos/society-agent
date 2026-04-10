@@ -7,6 +7,7 @@
 
 // Core types, configuration, and logging
 export * from "./types"
+export * from "./prompt-orchestration"
 export * from "./config"
 export * from "./logger"
 

@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import * as fs from "fs/promises"
 import * as path from "path"
 import * as os from "os"
-import { MessageSecurity } from "../message-security"
+import { MessageSecurity } from "../src/message-security"
 
 // Mock the logger
 vi.mock("../logger", () => ({
