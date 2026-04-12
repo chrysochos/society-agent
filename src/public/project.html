@@ -36,7 +36,15 @@
   header .project-name { font-size: 18px; font-weight: 600; }
   header .project-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
   header .project-folder { font-size: 11px; color: var(--accent); font-family: monospace; }
+  header .project-behavior { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
   header .header-actions { display: flex; gap: 8px; }
+  .behavior-badge { font-size: 10px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border);
+    background: rgba(88,166,255,0.08); color: var(--accent); letter-spacing: 0.2px; }
+  .quick-switches { display: flex; gap: 6px; margin-right: 8px; }
+  .quick-switch-btn { padding: 4px 8px; font-size: 11px; border-radius: 999px; }
+  .quick-switch-btn:hover { border-color: var(--accent); }
+  .preset-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .preset-btn { padding: 6px 10px; font-size: 12px; border-radius: 999px; }
   
   /* Society Agent - System pause banner */
   .pause-banner { 
@@ -476,11 +484,17 @@
     <div class="project-name" id="projectName">Loading...</div>
     <div class="project-desc" id="projectDesc"></div>
     <div class="project-folder" id="projectFolder"></div>
+    <div class="project-behavior" id="projectBehaviorBadges"></div>
   </div>
   <!-- Society Agent - pause button and indicator -->
   <button class="btn btn-sm" id="pauseBtn" onclick="toggleSystemPause()" style="margin-right:8px">🔧 Maintenance</button>
   <span class="pause-indicator" id="pauseIndicator">⏸ System Paused</span>
   <div class="header-actions">
+    <div class="quick-switches">
+      <button class="btn quick-switch-btn" onclick="applyProjectPreset('copilot_like')" title="Guided + Single Agent + Standard verification">Solo</button>
+      <button class="btn quick-switch-btn" onclick="applyProjectPreset('team_sprint')" title="Balanced + Team Mode + Standard verification">Team</button>
+      <button class="btn quick-switch-btn" onclick="applyProjectPreset('turbo_build')" title="Turbo + Team Mode + Light verification">Turbo</button>
+    </div>
     <button class="btn btn-sm" onclick="bootstrapProject()" title="Scan project and generate docs">&#128196; Bootstrap</button>
     <button class="btn btn-sm" id="pushToGitLabBtn" onclick="showPushToGitLabModal()" style="color:var(--green)">&#128268; Push to GitLab</button>
     <button class="btn btn-sm" onclick="editProjectSettings()">&#9881; Settings</button>
@@ -757,6 +771,43 @@
       <span style="font-size:11px;color:var(--muted)" id="agentModelCost"></span>
     </div>
     <div class="form-group">
+      <div class="checkbox-row">
+        <input type="checkbox" id="agentBehaviorInherit" checked onchange="toggleAgentBehaviorOverrides()">
+        <label for="agentBehaviorInherit" style="margin-bottom:0">Use project behavior defaults</label>
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-top:4px">When enabled, this agent inherits mode, delegation, and verification from the project.</p>
+      <p id="agentBehaviorSummary" style="font-size:11px;color:var(--accent);margin-top:4px"></p>
+    </div>
+    <div id="agentBehaviorOverridesGroup">
+      <div class="form-group">
+        <label>Agent Operating Profile</label>
+        <select id="agentFormOperatingProfile">
+          <option value="">(Use project default)</option>
+          <option value="guided">Guided</option>
+          <option value="balanced">Balanced</option>
+          <option value="autonomous">Autonomous</option>
+          <option value="turbo">Turbo</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Agent Delegation Style</label>
+        <select id="agentFormDelegationStyle">
+          <option value="">(Use project default)</option>
+          <option value="single_agent">Single Agent</option>
+          <option value="team_mode">Team Mode</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Agent Verification Strictness</label>
+        <select id="agentFormVerificationStrictness">
+          <option value="">(Use project default)</option>
+          <option value="light">Light</option>
+          <option value="standard">Standard</option>
+          <option value="strict">Strict</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
       <label>Reports To (Boss)</label>
       <select id="agentFormReportsTo" onchange="updateWorkspaceModeVisibility()">
         <option value="">(None - Top Level)</option>
@@ -868,6 +919,43 @@
         <option value="">(Use server default)</option>
       </select>
       <span style="font-size:11px;color:var(--muted)" id="editProjectModelCost"></span>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
+    <h3 style="font-size:14px;margin-bottom:12px">⚙️ Agent Behavior (Per-Project Override)</h3>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Override orchestration behavior for this project only. Leave as server default when unsure.</p>
+    <div class="preset-row">
+      <button class="btn preset-btn" type="button" onclick="applyProjectPresetToForm('copilot_like')">Copilot-like</button>
+      <button class="btn preset-btn" type="button" onclick="applyProjectPresetToForm('team_sprint')">Team Sprint</button>
+      <button class="btn preset-btn" type="button" onclick="applyProjectPresetToForm('safe_review')">Safe Review</button>
+      <button class="btn preset-btn" type="button" onclick="applyProjectPresetToForm('turbo_build')">Turbo Build</button>
+      <button class="btn preset-btn" type="button" onclick="clearProjectBehaviorForm()">Use Defaults</button>
+    </div>
+    <div class="form-group">
+      <label>Operating Profile</label>
+      <select id="editProjectOperatingProfile">
+        <option value="">(Use server default)</option>
+        <option value="guided">Guided (small steps, pause often)</option>
+        <option value="balanced">Balanced</option>
+        <option value="autonomous">Autonomous (broader slices)</option>
+        <option value="turbo">Turbo (max throughput)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Delegation Style</label>
+      <select id="editProjectDelegationStyle">
+        <option value="">(Use server default)</option>
+        <option value="single_agent">Single Agent</option>
+        <option value="team_mode">Team Mode</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Verification Strictness</label>
+      <select id="editProjectVerificationStrictness">
+        <option value="">(Use server default)</option>
+        <option value="light">Light</option>
+        <option value="standard">Standard</option>
+        <option value="strict">Strict</option>
+      </select>
     </div>
     <div class="actions">
       <button class="btn" onclick="hideEditProjectModal()">Cancel</button>
@@ -1104,6 +1192,25 @@ let serverProvider = 'anthropic';  // Current server provider
 let serverModel = null;  // Current server model
 let liveOllamaModels = []; // Live models discovered from backend Ollama connection
 let liveOllamaModelsFromApi = false;
+
+const PROJECT_BEHAVIOR_PRESETS = {
+  copilot_like: {
+    label: 'Copilot-like',
+    behaviorSettings: { operatingProfile: 'guided', delegationStyle: 'single_agent', verificationStrictness: 'standard' },
+  },
+  team_sprint: {
+    label: 'Team Sprint',
+    behaviorSettings: { operatingProfile: 'balanced', delegationStyle: 'team_mode', verificationStrictness: 'standard' },
+  },
+  safe_review: {
+    label: 'Safe Review',
+    behaviorSettings: { operatingProfile: 'guided', delegationStyle: 'single_agent', verificationStrictness: 'strict' },
+  },
+  turbo_build: {
+    label: 'Turbo Build',
+    behaviorSettings: { operatingProfile: 'turbo', delegationStyle: 'team_mode', verificationStrictness: 'light' },
+  },
+};
 
 // ============================================================================
 // Model Configuration (same as index.html)
@@ -1407,6 +1514,7 @@ function renderProject() {
   document.getElementById('projectName').textContent = project.name;
   document.getElementById('projectDesc').textContent = project.description || '';
   document.getElementById('projectFolder').textContent = project.folder || '/';
+  renderProjectBehaviorBadges();
   
   // Show/hide Push to GitLab button based on gitConfig
   const pushGitLabBtn = document.getElementById('pushToGitLabBtn');
@@ -1426,6 +1534,73 @@ function renderProject() {
   refreshGitHistory();
   refreshProjectSkills();
   refreshProjectMcps();
+}
+
+function renderProjectBehaviorBadges() {
+  const container = document.getElementById('projectBehaviorBadges');
+  if (!container) return;
+
+  const settings = project?.behaviorSettings || {};
+  const items = [
+    settings.operatingProfile ? `Mode: ${settings.operatingProfile}` : 'Mode: server default',
+    settings.delegationStyle ? `Delegation: ${settings.delegationStyle}` : 'Delegation: server default',
+    settings.verificationStrictness ? `Verify: ${settings.verificationStrictness}` : 'Verify: server default',
+  ];
+
+  container.innerHTML = items.map(text => `<span class="behavior-badge">${text}</span>`).join('');
+}
+
+function applyProjectPresetToForm(presetKey) {
+  const preset = PROJECT_BEHAVIOR_PRESETS[presetKey];
+  if (!preset) return;
+  document.getElementById('editProjectOperatingProfile').value = preset.behaviorSettings.operatingProfile || '';
+  document.getElementById('editProjectDelegationStyle').value = preset.behaviorSettings.delegationStyle || '';
+  document.getElementById('editProjectVerificationStrictness').value = preset.behaviorSettings.verificationStrictness || '';
+}
+
+function clearProjectBehaviorForm() {
+  document.getElementById('editProjectOperatingProfile').value = '';
+  document.getElementById('editProjectDelegationStyle').value = '';
+  document.getElementById('editProjectVerificationStrictness').value = '';
+}
+
+async function saveProjectBehaviorSettings(behaviorSettings) {
+  const payload = {
+    name: project.name,
+    description: project.description || '',
+    folder: project.folder || '',
+    provider: project.provider || null,
+    model: project.model || null,
+    behaviorSettings,
+  };
+
+  const res = await fetch(`${API}/api/projects/${projectId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to update project behavior');
+  }
+
+  project = data;
+  renderProject();
+  return data;
+}
+
+async function applyProjectPreset(presetKey) {
+  const preset = PROJECT_BEHAVIOR_PRESETS[presetKey];
+  if (!preset) return;
+
+  try {
+    await saveProjectBehaviorSettings(preset.behaviorSettings);
+    showToast(`Preset applied: ${preset.label}`, 'success');
+    loadProject();
+  } catch (e) {
+    showToast(`Failed to apply preset: ${e.message}`, 'error');
+  }
 }
 
 async function fetchHeartbeats() {
@@ -1516,7 +1691,7 @@ function renderAgentNode(agent, agentMap, allAgents) {
   html += `</div>`;
   if (statusHtml) html += `<div class="node-status">${statusHtml}</div>`;
   html += `<div class="node-actions" onclick="event.stopPropagation()">`;
-  html += `<button class="btn btn-sm" onclick="editAgentInProject('${escapeAttr(agent.id)}')">&#9998;</button>`;
+  html += `<button class="btn btn-sm" onclick="editAgentInProject('${escapeAttr(agent.id)}')" title="Agent settings">&#9881; Settings</button>`;
   html += `<button class="btn btn-sm" onclick="showSchedTaskList('${escapeAttr(agent.id)}')" title="Tasks">&#128337;</button>`;
   html += `<button class="btn btn-sm" onclick="bootstrapAgentFolder('${escapeAttr(agent.id)}')" title="Bootstrap agent folder">&#128196;</button>`;
   html += `<button class="btn btn-sm" style="color:var(--red)" onclick="removeAgent('${escapeAttr(agent.id)}','${escapeAttr(agent.name)}')">&#128465;</button>`;
@@ -1703,6 +1878,11 @@ function showAddAgentModal(parentAgentId = null) {
   // Reset provider and model dropdowns (use server default)
   document.getElementById('agentFormProvider').value = '';
   populateModelDropdown(null);
+  document.getElementById('agentBehaviorInherit').checked = true;
+  document.getElementById('agentFormOperatingProfile').value = '';
+  document.getElementById('agentFormDelegationStyle').value = '';
+  document.getElementById('agentFormVerificationStrictness').value = '';
+  toggleAgentBehaviorOverrides();
   
   // Reset permissions to defaults
   document.getElementById('agentPermOverwrite').checked = true;
@@ -1754,6 +1934,13 @@ function editAgentInProject(agentId) {
   // Set provider dropdown and populate model dropdown
   document.getElementById('agentFormProvider').value = agent.provider || '';
   populateModelDropdown(agent.model || null, agent.provider || null);
+  const behavior = agent.behaviorSettings || {};
+  const hasBehaviorOverride = !!(behavior.operatingProfile || behavior.delegationStyle || behavior.verificationStrictness);
+  document.getElementById('agentBehaviorInherit').checked = !hasBehaviorOverride;
+  document.getElementById('agentFormOperatingProfile').value = behavior.operatingProfile || '';
+  document.getElementById('agentFormDelegationStyle').value = behavior.delegationStyle || '';
+  document.getElementById('agentFormVerificationStrictness').value = behavior.verificationStrictness || '';
+  toggleAgentBehaviorOverrides();
   
   // Load permissions
   const perms = agent.permissions || {};
@@ -1807,6 +1994,33 @@ function toggleCustodianPermissions() {
   custodianPermNote.style.display = isCustodian ? 'block' : 'none';
 }
 
+function toggleAgentBehaviorOverrides() {
+  const inheritBehavior = document.getElementById('agentBehaviorInherit').checked;
+  const group = document.getElementById('agentBehaviorOverridesGroup');
+  const operatingProfile = document.getElementById('agentFormOperatingProfile');
+  const delegationStyle = document.getElementById('agentFormDelegationStyle');
+  const verificationStrictness = document.getElementById('agentFormVerificationStrictness');
+  const summary = document.getElementById('agentBehaviorSummary');
+  const inherited = project?.behaviorSettings || {};
+  const inheritedProfile = inherited.operatingProfile || 'server default';
+  const inheritedDelegation = inherited.delegationStyle || 'server default';
+  const inheritedVerification = inherited.verificationStrictness || 'server default';
+
+  [operatingProfile, delegationStyle, verificationStrictness].forEach((el) => {
+    if (el) el.disabled = inheritBehavior;
+  });
+
+  if (group) {
+    group.style.opacity = inheritBehavior ? '0.65' : '1';
+  }
+
+  if (summary) {
+    summary.textContent = inheritBehavior
+      ? `Inherited now: ${inheritedProfile} / ${inheritedDelegation} / ${inheritedVerification}`
+      : 'Override enabled for this agent.';
+  }
+}
+
 function updateAgentIdPreview() {
   const name = document.getElementById('agentFormName').value.trim();
   const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -1858,6 +2072,12 @@ async function submitAgentForm() {
   // Get provider and model (empty string means use server default)
   const provider = document.getElementById('agentFormProvider').value || undefined;
   const model = document.getElementById('agentFormModel').value || undefined;
+  const inheritBehavior = document.getElementById('agentBehaviorInherit').checked;
+  const behaviorSettings = inheritBehavior ? undefined : {
+    operatingProfile: document.getElementById('agentFormOperatingProfile').value || undefined,
+    delegationStyle: document.getElementById('agentFormDelegationStyle').value || undefined,
+    verificationStrictness: document.getElementById('agentFormVerificationStrictness').value || undefined,
+  };
   
   // Get permissions
   const isCustodian = document.getElementById('agentFormCustodian')?.checked ?? !ephemeral;
@@ -1885,13 +2105,13 @@ async function submitAgentForm() {
       res = await fetch(`${API}/api/projects/${projectId}/agents/${editingAgentId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, role, customInstructions, capabilities, homeFolder, ephemeral, reportsTo, provider, model, permissions, workspaceMode }),
+        body: JSON.stringify({ name, role, customInstructions, capabilities, homeFolder, ephemeral, reportsTo, provider, model, behaviorSettings, permissions, workspaceMode }),
       });
     } else {
       res = await fetch(`${API}/api/projects/${projectId}/agents`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, name, role, customInstructions, capabilities, homeFolder, ephemeral, reportsTo, provider, model, permissions, workspaceMode }),
+        body: JSON.stringify({ id, name, role, customInstructions, capabilities, homeFolder, ephemeral, reportsTo, provider, model, behaviorSettings, permissions, workspaceMode }),
       });
     }
     const data = await res.json();
@@ -3182,6 +3402,9 @@ function editProjectSettings() {
   document.getElementById('editProjectDesc').value = project.description || '';
   document.getElementById('editProjectFolder').value = project.folder || '';
   document.getElementById('editProjectProvider').value = project.provider || '';
+  document.getElementById('editProjectOperatingProfile').value = project.behaviorSettings?.operatingProfile || '';
+  document.getElementById('editProjectDelegationStyle').value = project.behaviorSettings?.delegationStyle || '';
+  document.getElementById('editProjectVerificationStrictness').value = project.behaviorSettings?.verificationStrictness || '';
   populateProjectModelDropdown(project.model, project.provider);
   document.getElementById('editProjectModal').style.display = 'flex';
 }
@@ -3247,6 +3470,17 @@ async function saveProjectSettings() {
   const folder = document.getElementById('editProjectFolder').value.trim();
   const provider = document.getElementById('editProjectProvider').value || null;
   const model = document.getElementById('editProjectModel').value || null;
+  const operatingProfile = document.getElementById('editProjectOperatingProfile').value || null;
+  const delegationStyle = document.getElementById('editProjectDelegationStyle').value || null;
+  const verificationStrictness = document.getElementById('editProjectVerificationStrictness').value || null;
+
+  const behaviorSettings = (operatingProfile || delegationStyle || verificationStrictness)
+    ? {
+        operatingProfile: operatingProfile || undefined,
+        delegationStyle: delegationStyle || undefined,
+        verificationStrictness: verificationStrictness || undefined,
+      }
+    : undefined;
 
   if (!name) { alert('Name is required'); return; }
 
@@ -3254,7 +3488,7 @@ async function saveProjectSettings() {
     const res = await fetch(`${API}/api/projects/${projectId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description, folder, provider, model }),
+      body: JSON.stringify({ name, description, folder, provider, model, behaviorSettings }),
     });
     if (res.ok) {
       hideEditProjectModal();

@@ -59,7 +59,7 @@ import { ProjectStore, ProjectAgentConfig, Project, Task, TaskContext } from "./
 import * as pty from "node-pty"
 // Society Agent end
 // Society Agent start - standalone settings system
-import { settings as standaloneSettings, initializeSettings, getSettingsSummary, PROVIDER_BASE_URLS } from "./settings"
+import { settings as standaloneSettings, initializeSettings, getSettingsSummary, PROVIDER_BASE_URLS, isDelegationStyle, isOperatingProfile, isVerificationStrictness, type OperatingProfile } from "./settings"
 // Society Agent end
 // Society Agent start - shared workspace support
 import {
@@ -138,6 +138,101 @@ log.info(`[Security] Protected ports: ${[...PROTECTED_PORTS].join(", ")}`)
 // Helper to check if a port is protected
 function isPortProtected(port: number): boolean {
 	return PROTECTED_PORTS.has(port)
+}
+
+function getOperatingProfileContext(profile: OperatingProfile): {
+	constraints: string[]
+	verificationSteps: string[]
+	autonomy: "suggest_only" | "propose_then_edit" | "full_execute"
+} {
+	switch (profile) {
+		case "guided":
+			return {
+				constraints: [
+					"operating profile: guided",
+					"make one small patch per turn",
+					"pause after each completed slice",
+				],
+				verificationSteps: ["Provide a short verification summary before stopping."],
+				autonomy: "propose_then_edit",
+			}
+		case "autonomous":
+			return {
+				constraints: [
+					"operating profile: autonomous",
+					"complete related subtasks in one pass when safe",
+				],
+				verificationSteps: ["Run full verification relevant to changed areas."],
+				autonomy: "full_execute",
+			}
+		case "turbo":
+			return {
+				constraints: [
+					"operating profile: turbo",
+					"prioritize throughput with bounded risk",
+				],
+				verificationSteps: ["Run at least one essential verification command before done."],
+				autonomy: "full_execute",
+			}
+		case "balanced":
+		default:
+			return {
+				constraints: ["operating profile: balanced"],
+				verificationSteps: [],
+				autonomy: "propose_then_edit",
+			}
+	}
+}
+
+function getDelegationContext(style: "single_agent" | "team_mode"): {
+	constraints: string[]
+} {
+	if (style === "single_agent") {
+		return {
+			constraints: [
+				"delegation style: single_agent",
+				"do not delegate or spawn workers unless user explicitly asks",
+			],
+		}
+	}
+
+	return {
+		constraints: [
+			"delegation style: team_mode",
+			"delegate parallelizable implementation tasks when it reduces lead time",
+		],
+	}
+}
+
+function getVerificationContext(level: "light" | "standard" | "strict"): {
+	constraints: string[]
+	verificationSteps: string[]
+} {
+	if (level === "light") {
+		return {
+			constraints: ["verification strictness: light"],
+			verificationSteps: ["Run one essential verification command for changed code."],
+		}
+	}
+
+	if (level === "strict") {
+		return {
+			constraints: [
+				"verification strictness: strict",
+				"do not claim done until typecheck/tests/lint relevant to touched code pass",
+			],
+			verificationSteps: [
+				"Run typecheck relevant to the project stack.",
+				"Run tests for affected areas.",
+				"Run lint/format checks where configured.",
+			],
+		}
+	}
+
+	return {
+		constraints: ["verification strictness: standard"],
+		verificationSteps: ["Run validation commands listed in project prompt section before completion."],
+	}
 }
 
 // Helper to extract port numbers from a command string
@@ -3057,6 +3152,9 @@ app.get("/api/settings", (req, res) => {
 			projectsDir: settings.projectsDir,
 			defaultMaxTokens: settings.defaultMaxTokens,
 			defaultTemperature: settings.defaultTemperature,
+			operatingProfile: settings.operatingProfile,
+			delegationStyle: settings.delegationStyle,
+			verificationStrictness: settings.verificationStrictness,
 			verboseLogging: settings.verboseLogging,
 			sessionTimeoutMinutes: settings.sessionTimeoutMinutes,
 			supportedProviders: standaloneSettings.getSupportedProviders(),
@@ -3074,6 +3172,27 @@ app.get("/api/settings", (req, res) => {
 app.post("/api/settings", async (req, res): Promise<void> => {
 	try {
 		const { provider, ...otherSettings } = req.body
+
+		if (otherSettings.operatingProfile && !isOperatingProfile(otherSettings.operatingProfile)) {
+			res.status(400).json({
+				error: "Invalid operatingProfile. Must be one of: guided, balanced, autonomous, turbo",
+			})
+			return
+		}
+
+		if (otherSettings.delegationStyle && !isDelegationStyle(otherSettings.delegationStyle)) {
+			res.status(400).json({
+				error: "Invalid delegationStyle. Must be one of: single_agent, team_mode",
+			})
+			return
+		}
+
+		if (otherSettings.verificationStrictness && !isVerificationStrictness(otherSettings.verificationStrictness)) {
+			res.status(400).json({
+				error: "Invalid verificationStrictness. Must be one of: light, standard, strict",
+			})
+			return
+		}
 
 		// Validate provider if updating
 		if (provider) {
@@ -4435,9 +4554,22 @@ app.get("/api/projects/:id/git/log", (req, res): void => {
  */
 app.post("/api/projects", (req, res): void => {
 	try {
-		const { id, name, description, folder, knowledge, agents } = req.body
+		const { id, name, description, folder, knowledge, agents, behaviorSettings } = req.body
 		if (!id || !name) {
 			res.status(400).json({ error: "id and name are required" })
+			return
+		}
+
+		if (behaviorSettings?.operatingProfile && !isOperatingProfile(behaviorSettings.operatingProfile)) {
+			res.status(400).json({ error: "Invalid behaviorSettings.operatingProfile" })
+			return
+		}
+		if (behaviorSettings?.delegationStyle && !isDelegationStyle(behaviorSettings.delegationStyle)) {
+			res.status(400).json({ error: "Invalid behaviorSettings.delegationStyle" })
+			return
+		}
+		if (behaviorSettings?.verificationStrictness && !isVerificationStrictness(behaviorSettings.verificationStrictness)) {
+			res.status(400).json({ error: "Invalid behaviorSettings.verificationStrictness" })
 			return
 		}
 		
@@ -4604,7 +4736,7 @@ This way you (and future sessions) don't have to re-learn everything!`),
 		}
 		// Society Agent end
 		
-		const project = projectStore.create({ id, name, description: description || "", folder, knowledge, agents: projectAgents })
+		const project = projectStore.create({ id, name, description: description || "", folder, knowledge, behaviorSettings, agents: projectAgents })
 		io.emit("system-event", { type: "project-created", projectId: id, name, timestamp: Date.now() })
 		// Society Agent - start diagnostics watchers for new project
 		diagnosticsWatcher.startProject(id, folder || id)
@@ -4619,6 +4751,20 @@ This way you (and future sessions) don't have to re-learn everything!`),
  */
 app.put("/api/projects/:id", (req, res): void => {
 	try {
+		const behaviorSettings = req.body?.behaviorSettings
+		if (behaviorSettings?.operatingProfile && !isOperatingProfile(behaviorSettings.operatingProfile)) {
+			res.status(400).json({ error: "Invalid behaviorSettings.operatingProfile" })
+			return
+		}
+		if (behaviorSettings?.delegationStyle && !isDelegationStyle(behaviorSettings.delegationStyle)) {
+			res.status(400).json({ error: "Invalid behaviorSettings.delegationStyle" })
+			return
+		}
+		if (behaviorSettings?.verificationStrictness && !isVerificationStrictness(behaviorSettings.verificationStrictness)) {
+			res.status(400).json({ error: "Invalid behaviorSettings.verificationStrictness" })
+			return
+		}
+
 		const updated = projectStore.update(req.params.id, req.body)
 		if (!updated) {
 			res.status(404).json({ error: "Project not found" })
@@ -5884,9 +6030,21 @@ app.get("/api/projects/:id/supervisor/overrides", (req, res): void => {
  */
 app.post("/api/projects/:id/agents", (req, res): void => {
 	try {
-		const { id, name, role, systemPrompt, customInstructions, homeFolder, model, ephemeral, reportsTo, capabilities, workspaceMode } = req.body
+		const { id, name, role, systemPrompt, customInstructions, homeFolder, provider, model, behaviorSettings, ephemeral, reportsTo, capabilities, workspaceMode } = req.body
 		if (!id || !name || !role) {
 			res.status(400).json({ error: "id, name, and role are required" })
+			return
+		}
+		if (behaviorSettings?.operatingProfile && !isOperatingProfile(behaviorSettings.operatingProfile)) {
+			res.status(400).json({ error: "Invalid behaviorSettings.operatingProfile" })
+			return
+		}
+		if (behaviorSettings?.delegationStyle && !isDelegationStyle(behaviorSettings.delegationStyle)) {
+			res.status(400).json({ error: "Invalid behaviorSettings.delegationStyle" })
+			return
+		}
+		if (behaviorSettings?.verificationStrictness && !isVerificationStrictness(behaviorSettings.verificationStrictness)) {
+			res.status(400).json({ error: "Invalid behaviorSettings.verificationStrictness" })
 			return
 		}
 		
@@ -5935,7 +6093,9 @@ Work collaboratively with other agents in the project. Use available tools to co
 			systemPrompt: defaultPrompt,
 			customInstructions,  // Store separately for editing
 			homeFolder: agentHomeFolder,
+			provider,
 			model,
+			behaviorSettings,
 			ephemeral: ephemeral || false,
 			reportsTo,
 			workspaceMode: effectiveWorkspaceMode,
@@ -5979,6 +6139,18 @@ Work collaboratively with other agents in the project. Use available tools to co
 app.put("/api/projects/:projectId/agents/:agentId", (req, res): void => {
 	try {
 		const updates = { ...req.body }
+		if (updates.behaviorSettings?.operatingProfile && !isOperatingProfile(updates.behaviorSettings.operatingProfile)) {
+			res.status(400).json({ error: "Invalid behaviorSettings.operatingProfile" })
+			return
+		}
+		if (updates.behaviorSettings?.delegationStyle && !isDelegationStyle(updates.behaviorSettings.delegationStyle)) {
+			res.status(400).json({ error: "Invalid behaviorSettings.delegationStyle" })
+			return
+		}
+		if (updates.behaviorSettings?.verificationStrictness && !isVerificationStrictness(updates.behaviorSettings.verificationStrictness)) {
+			res.status(400).json({ error: "Invalid behaviorSettings.verificationStrictness" })
+			return
+		}
 		
 		// If customInstructions changed, regenerate the system prompt
 		if (updates.customInstructions !== undefined) {
@@ -7292,6 +7464,13 @@ async function executeAgentTool(
 		log.error(`[executeAgentTool] Invalid agentConfig passed to tool execution`)
 		return { result: `❌ Internal error: Invalid agent config`, filesCreated: 0 }
 	}
+
+	// Hard enforcement for delegation style, not just prompt guidance.
+	const activeSettings = standaloneSettings.get()
+	const effectiveDelegationStyle =
+		agentConfig.behaviorSettings?.delegationStyle ||
+		project.behaviorSettings?.delegationStyle ||
+		activeSettings.delegationStyle
 	// Society Agent end
 	
 	// Society Agent start - Determine the working folder
@@ -7430,7 +7609,7 @@ async function executeAgentTool(
 			}
 			
 			// Society Agent start - Custodian file write restriction
-			if (!agentConfig.ephemeral) {
+			if (!agentConfig.ephemeral && effectiveDelegationStyle !== "single_agent") {
 				const custodianCheck = canCustodianWriteFile(filePath)
 				if (!custodianCheck.allowed) {
 					return { result: `🚫 **Custodian write blocked**\n\n${custodianCheck.reason}\n\n💡 Use \`read_global_skill("workflow-policy")\` to understand the custodian/worker model.`, filesCreated: 0 }
@@ -7511,7 +7690,7 @@ async function executeAgentTool(
 			const { path: filePath, old_text, new_text } = toolInput as { path: string; old_text: string; new_text: string }
 			
 			// Society Agent start - Custodian file write restriction
-			if (!agentConfig.ephemeral) {
+			if (!agentConfig.ephemeral && effectiveDelegationStyle !== "single_agent") {
 				const custodianCheck = canCustodianWriteFile(filePath)
 				if (!custodianCheck.allowed) {
 					return { result: `🚫 **Custodian write blocked**\n\n${custodianCheck.reason}\n\n💡 Use \`read_global_skill("workflow-policy")\` to understand the custodian/worker model.`, filesCreated: 0 }
@@ -7653,7 +7832,7 @@ async function executeAgentTool(
 			}
 			
 			// Society Agent start - Custodian command restriction
-			if (!agentConfig.ephemeral) {
+			if (!agentConfig.ephemeral && effectiveDelegationStyle !== "single_agent") {
 				const cmdCheck = isCustodianCommandAllowed(command)
 				if (!cmdCheck.allowed) {
 					return { result: `🚫 **Custodian command blocked**\n\n${cmdCheck.reason}\n\n💡 Use \`read_global_skill("workflow-policy")\` to understand the custodian/worker model.`, filesCreated: 0 }
@@ -10121,6 +10300,15 @@ async function executeAgentTool(
 
 		// Society Agent start - spawn_worker implementation
 		case "spawn_worker": {
+			if (effectiveDelegationStyle === "single_agent") {
+				return {
+					result:
+						`🚫 Worker spawning is disabled for this agent because delegation mode is set to \`single_agent\`.\n\n` +
+						`Switch delegation to \`team_mode\` in Agent Settings if you want ephemeral workers.\n` +
+						`If old workers are still visible from earlier runs, use \`reset_tasks({ cleanup_workers: true })\` to clear them.`,
+					filesCreated: 0,
+				}
+			}
 			log.info(`[spawn_worker] Called by agentConfig.id=${agentConfig.id}, agentConfig.name=${agentConfig.name}`)
 			const { count = 1 } = toolInput as { count?: number }
 			
@@ -11155,9 +11343,20 @@ async function handleSupervisorChat(
 
 	// Add user message to agent history (with orchestration packet)
 	const inferredIntent = inferRequestIntent(userMessage)
+	const activeSettings = standaloneSettings.get()
+	const activeOperatingProfile = supervisorConfig.behaviorSettings?.operatingProfile || project.behaviorSettings?.operatingProfile || activeSettings.operatingProfile
+	const profileContext = getOperatingProfileContext(activeOperatingProfile)
+	const effectiveDelegationStyle = supervisorConfig.behaviorSettings?.delegationStyle || project.behaviorSettings?.delegationStyle || activeSettings.delegationStyle
+	const effectiveVerificationStrictness = supervisorConfig.behaviorSettings?.verificationStrictness || project.behaviorSettings?.verificationStrictness || activeSettings.verificationStrictness
+	const delegationContext = getDelegationContext(effectiveDelegationStyle)
+	const verificationContext = getVerificationContext(effectiveVerificationStrictness)
+	const profiledIntent = {
+		...inferredIntent,
+		autonomy: profileContext.autonomy,
+	}
 	const rankedFiles = buildRelevantContextFiles({
 		request: userMessage,
-		taskFamily: inferredIntent.taskFamily,
+		taskFamily: profiledIntent.taskFamily,
 		registry: ownershipRegistry as OwnershipRegistryLike | undefined,
 		limit: 8,
 	})
@@ -11173,13 +11372,13 @@ async function handleSupervisorChat(
 		: createInitialTaskState(
 			`task_${Date.now().toString(36)}`,
 			userMessage,
-			inferredIntent,
+			profiledIntent,
 			allowedFiles,
 		)
 	const stack = [cachedProjectConfig?.language, cachedProjectConfig?.framework, cachedProjectConfig?.packageManager]
 		.filter((v): v is string => !!v)
 	const orchestrationPack = composePromptPackage({
-		intent: inferredIntent,
+		intent: profiledIntent,
 		context: {
 			project: {
 				name: project.name,
@@ -11188,10 +11387,20 @@ async function handleSupervisorChat(
 			},
 			relevantFiles: rankedFiles,
 			detectedConventions: deriveDetectedConventions(cachedProjectConfig),
-			constraints: ["stay within allowed scope", "verify before done"],
+			constraints: [
+				"stay within allowed scope",
+				"verify before done",
+				...profileContext.constraints,
+				...delegationContext.constraints,
+				...verificationContext.constraints,
+			],
 		},
 		state: orchestrationState,
-		verificationSteps: deriveVerificationSteps(cachedProjectConfig),
+		verificationSteps: [
+			...deriveVerificationSteps(cachedProjectConfig),
+			...profileContext.verificationSteps,
+			...verificationContext.verificationSteps,
+		],
 	})
 	orchestrationState.mode = orchestrationPack.mode
 	orchestrationState.updatedAt = new Date().toISOString()

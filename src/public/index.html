@@ -768,6 +768,30 @@
           <label>Temperature</label>
           <input type="number" id="settingsTemperature" value="0.7" min="0" max="2" step="0.1">
         </div>
+        <div class="form-group">
+          <label>Operating Profile</label>
+          <select id="settingsOperatingProfile">
+            <option value="guided">Guided (small steps, pause often)</option>
+            <option value="balanced">Balanced (default)</option>
+            <option value="autonomous">Autonomous (complete broader slices)</option>
+            <option value="turbo">Turbo (maximum throughput)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Delegation Style</label>
+          <select id="settingsDelegationStyle">
+            <option value="single_agent">Single Agent (no delegation unless asked)</option>
+            <option value="team_mode">Team Mode (delegate when useful)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Verification Strictness</label>
+          <select id="settingsVerificationStrictness">
+            <option value="light">Light (fast checks)</option>
+            <option value="standard">Standard</option>
+            <option value="strict">Strict (typecheck/tests/lint)</option>
+          </select>
+        </div>
       </div>
     </details>
     
@@ -3511,6 +3535,15 @@ async function showApiKeyModal() {
     if (fullSettings.defaultTemperature !== undefined) {
       document.getElementById('settingsTemperature').value = fullSettings.defaultTemperature;
     }
+    if (fullSettings.operatingProfile) {
+      document.getElementById('settingsOperatingProfile').value = fullSettings.operatingProfile;
+    }
+    if (fullSettings.delegationStyle) {
+      document.getElementById('settingsDelegationStyle').value = fullSettings.delegationStyle;
+    }
+    if (fullSettings.verificationStrictness) {
+      document.getElementById('settingsVerificationStrictness').value = fullSettings.verificationStrictness;
+    }
   } catch (e) {
     console.error('Failed to load settings:', e);
   }
@@ -3653,6 +3686,9 @@ async function saveSettings() {
   const apiKey = document.getElementById('settingsApiKey').value.trim();
   const maxTokens = parseInt(document.getElementById('settingsMaxTokens').value) || 16384;
   const temperature = parseFloat(document.getElementById('settingsTemperature').value) || 0.7;
+  const operatingProfile = document.getElementById('settingsOperatingProfile').value || 'balanced';
+  const delegationStyle = document.getElementById('settingsDelegationStyle').value || 'team_mode';
+  const verificationStrictness = document.getElementById('settingsVerificationStrictness').value || 'standard';
   
   // Validate
   if (provider !== 'ollama' && !apiKey && !currentSettings?.apiKeyConfigured) {
@@ -3691,8 +3727,21 @@ async function saveSettings() {
     const data = await res.json();
     
     if (data.success) {
+      // Persist standalone server behavior settings
+      await fetch(`${API}/api/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          defaultMaxTokens: maxTokens,
+          defaultTemperature: temperature,
+          operatingProfile,
+          delegationStyle,
+          verificationStrictness,
+        }),
+      });
+
       hideApiKeyModal();
-      addLog('info', `Settings saved: ${provider} / ${model}`);
+      addLog('info', `Settings saved: ${provider} / ${model} (${operatingProfile}, ${delegationStyle}, ${verificationStrictness})`);
       
       // Update status bar to show new provider/model
       updateProviderStatus(provider, model);

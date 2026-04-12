@@ -112,6 +112,8 @@ export interface ProjectAgentConfig {
 	provider?: string
 	/** LLM model override (defaults to server default) */
 	model?: string
+	/** Optional behavior overrides (falls back to project, then server defaults) */
+	behaviorSettings?: ProjectBehaviorSettings
 	/** When last active */
 	lastActiveAt?: string
 	// Society Agent start - port configuration
@@ -362,6 +364,12 @@ export interface WorkerSession {
 }
 // Society Agent end
 
+export interface ProjectBehaviorSettings {
+	operatingProfile?: "guided" | "balanced" | "autonomous" | "turbo"
+	delegationStyle?: "single_agent" | "team_mode"
+	verificationStrictness?: "light" | "standard" | "strict"
+}
+
 /**
  * A project — the primary organizing unit.
  */
@@ -380,6 +388,8 @@ export interface Project {
 	provider?: string
 	/** LLM model override for all agents in this project (defaults to server default) */
 	model?: string
+	/** Per-project orchestration behavior overrides (falls back to server defaults) */
+	behaviorSettings?: ProjectBehaviorSettings
 	/** Agents assigned to this project */
 	agents: ProjectAgentConfig[]
 	// Society Agent start - Task pool
@@ -786,6 +796,7 @@ export class ProjectStore {
 		description: string
 		folder?: string
 		knowledge?: string
+		behaviorSettings?: ProjectBehaviorSettings
 		agents?: Omit<ProjectAgentConfig, "lastActiveAt">[]
 	}): Project {
 		if (this.state.projects.some((p) => p.id === input.id)) {
@@ -810,6 +821,7 @@ export class ProjectStore {
 			description: input.description,
 			folder,
 			knowledge: input.knowledge || "",
+			behaviorSettings: input.behaviorSettings,
 			status: "active",
 			createdAt: now,
 			updatedAt: now,
@@ -836,7 +848,7 @@ export class ProjectStore {
 		return project
 	}
 
-	update(id: string, updates: Partial<Pick<Project, "name" | "description" | "folder" | "knowledge" | "status" | "gitConfig" | "provider" | "model">>): Project | undefined {
+	update(id: string, updates: Partial<Pick<Project, "name" | "description" | "folder" | "knowledge" | "status" | "gitConfig" | "provider" | "model" | "behaviorSettings">>): Project | undefined {
 		const project = this.get(id)
 		if (!project) return undefined
 
@@ -848,6 +860,7 @@ export class ProjectStore {
 		if (updates.gitConfig !== undefined) project.gitConfig = updates.gitConfig
 		if (updates.provider !== undefined) project.provider = updates.provider || undefined
 		if (updates.model !== undefined) project.model = updates.model || undefined
+		if (updates.behaviorSettings !== undefined) project.behaviorSettings = updates.behaviorSettings || undefined
 		project.updatedAt = new Date().toISOString()
 
 		this.save()
@@ -1148,7 +1161,7 @@ A task is NOT done until ALL four are true:
 		projectId: string,
 		agentId: string,
 		// Society Agent - added port, serverType, reportsTo, scope, scheduledTasks, ephemeral, inheritedFolders, provider, workspaceMode, sharedWorkspaceWith, customInstructions; removed canSpawnWorkers, capabilities, knowledgeSummary
-		updates: Partial<Pick<ProjectAgentConfig, "name" | "role" | "systemPrompt" | "customInstructions" | "ephemeral" | "homeFolder" | "provider" | "model" | "port" | "serverType" | "reportsTo" | "scope" | "scheduledTasks" | "inheritedFolders" | "workspaceMode" | "sharedWorkspaceWith">>,
+		updates: Partial<Pick<ProjectAgentConfig, "name" | "role" | "systemPrompt" | "customInstructions" | "ephemeral" | "homeFolder" | "provider" | "model" | "behaviorSettings" | "port" | "serverType" | "reportsTo" | "scope" | "scheduledTasks" | "inheritedFolders" | "workspaceMode" | "sharedWorkspaceWith">>,
 	): ProjectAgentConfig | undefined {
 		const project = this.get(projectId)
 		if (!project) return undefined

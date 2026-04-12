@@ -29,6 +29,26 @@ export type ProviderType =
 	| "mistral"
 	| "ollama"
 
+export type OperatingProfile = "guided" | "balanced" | "autonomous" | "turbo"
+export type DelegationStyle = "single_agent" | "team_mode"
+export type VerificationStrictness = "light" | "standard" | "strict"
+
+export const OPERATING_PROFILES: OperatingProfile[] = ["guided", "balanced", "autonomous", "turbo"]
+export const DELEGATION_STYLES: DelegationStyle[] = ["single_agent", "team_mode"]
+export const VERIFICATION_STRICTNESS_LEVELS: VerificationStrictness[] = ["light", "standard", "strict"]
+
+export function isOperatingProfile(value: string | undefined | null): value is OperatingProfile {
+	return !!value && OPERATING_PROFILES.includes(value as OperatingProfile)
+}
+
+export function isDelegationStyle(value: string | undefined | null): value is DelegationStyle {
+	return !!value && DELEGATION_STYLES.includes(value as DelegationStyle)
+}
+
+export function isVerificationStrictness(value: string | undefined | null): value is VerificationStrictness {
+	return !!value && VERIFICATION_STRICTNESS_LEVELS.includes(value as VerificationStrictness)
+}
+
 export interface ProviderConfig {
 	type: ProviderType
 	apiKey: string
@@ -54,6 +74,11 @@ export interface ServerSettings {
 
 	// Session management
 	sessionTimeoutMinutes: number
+
+	// Agent orchestration style
+	operatingProfile: OperatingProfile
+	delegationStyle: DelegationStyle
+	verificationStrictness: VerificationStrictness
 }
 
 // ============================================================================
@@ -73,6 +98,9 @@ const DEFAULT_SETTINGS: ServerSettings = {
 	defaultTemperature: 0.7,
 	verboseLogging: false,
 	sessionTimeoutMinutes: 60,
+	operatingProfile: "balanced",
+	delegationStyle: "team_mode",
+	verificationStrictness: "standard",
 }
 
 // Default models per provider
@@ -288,6 +316,15 @@ class SettingsManager {
 		if (process.env.VERBOSE_LOGGING === "true") {
 			this.settings.verboseLogging = true
 		}
+		if (isOperatingProfile(process.env.OPERATING_PROFILE)) {
+			this.settings.operatingProfile = process.env.OPERATING_PROFILE
+		}
+		if (isDelegationStyle(process.env.DELEGATION_STYLE)) {
+			this.settings.delegationStyle = process.env.DELEGATION_STYLE
+		}
+		if (isVerificationStrictness(process.env.VERIFICATION_STRICTNESS)) {
+			this.settings.verificationStrictness = process.env.VERIFICATION_STRICTNESS
+		}
 	}
 
 	/**
@@ -299,6 +336,9 @@ class SettingsManager {
 			ACTIVE_MODEL: this.settings.provider.model,
 			PORT: String(this.settings.port),
 			VERBOSE_LOGGING: String(this.settings.verboseLogging),
+			OPERATING_PROFILE: this.settings.operatingProfile,
+			DELEGATION_STYLE: this.settings.delegationStyle,
+			VERIFICATION_STRICTNESS: this.settings.verificationStrictness,
 		}
 
 		// Set the appropriate API key for the active provider
@@ -421,5 +461,8 @@ Port: ${s.port}
 Workspace: ${s.workspacePath}
 Projects: ${s.projectsDir}
 Verbose: ${s.verboseLogging}
+Operating Profile: ${s.operatingProfile}
+Delegation Style: ${s.delegationStyle}
+Verification Strictness: ${s.verificationStrictness}
 `.trim()
 }

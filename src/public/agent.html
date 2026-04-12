@@ -587,7 +587,9 @@
     <div class="stat-row"><span class="label">🔀 Git</span><span id="gitStatus" style="cursor:pointer" onclick="refreshGitStatus()" title="Click to refresh">-</span></div>
     <!-- Society Agent start - LLM model settings for this agent -->
     <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
-      <div class="stat-row"><span class="label">🤖 Model</span><span id="agentModelDisplay" style="cursor:pointer;color:var(--accent)" onclick="showModelSettings()" title="Click to change">-</span></div>
+      <div class="stat-row"><span class="label">🤖 Model</span><span id="agentModelDisplay" style="cursor:pointer;color:var(--accent)" onclick="showAgentSettings()" title="Click to change">-</span></div>
+      <div class="stat-row"><span class="label">🧭 Behavior</span><span id="agentBehaviorDisplay" style="cursor:pointer;color:var(--accent)" onclick="showAgentSettings()" title="Click to change">-</span></div>
+      <button onclick="showAgentSettings()" style="width:100%;margin-top:6px;padding:4px 8px;font-size:11px;background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer" title="Edit this agent's settings">⚙ Agent Settings</button>
     </div>
     <!-- Society Agent end -->
     <!-- Society Agent start - usage tracking for this agent -->
@@ -928,6 +930,8 @@ let serverProvider = 'anthropic';
 let serverModel = null;
 let projectProvider = null;
 let projectModel = null;
+let serverBehaviorSettings = {};
+let projectBehaviorSettings = {};
 
 const MODELS_BY_PROVIDER = {
   anthropic: [
@@ -989,6 +993,22 @@ async function loadServerProviderConfig() {
   }
 }
 
+async function loadServerBehaviorSettings() {
+  try {
+    const res = await fetch(`${API}/api/settings`);
+    if (!res.ok) return;
+    const settings = await res.json();
+    serverBehaviorSettings = {
+      operatingProfile: settings.operatingProfile || null,
+      delegationStyle: settings.delegationStyle || null,
+      verificationStrictness: settings.verificationStrictness || null,
+    };
+    updateBehaviorDisplay();
+  } catch (e) {
+    console.error('Failed to load server behavior settings:', e);
+  }
+}
+
 async function loadProjectConfig() {
   if (!PROJECT_ID) return;
   try {
@@ -997,6 +1017,8 @@ async function loadProjectConfig() {
       const project = await res.json();
       projectProvider = project.provider || null;
       projectModel = project.model || null;
+      projectBehaviorSettings = project.behaviorSettings || {};
+      updateBehaviorDisplay();
     }
   } catch (e) {
     console.error('Failed to load project config:', e);
@@ -1168,6 +1190,7 @@ async function loadAgent() {
 
     // Society Agent - Update model display
     updateModelDisplay();
+    updateBehaviorDisplay();
 
     refreshFiles();
     refreshApprovals();
@@ -5999,20 +6022,51 @@ function updateModelDisplay() {
   el.title = `Provider: ${effectiveProvider}\nModel: ${effectiveModel || 'default'}\nClick to change`;
 }
 
-function showModelSettings() {
-  // Remove existing modal
-  const existing = document.getElementById('modelSettingsModal');
+function getEffectiveBehaviorSettings() {
+  const agentBehavior = agentProfile?.behaviorSettings || {};
+  return {
+    operatingProfile: agentBehavior.operatingProfile || projectBehaviorSettings.operatingProfile || serverBehaviorSettings.operatingProfile || null,
+    delegationStyle: agentBehavior.delegationStyle || projectBehaviorSettings.delegationStyle || serverBehaviorSettings.delegationStyle || null,
+    verificationStrictness: agentBehavior.verificationStrictness || projectBehaviorSettings.verificationStrictness || serverBehaviorSettings.verificationStrictness || null,
+  };
+}
+
+function formatBehaviorValue(value) {
+  if (!value) return 'default';
+  return value.replace(/_/g, ' ');
+}
+
+function updateBehaviorDisplay() {
+  const el = document.getElementById('agentBehaviorDisplay');
+  if (!el) return;
+
+  const agentBehavior = agentProfile?.behaviorSettings || {};
+  const effective = getEffectiveBehaviorSettings();
+  let source = 'server';
+  if (agentBehavior.operatingProfile || agentBehavior.delegationStyle || agentBehavior.verificationStrictness) source = 'agent';
+  else if (projectBehaviorSettings.operatingProfile || projectBehaviorSettings.delegationStyle || projectBehaviorSettings.verificationStrictness) source = 'project';
+
+  const delegationShort = effective.delegationStyle === 'single_agent' ? 'solo' : (effective.delegationStyle === 'team_mode' ? 'team' : 'default');
+  const verifyShort = effective.verificationStrictness === 'standard' ? 'std' : (effective.verificationStrictness || 'default');
+  el.textContent = `${effective.operatingProfile || 'default'} · ${delegationShort} · ${verifyShort} (${source})`;
+  el.title = `Operating profile: ${formatBehaviorValue(effective.operatingProfile)}\nDelegation: ${formatBehaviorValue(effective.delegationStyle)}\nVerification: ${formatBehaviorValue(effective.verificationStrictness)}\nSource: ${source}\nClick to change`;
+}
+
+function showAgentSettings() {
+  const existing = document.getElementById('agentSettingsModal');
   if (existing) existing.remove();
-  
-  // Effective provider/model
+
   const agentProvider = agentProfile?.provider || '';
   const agentModel = agentProfile?.model || '';
-  
+  const behavior = agentProfile?.behaviorSettings || {};
+  const hasBehaviorOverride = !!(behavior.operatingProfile || behavior.delegationStyle || behavior.verificationStrictness);
+  const effectiveBehavior = getEffectiveBehaviorSettings();
+
   const modal = document.createElement('div');
-  modal.id = 'modelSettingsModal';
+  modal.id = 'agentSettingsModal';
   modal.className = 'tool-modal';
   modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
-  
+
   const providerOptions = [
     { value: '', label: `(Use ${projectProvider ? 'project' : 'server'} default: ${projectProvider || serverProvider || 'anthropic'})` },
     { value: 'anthropic', label: 'Anthropic (Direct)' },
@@ -6023,47 +6077,84 @@ function showModelSettings() {
     { value: 'groq', label: 'Groq' },
     { value: 'mistral', label: 'Mistral' },
   ].map(o => `<option value="${o.value}"${agentProvider === o.value ? ' selected' : ''}>${o.label}</option>`).join('');
-  
+
   modal.innerHTML = `
     <div class="tool-modal-panel" style="max-width:500px;">
       <div class="tool-modal-header">
-        <span class="icon">🤖</span>
-        <span class="title">Agent LLM Settings</span>
+        <span class="icon">⚙</span>
+        <span class="title">Agent Settings</span>
         <button class="close-btn" onclick="this.closest('.tool-modal').remove()">&times;</button>
       </div>
       <div class="tool-modal-body" style="font-family:inherit;white-space:normal;padding:20px;">
-        <p style="font-size:12px;color:var(--muted);margin-bottom:16px;">Override the LLM settings for this agent. Leave empty to inherit from project or server defaults.</p>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:16px;">Change this agent directly from its own workspace. Empty values inherit from project or server defaults.</p>
         <div style="margin-bottom:16px;">
           <label style="display:block;font-size:13px;font-weight:500;margin-bottom:6px;">Provider</label>
-          <select id="modelSettingsProvider" onchange="updateModelSettingsDropdown()" style="width:100%;padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;">
+          <select id="agentSettingsProvider" onchange="updateAgentSettingsModelDropdown()" style="width:100%;padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;">
             ${providerOptions}
           </select>
         </div>
         <div style="margin-bottom:16px;">
           <label style="display:block;font-size:13px;font-weight:500;margin-bottom:6px;">Model</label>
-          <select id="modelSettingsModel" style="width:100%;padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;">
+          <select id="agentSettingsModel" style="width:100%;padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;">
           </select>
         </div>
-        <div style="font-size:11px;color:var(--muted);padding:10px;background:var(--bg);border-radius:6px;">
+        <div style="margin:18px 0 12px;font-size:12px;font-weight:600;color:var(--text);">Behavior</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+          <input type="checkbox" id="agentSettingsInheritBehavior" ${hasBehaviorOverride ? '' : 'checked'} onchange="updateAgentSettingsBehaviorOverrides()" style="margin:0">
+          <label for="agentSettingsInheritBehavior" style="font-size:12px;color:var(--muted);cursor:pointer;">Use project or server defaults</label>
+        </div>
+        <div id="agentSettingsBehaviorGroup" style="display:grid;gap:12px;">
+          <div>
+            <label style="display:block;font-size:13px;font-weight:500;margin-bottom:6px;">Operating Profile</label>
+            <select id="agentSettingsOperatingProfile" style="width:100%;padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;">
+              <option value="">(Use inherited default)</option>
+              <option value="guided"${behavior.operatingProfile === 'guided' ? ' selected' : ''}>Guided</option>
+              <option value="balanced"${behavior.operatingProfile === 'balanced' ? ' selected' : ''}>Balanced</option>
+              <option value="autonomous"${behavior.operatingProfile === 'autonomous' ? ' selected' : ''}>Autonomous</option>
+              <option value="turbo"${behavior.operatingProfile === 'turbo' ? ' selected' : ''}>Turbo</option>
+            </select>
+          </div>
+          <div>
+            <label style="display:block;font-size:13px;font-weight:500;margin-bottom:6px;">Delegation Style</label>
+            <select id="agentSettingsDelegationStyle" style="width:100%;padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;">
+              <option value="">(Use inherited default)</option>
+              <option value="single_agent"${behavior.delegationStyle === 'single_agent' ? ' selected' : ''}>Single agent</option>
+              <option value="team_mode"${behavior.delegationStyle === 'team_mode' ? ' selected' : ''}>Team mode</option>
+            </select>
+          </div>
+          <div>
+            <label style="display:block;font-size:13px;font-weight:500;margin-bottom:6px;">Verification Strictness</label>
+            <select id="agentSettingsVerificationStrictness" style="width:100%;padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;">
+              <option value="">(Use inherited default)</option>
+              <option value="light"${behavior.verificationStrictness === 'light' ? ' selected' : ''}>Light</option>
+              <option value="standard"${behavior.verificationStrictness === 'standard' ? ' selected' : ''}>Standard</option>
+              <option value="strict"${behavior.verificationStrictness === 'strict' ? ' selected' : ''}>Strict</option>
+            </select>
+          </div>
+        </div>
+        <div id="agentSettingsBehaviorSummary" style="margin-top:10px;font-size:11px;color:var(--muted);"></div>
+        <div style="font-size:11px;color:var(--muted);padding:10px;background:var(--bg);border-radius:6px;margin-top:16px;">
           <strong>Inheritance:</strong> Agent → Project → Server<br>
-          Server: ${serverProvider || 'anthropic'} / ${serverModel || 'default'}<br>
-          ${projectProvider ? `Project: ${projectProvider} / ${projectModel || 'default'}<br>` : ''}
+          Server model: ${serverProvider || 'anthropic'} / ${serverModel || 'default'}<br>
+          ${projectProvider ? `Project model: ${projectProvider} / ${projectModel || 'default'}<br>` : ''}
+          Effective behavior: ${formatBehaviorValue(effectiveBehavior.operatingProfile)} / ${formatBehaviorValue(effectiveBehavior.delegationStyle)} / ${formatBehaviorValue(effectiveBehavior.verificationStrictness)}
         </div>
       </div>
       <div class="tool-modal-footer">
         <button class="close-btn" onclick="this.closest('.tool-modal').remove()">Cancel</button>
-        <button class="copy-btn" style="background:var(--accent);color:white;border:none;" onclick="saveAgentModelSettings()">Save</button>
+        <button class="copy-btn" style="background:var(--accent);color:white;border:none;" onclick="saveAgentSettings()">Save</button>
       </div>
     </div>
   `;
-  
+
   document.body.appendChild(modal);
-  updateModelSettingsDropdown();
+  updateAgentSettingsModelDropdown();
+  updateAgentSettingsBehaviorOverrides();
 }
 
-function updateModelSettingsDropdown() {
-  const providerSelect = document.getElementById('modelSettingsProvider');
-  const modelSelect = document.getElementById('modelSettingsModel');
+function updateAgentSettingsModelDropdown() {
+  const providerSelect = document.getElementById('agentSettingsProvider');
+  const modelSelect = document.getElementById('agentSettingsModel');
   if (!providerSelect || !modelSelect) return;
   
   const selectedProvider = providerSelect.value || projectProvider || serverProvider || 'anthropic';
@@ -6079,9 +6170,48 @@ function updateModelSettingsDropdown() {
   modelSelect.innerHTML = html;
 }
 
-async function saveAgentModelSettings() {
-  const provider = document.getElementById('modelSettingsProvider')?.value || null;
-  const model = document.getElementById('modelSettingsModel')?.value || null;
+function updateAgentSettingsBehaviorOverrides() {
+  const inheritBehavior = document.getElementById('agentSettingsInheritBehavior')?.checked;
+  const group = document.getElementById('agentSettingsBehaviorGroup');
+  const summary = document.getElementById('agentSettingsBehaviorSummary');
+  const effective = getEffectiveBehaviorSettings();
+  const inputs = [
+    document.getElementById('agentSettingsOperatingProfile'),
+    document.getElementById('agentSettingsDelegationStyle'),
+    document.getElementById('agentSettingsVerificationStrictness'),
+  ];
+
+  inputs.forEach((el) => {
+    if (el) el.disabled = !!inheritBehavior;
+  });
+
+  if (group) group.style.opacity = inheritBehavior ? '0.65' : '1';
+  if (summary) {
+    summary.textContent = inheritBehavior
+      ? `Inherited now: ${formatBehaviorValue(effective.operatingProfile)} / ${formatBehaviorValue(effective.delegationStyle)} / ${formatBehaviorValue(effective.verificationStrictness)}`
+      : 'This agent will override project defaults for the values selected above.';
+  }
+}
+
+function showModelSettings() {
+  showAgentSettings();
+}
+
+async function saveAgentSettings() {
+  const provider = document.getElementById('agentSettingsProvider')?.value || null;
+  const model = document.getElementById('agentSettingsModel')?.value || null;
+  const inheritBehavior = document.getElementById('agentSettingsInheritBehavior')?.checked;
+  const operatingProfile = document.getElementById('agentSettingsOperatingProfile')?.value || null;
+  const delegationStyle = document.getElementById('agentSettingsDelegationStyle')?.value || null;
+  const verificationStrictness = document.getElementById('agentSettingsVerificationStrictness')?.value || null;
+  const behaviorSettings = inheritBehavior ? null : (() => {
+    const next = {
+      operatingProfile: operatingProfile || undefined,
+      delegationStyle: delegationStyle || undefined,
+      verificationStrictness: verificationStrictness || undefined,
+    };
+    return (next.operatingProfile || next.delegationStyle || next.verificationStrictness) ? next : null;
+  })();
   
   if (!PROJECT_ID || !AGENT_ID) {
     alert('Cannot save - missing project or agent ID');
@@ -6092,16 +6222,18 @@ async function saveAgentModelSettings() {
     const res = await fetch(`${API}/api/projects/${PROJECT_ID}/agents/${AGENT_ID}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, model }),
+      body: JSON.stringify({ provider, model, behaviorSettings }),
     });
     
     if (res.ok) {
       const updated = await res.json();
       agentProfile.provider = updated.provider;
       agentProfile.model = updated.model;
+      agentProfile.behaviorSettings = updated.behaviorSettings || null;
       updateModelDisplay();
-      document.getElementById('modelSettingsModal')?.remove();
-      showToast('Model settings saved', 'success');
+      updateBehaviorDisplay();
+      document.getElementById('agentSettingsModal')?.remove();
+      showToast('Agent settings saved', 'success');
     } else {
       const data = await res.json();
       alert(data.error || 'Failed to save');
@@ -6121,6 +6253,7 @@ function showToast(msg, type = 'success') {
 
 // Load server and project configs on init
 loadServerProviderConfig();
+loadServerBehaviorSettings();
 loadProjectConfig();
 // Society Agent end
 
