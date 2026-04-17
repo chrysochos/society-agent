@@ -29,6 +29,15 @@ describe("prompt-orchestration", () => {
 			const intent = inferRequestIntent("Suggest a migration plan for module split")
 			expect(intent.autonomy).toBe("suggest_only")
 		})
+
+		it("treats check and verify requests as read-only analysis", () => {
+			const intent = inferRequestIntent("Check the multi agent system and verify why it changed the program")
+			expect(intent.taskFamily).toBe("analysis")
+			expect(intent.autonomy).toBe("suggest_only")
+			expect(intent.deliverables).toContain("findings")
+			expect(intent.deliverables).not.toContain("code_changes")
+			expect(intent.constraints).toContain("read-only unless user explicitly approves changes")
+		})
 	})
 
 	describe("createInitialTaskState + selectNextMode", () => {
