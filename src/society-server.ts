@@ -3061,6 +3061,23 @@ app.post("/api/config/provider", async (req, res): Promise<void> => {
 
 			await saveProviderSettings(workspacePath, settings)
 
+			const resolvedApiKey =
+				settings.apiProvider === "anthropic" ? settings.anthropicApiKey :
+				settings.apiProvider === "openrouter" ? settings.openRouterApiKey :
+				settings.apiProvider === "openai" ? settings.openAiApiKey :
+				settings.apiProvider === "minimax" ? settings.minimaxApiKey :
+				settings.apiProvider === "gemini" ? settings.geminiApiKey :
+				settings.apiProvider === "deepseek" ? settings.deepseekApiKey :
+				settings.apiProvider === "groq" ? settings.groqApiKey :
+				settings.apiProvider === "mistral" ? settings.mistralApiKey :
+				settings.apiKey
+
+			standaloneSettings.updateProvider({
+				type: settings.apiProvider,
+				apiKey: resolvedApiKey || (settings.apiProvider === "ollama" ? "ollama" : ""),
+				model: settings.ollamaModelId || settings.apiModelId || standaloneSettings.getDefaultModel(settings.apiProvider),
+			})
+
 			// Clear current state to reload with new config
 			societyManager = null
 			currentProviderConfig = null
@@ -3094,6 +3111,12 @@ app.post("/api/config/provider", async (req, res): Promise<void> => {
 			provider,
 			apiKey,
 			model: model || "claude-sonnet-4-20250514",
+		})
+
+		standaloneSettings.updateProvider({
+			type: provider,
+			apiKey: apiKey || (provider === "ollama" ? "ollama" : ""),
+			model: model || standaloneSettings.getDefaultModel(provider),
 		})
 
 		// Clear current state to reload with new config
@@ -11220,7 +11243,7 @@ async function handleSupervisorChat(
 			useOpenRouter = true
 			openRouterClient = new OpenAI({
 				baseURL: "https://openrouter.ai/api/v1",
-				apiKey: providerConfig.apiKey,
+				apiKey: process.env.OPENROUTER_API_KEY || providerConfig.apiKey,
 			})
 			model = useModel
 		} else if (useProvider === "ollama") {
@@ -11256,9 +11279,9 @@ async function handleSupervisorChat(
 			useOpenRouter = true
 			openRouterClient = new OpenAI({
 				baseURL: "https://openrouter.ai/api/v1",
-				apiKey: currentProviderSettings.openRouterApiKey || "not-provided",
+				apiKey: currentProviderSettings.openRouterApiKey || currentProviderSettings.apiKey || process.env.OPENROUTER_API_KEY || "",
 			})
-			model = supervisorConfig.model || currentProviderSettings.openRouterModelId || "anthropic/claude-sonnet-4"
+			model = supervisorConfig.model || currentProviderSettings.openRouterModelId || currentProviderSettings.apiModelId || "anthropic/claude-sonnet-4"
 			log.info(`[handleSupervisorChat] Using OpenRouter: ${model}`)
 		}
 		else if (provider === "ollama") {
@@ -11507,6 +11530,7 @@ async function handleSupervisorChat(
 	let fakeImplWarnCount = 0         // Guard: agent described without writing/executing
 	let prematureWarnCount = 0        // Guard: agent stopped with suspiciously few write actions
 	let verificationRequestCount = 0  // Guard: ask agent to verify before requesting summary
+	let sawSuccessfulVerification = false
 	const MAX_GUARD_RETRIES = 3       // How many times each guard can push back before giving up
 	// Legacy aliases kept for compatibility with read-only check below
 	let hallucinationWarned = false
@@ -11871,6 +11895,10 @@ async function handleSupervisorChat(
 				// Society Agent - Inject summary request if agent did real work without summarising.
 				// Skip if the response already looks like a summary (avoids double-summary with models that summarise naturally).
 				const looksLikeSummary = /#{1,3}\s*(summary|what was built|what i (did|built|completed)|here.{0,10}(what|summary))/i.test(textContent || "")
+				if (sawSuccessfulVerification && (writeActionsCount > 0 || executeActionsCount > 0)) {
+					log.info(`[Supervisor] ${supervisorConfig.name} verified success and is stopping immediately`)
+					break
+				}
 				// Society Agent - Verification Phase Guard: verify before summarising
 				if (!verificationRequested && actTotalToolCalls >= MIN_TOOLS_FOR_SUMMARY && !looksLikeSummary && verificationRequestCount < MAX_GUARD_RETRIES) {
 					verificationRequestCount++
@@ -12070,6 +12098,11 @@ async function handleSupervisorChat(
 				if (toolName === "run_command" && toolInput.command) {
 					if (VERIFICATION_CMD_RE.test(toolInput.command)) {
 						modsSinceLastVerification = 0
+						const normalizedResult = String(result || "").toLowerCase()
+						sawSuccessfulVerification = !result.startsWith("❌") && (
+							/\b(pass(?:ed|ing)?|success|successful|no errors|0 errors|0 failed|compiled successfully|build succeeded|verified)\b/i.test(result) ||
+							(!/\b(fail(?:ed|ing)?|error|exception|timed out|eaddrinuse)\b/i.test(normalizedResult) && !result.startsWith("⚠️"))
+						)
 					} else if (MODIFICATION_CMD_RE.test(String(toolInput.command))) {
 						modsSinceLastVerification++
 					}
@@ -12359,6 +12392,10 @@ async function handleSupervisorChat(
 				// Society Agent - Inject summary request if agent did real work without summarising
 				const lastText = finalMessage.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map(b => b.text).join("\n")
 				const looksLikeSummary = /#{1,3}\s*(summary|what was built|what I built|what was done|completed|accomplished|implemented|changes made|work done)/i.test(lastText)
+				if (sawSuccessfulVerification && (writeActionsCount > 0 || executeActionsCount > 0)) {
+					log.info(`[Supervisor] ${supervisorConfig.name} verified success and is stopping immediately`)
+					break
+				}
 				// Society Agent - Verification Phase Guard: verify before summarising
 				if (!verificationRequested && actTotalToolCalls >= MIN_TOOLS_FOR_SUMMARY && !looksLikeSummary && verificationRequestCount < MAX_GUARD_RETRIES) {
 					verificationRequestCount++
@@ -12575,6 +12612,11 @@ async function handleSupervisorChat(
 			if (toolBlock.name === "run_command" && tbInput.command) {
 				if (VERIFICATION_CMD_RE.test(String(tbInput.command))) {
 					modsSinceLastVerification = 0
+					const normalizedResult = String(result || "").toLowerCase()
+					sawSuccessfulVerification = !result.startsWith("❌") && (
+						/\b(pass(?:ed|ing)?|success|successful|no errors|0 errors|0 failed|compiled successfully|build succeeded|verified)\b/i.test(result) ||
+						(!/\b(fail(?:ed|ing)?|error|exception|timed out|eaddrinuse)\b/i.test(normalizedResult) && !result.startsWith("⚠️"))
+					)
 				} else if (MODIFICATION_CMD_RE.test(String(tbInput.command))) {
 					modsSinceLastVerification++
 				}
@@ -12855,7 +12897,7 @@ async function runEphemeralWorker(
 			if (effectiveProvider === "openrouter") {
 				openRouterClient = new OpenAI({
 					baseURL: "https://openrouter.ai/api/v1",
-					apiKey: providerConfig.apiKey,
+					apiKey: process.env.OPENROUTER_API_KEY || providerConfig.apiKey,
 				})
 				model = effectiveModel
 				useOpenRouter = true
@@ -13441,6 +13483,13 @@ You will self-destruct after completing or failing. Focus on your task.`
 				consecutiveReadOnlyIterations++
 			} else {
 				consecutiveReadOnlyIterations = 0
+			}
+
+			if (taskCompleted) {
+				messages.push({ role: "user", content: toolResults })
+				loopExitReason = "end_turn"
+				log.info(`[Worker ${workerName}] Task finalized via terminal tool, stopping immediately`)
+				break
 			}
 
 			messages.push({ role: "user", content: toolResults })
