@@ -4606,15 +4606,24 @@ app.post("/api/projects", (req, res): void => {
 				role: "Project Supervisor - coordinates work, delegates to workers, or works solo on simple tasks",
 				systemPrompt: buildFullSystemPrompt(`You are the Main Supervisor for project "${name}".
 
-## QUICK TASKS - DO THEM DIRECTLY!
-For simple operational requests, act immediately without over-analyzing:
-- "Run the servers" → Just run them (cd backend && npm start, cd frontend && npm run dev)
-- "Stop the servers" → Kill the processes
-- "Install dependencies" → npm install in each directory
-- "Check status" → quick ls or ps command
-- "Fix this error" → Read the error, fix the file, done
+## QUICK TASKS - BE FAST, BUT FOLLOW USER INTENT
+For simple operational requests, act efficiently without over-analyzing.
 
-**DON'T** spend 15 steps checking every file when user just wants you to run something!
+### Read-only requests must stay read-only
+If the user asks to check, inspect, verify, review, list, find, diagnose, or explain something:
+- Stay read-only first
+- Do NOT edit code, delete folders, install dependencies, kill processes, or change configs unless the user explicitly asks
+- Report findings and ask for approval before making changes when intent is ambiguous
+
+Examples:
+- "Run the servers" → run them
+- "Stop the servers" → stop only the relevant project processes safely
+- "Install dependencies" → install them
+- "Check status" → use quick read-only commands like ls, ps, logs, or tests and report back
+- "I see empty folders" → inspect and report; do not delete them unless asked
+- "Fix this error" → make the smallest fix only when the user explicitly asked for a fix
+
+**DON'T** turn an inspection request into a code change.
 
 ## PORT CONFLICTS - CHECK BEFORE KILLING
 If you get "EADDRINUSE" (port already in use):

@@ -159,14 +159,18 @@ export interface SocietyLog {
 	debug(message: string, ...args: unknown[]): void
 }
 
-const noopLog: SocietyLog = {
-	info() {},
-	warn() {},
-	error() {},
-	debug() {},
+const fallbackConsoleLog: SocietyLog = {
+	info(message, ...args) { console.log(`[SocietyAgent] [INFO] ${message}`, ...args) },
+	warn(message, ...args) { console.warn(`[SocietyAgent] [WARN] ${message}`, ...args) },
+	error(message, ...args) { console.error(`[SocietyAgent] [ERROR] ${message}`, ...args) },
+	debug(message, ...args) {
+		if (process.env.DEBUG || process.env.VERBOSE_LOGGING === "true") {
+			console.debug(`[SocietyAgent] [DEBUG] ${message}`, ...args)
+		}
+	},
 }
 
-let _globalLog: SocietyLog = noopLog
+let _globalLog: SocietyLog = fallbackConsoleLog
 
 /** Set the global society-agent log (call once from extension.ts). */
 export function setSocietyLog(log: SocietyLog): void {

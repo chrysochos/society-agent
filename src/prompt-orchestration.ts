@@ -176,30 +176,55 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
 
 export function inferRequestIntent(request: string): RequestIntent {
 	const text = (request || "").toLowerCase()
+	const isExplainOnly = /\b(why|what happened|root cause|cause of)\b/.test(text)
+	const isInspection = /\b(check|verify|inspect|review|audit|analyze|analyse|investigate|diagnose|status|list|find)\b/.test(text) || isExplainOnly
 	const isBug = /\b(fix|bug|error|broken|issue|fail|failing|regression)\b/.test(text)
 	const isDocs = /\b(doc|docs|readme|documentation|explain)\b/.test(text)
 	const isReview = /\b(review|audit|inspect|critique)\b/.test(text)
 	const isRefactor = /\b(refactor|cleanup|restructure|rename)\b/.test(text)
 	const isTest = /\b(test|tests|coverage|regression test)\b/.test(text)
 	const isMigration = /\b(migrate|migration|upgrade)\b/.test(text)
+	const isExplicitModification = /\b(implement|update|modify|change|remove|delete|create|write|add|patch)\b/.test(text)
+	const isOperationalRequest = /\b(run|start|stop|restart|install)\b/.test(text)
 
 	let taskFamily: TaskFamily = "feature"
-	if (isBug) taskFamily = "bug_fix"
+	if (isInspection && !isExplicitModification && !isOperationalRequest) taskFamily = "analysis"
+	else if (isBug) taskFamily = "bug_fix"
 	else if (isDocs) taskFamily = "docs"
 	else if (isReview) taskFamily = "review"
 	else if (isRefactor) taskFamily = "refactor"
 	else if (isTest) taskFamily = "test_generation"
 	else if (isMigration) taskFamily = "migration"
 
-	const riskLevel: RiskLevel = /\b(auth|security|payment|billing|database|migration)\b/.test(text) ? "high" : "medium"
-	const autonomy: AutonomyLevel = /\b(plan|proposal|suggest)\b/.test(text) ? "suggest_only" : "propose_then_edit"
+	const riskLevel: RiskLevel = /\b(auth|security|payment|billing|database|migration)\b/.test(text)
+		? "high"
+		: (taskFamily === "analysis" || taskFamily === "review" ? "low" : "medium")
 
-	const deliverables = ["code_changes"]
-	if (taskFamily === "bug_fix" || taskFamily === "feature" || taskFamily === "refactor") {
-		deliverables.push("tests")
+	const autonomy: AutonomyLevel = (isInspection || /\b(plan|proposal|suggest|recommend)\b/.test(text)) && !isExplicitModification && !isOperationalRequest
+		? "suggest_only"
+		: "propose_then_edit"
+
+	const deliverables: string[] = []
+	if (taskFamily === "analysis" || taskFamily === "review") {
+		deliverables.push("findings", "recommended_actions")
+	} else {
+		deliverables.push("code_changes")
+		if (taskFamily === "bug_fix" || taskFamily === "feature" || taskFamily === "refactor") {
+			deliverables.push("tests")
+		}
+		if (taskFamily === "docs") {
+			deliverables.push("documentation")
+		}
 	}
-	if (taskFamily === "docs") {
-		deliverables.push("documentation")
+
+	const constraints = [
+		"prefer minimal diff",
+		"follow existing repo conventions",
+		"avoid unrelated file changes",
+	]
+	if (autonomy === "suggest_only") {
+		constraints.push("read-only unless user explicitly approves changes")
+		constraints.push("do not edit or delete files for inspection-only requests")
 	}
 
 	return {
@@ -207,14 +232,11 @@ export function inferRequestIntent(request: string): RequestIntent {
 		deliverables,
 		autonomy,
 		riskLevel,
-		constraints: [
-			"prefer minimal diff",
-			"follow existing repo conventions",
-			"avoid unrelated file changes",
-		],
+		constraints,
 		qualityBars: [
 			"correctness first",
 			"no hallucinated symbols",
+			"ask before destructive or ambiguous changes",
 			"add/update tests when behavior changes",
 		],
 	}
